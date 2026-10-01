@@ -1,0 +1,3 @@
+[submodule "irsa-tutorials"]
+	path = irsa-tutorials
+	url = https://github.com/Caltech-IPAC/irsa-tutorials

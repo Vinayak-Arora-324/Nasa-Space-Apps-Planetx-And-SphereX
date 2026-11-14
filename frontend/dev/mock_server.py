@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Development-only mock of the SPHEREx sky-viewer API (stdlib only).
+
+    python3 frontend/dev/mock_server.py [port]      # default 8799
+    open http://localhost:8799/?ra=133.795129&dec=-7.245147&fov=0.1
+
+Synthetic sky (offsets xi=east, eta=north in arcsec from the request centre):
+  NE star  (+80,+60)  -> must render UPPER-LEFT (north up, east left)
+  SW star  (-60,-45), S star (+25,-70), faint (-30,+20), E star (+95,-20)
+  variable (-40,+45): brightness varies sinusoidally with time
+  mover: at the request position at `epoch` (+pm*dt). Default pm ~7 "/yr if none given.
+3 epochs (MJD ~60800, 61000, 61200) x 6 detectors x 8 frames, wavelength varying per frame.
+
+Blink extensions: stream `model=1` (extra background + leftover planes, fitted-source metadata,
+field stars, moving objects), `per_visit`, fov up to 3.5 (client picks scale), /api/coverage,
+/api/movers/{known,linked,search/*}. If frontend/js/blink/skygl.js does not exist yet, a Canvas2D
+stub (dev/skygl-stub.js) is served in its place so the shell can be tested alone.
+"""
+import json, math, os, random, re, struct, sys, time, mimetypes, threading, uuid
+from array import array
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+BANDS = {1: (0.75, 1.09), 2: (1.10, 1.62), 3: (1.63, 2.41), 4: (2.42, 3.82), 5: (3.83, 4.41), 6: (4.42, 5.00)}
+EPOCH_START = [60800.0, 61000.0, 61200.0]
+FLAG_BITS = {"TRANSIENT": 0, "OVERFLOW": 1, "SUR_ERROR": 2, "NONFUNC": 6, "MISSING_DATA": 7, "HOT": 9, "COLD": 10, "SOURCE": 21}
+BAD_MASK = (1 << 6) | (1 << 7) | (1 << 9) | (1 << 2)
+NAMES = {
+    "barnard's star": ("Barnard's Star", 269.4520, 4.6934, -798.58, 10328.12, 546.98, 2016.0, "M4V"),
+    "epsilon indi b": ("eps Ind B", 331.0437, -56.7828, 3966.0, -2536.0, 274.8, 2000.0, "BD"),
+    "eps ind b": ("eps Ind B", 331.0437, -56.7828, 3966.0, -2536.0, 274.8, 2000.0, "BD"),
+    "wise j085510.83-071442.5": ("WISE J085510.83-071442.5", 133.795129, -7.245147, None, None, None, None, "BD"),
+    "rw aur": ("RW Aur", 76.9567, 30.4015, 0.0, 0.0, 6.0, 2000.0, "TTau"),
+    "rw aurigae": ("RW Aur", 76.9567, 30.4015, 0.0, 0.0, 6.0, 2000.0, "TTau"),
+    "r dra": ("R Dra", 248.1750, 66.7544, -2.0, 11.0, 3.0, 2000.0, "Mira"),
+    "r draconis": ("R Dra", 248.1750, 66.7544, -2.0, 11.0, 3.0, 2000.0, "Mira"),
+}
+JOBS = {}
+LAST = {"pmra": None, "pmdec": None, "epoch": None}
+STARS = [  # (xi, eta, peak at 1um [MJy/sr], pm-free)
+    (80, 60, 40.0), (-60, -45, 25.0), (25, -70, 18.0), (-30, 20, 8.0), (95, -20, 15.0)]
+VAR = (-40, 45, 25.0)
+
+
+def mjd_year(m): return 2000 + (m - 51544.5) / 365.25
+
+
+def parse_coords(q):
+    s = q.strip().replace('−', '-')
+    m = re.match(r'^\s*([+-]?\d+(?:\.\d+)?)[\s,]+([+-]?\d+(?:\.\d+)?)\s*$', s)
+    if m: return float(m[1]), float(m[2])
+    m = re.match(r'^\s*(\d+)\s*[h: ]\s*(\d+)\s*[m: ]\s*([\d.]+)\s*s?[\s,]+([+-]?)\s*(\d+)\s*[d°: ]\s*(\d+)\s*[m\'′: ]\s*([\d.]+)', s)
+    if m:
+        ra = 15 * (int(m[1]) + int(m[2]) / 60 + float(m[3]) / 3600)
+        dec = int(m[5]) + int(m[6]) / 60 + float(m[7]) / 3600
+        return ra, -dec if m[4] == '-' else dec
+    return None
+
+
+def frame_list(ra, dec):
+    out = []
+    rnd = random.Random(1234)
+    for det in range(1, 7):
+        for e, t0 in enumerate(EPOCH_START):
+            for k in range(8):
+                mjd = t0 + k * 0.9 + det * 0.05 + rnd.random() * 0.3
+                lo, hi = BANDS[det]
+                frac = (k * 0.137 + e * 0.29 + det * 0.05 + rnd.random() * 0.05) % 1.0
+                out.append(dict(id=f"mock_{det}_{e+1}_{k}", obsid=f"2025W{e+1:02d}_{k:04d}_D{det}", detector=det, mjd=round(mjd, 5),
+                                mjd_end=round(mjd + 0.0012, 5), exptime=112.5, release="qr2", version="6.5.2", pipeline="mock",
+                                _wl=lo + (hi - lo) * frac, _e=e, _k=k))
+    out.sort(key=lambda f: f['mjd'])
+    return out
+
+
+def select(params, ra, dec):
+    fl = frame_list(ra, dec)
+    dets = [int(x) for x in params.get('detectors', '1,2,3,4,5,6').split(',') if x]
+    fl = [f for f in fl if f['detector'] in dets]
+    if params.get('mjd_min'): fl = [f for f in fl if f['mjd'] >= float(params['mjd_min'])]
+    if params.get('mjd_max'): fl = [f for f in fl if f['mjd'] <= float(params['mjd_max'])]
+    pv = int(params.get('per_visit') or 0)
+    if pv > 0:  # at most pv frames per (detector, visit), spread evenly; visit gap > 20 d
+        out = []
+        for d in dets:
+            sub = sorted((f for f in fl if f['detector'] == d), key=lambda f: f['mjd'])
+            groups = []
+            for f in sub:
+                if groups and f['mjd'] - groups[-1][-1]['mjd'] <= 20: groups[-1].append(f)
+                else: groups.append([f])
+            for g in groups:
+                out += g if len(g) <= pv else [g[int(i * len(g) / pv)] for i in range(pv)]
+        fl = sorted(out, key=lambda f: f['mjd'])
+    total = len(fl)
+    cap = int(params.get('max_frames', 400))
+    if total > cap:
+        out = []
+        for d in dets:
+            sub = [f for f in fl if f['detector'] == d]
+            n = max(1, round(cap * len(sub) / total))
+            out += [sub[int(i * len(sub) / n)] for i in range(n)] if n < len(sub) else sub
+        fl = out
+    return total, fl
+
+
+def mover_offset(mjd, pm):
+    """offset (xi, eta) arcsec of the mover at time mjd."""
+    pmra, pmdec, epoch = pm
+    if pmra is None:
+        dt = mjd_year(mjd) - 2026.4
+        return -15 + (-6.0) * dt, -10 + 4.0 * dt
+    dt = mjd_year(mjd) - epoch
+    return pmra * dt / 1000.0, pmdec * dt / 1000.0
+
+
+MOVERS = [  # offsets in arcsec at visit start, rates in arcsec/hour (east, north)
+    dict(id="K1", name="Ceres", number=1, cls="MB>Middle", vmag=16.9, xi0=-70, eta0=30, vx=0.35, vy=-0.18, amp=14.0, kind="known", modelled=True),
+    dict(id="M1", name="M1", xi0=40, eta0=-55, vx=-0.25, vy=0.40, amp=9.0, kind="linked", modelled=True),
+    dict(id="C1", name="C1", xi0=10, eta0=70, vx=0.30, vy=0.10, amp=2.4, kind="candidate", modelled=False),
+]
+
+
+def mover_xy(m, mjd):
+    t0 = max(t for t in EPOCH_START if t <= mjd + 1e-6)
+    h = (mjd - t0) * 24
+    return m['xi0'] + m['vx'] * h, m['eta0'] + m['vy'] * h
+
+
+def rate_pa(m):
+    return math.hypot(m['vx'], m['vy']), (math.degrees(math.atan2(m['vx'], m['vy'])) % 360)
+
+
+def field_stars(ra, dec, npix, scale):
+    rnd = random.Random(int(round(ra * 100)) * 1000 + int(round(dec * 100)) + 7)
+    c = (npix - 1) / 2
+    out = []
+    for i in range(30 + npix // 8):
+        amp = 1.5 * (1 - rnd.random()) ** -0.9
+        out.append(dict(xi=(rnd.random() - 0.5) * (npix - 8) * scale, eta=(rnd.random() - 0.5) * (npix - 8) * scale, amp=min(amp, 25.0),
+                        gaia=rnd.random() < 0.7, plx=rnd.choice([None, 0.8, 3.1, 12.5, 54.0]), i=i))
+    return out
+
+
+def pm_of(p):
+    if p.get('pmra') not in (None, '') and p.get('pmdec') not in (None, ''):
+        return float(p['pmra']), float(p['pmdec']), float(p.get('epoch') or 2000.0)
+    return None, None, None
+
+
+def render(f, npix, scale, pm, model=None):
+    """Return (img array('f'), flags array('I'), metadata dict). model: dict with ra/dec to add Blink planes."""
+    det = f['detector']; mjd = f['mjd']
+    seed = int(mjd * 1000) + det
+    rnd = random.Random(seed)
+    c = (npix - 1) / 2
+    fwhm = 5.5 + 0.7 * det  # arcsec
+    sig = fwhm / 2.355 / scale
+    wl = f['_wl']
+    sp = (wl / 1.0) ** -1.5 * (1.0 if det < 4 else 1.4) * (0.25 if model else 1.0)
+    noise = 0.04 + 0.01 * det
+    b0 = (rnd.random() - 0.5) * (0.2 if model else 3.0)
+    gx, gy = (rnd.random() - 0.5) * (0.005 if model else 0.02), (rnd.random() - 0.5) * (0.005 if model else 0.02)
+    img = array('f', [0.0]) * (npix * npix)
+    for y in range(npix):
+        row = y * npix
+        for x in range(npix):
+            img[row + x] = b0 + gx * (x - c) + gy * (y - c) + rnd.gauss(0, noise)
+    flags = array('I', [0]) * (npix * npix)
+    srcs = [(xi, eta, a) for xi, eta, a in STARS]
+    va = VAR[2] * (1.0 + 0.5 * math.sin(2 * math.pi * (mjd - 60800) / 280.0))
+    srcs.append((VAR[0], VAR[1], va))
+    mo = mover_offset(mjd, pm)
+    srcs.append((mo[0], mo[1], 30.0))
+    msrc = None
+    if model is not None:
+        bgp = array('f', [0.0]) * (npix * npix)
+        for y in range(npix):
+            for x in range(npix): bgp[y * npix + x] = b0 + gx * (x - c) + gy * (y - c)
+        msrc = []  # modelled sources: dicts
+        extra = []
+        for st in field_stars(model['ra'], model['dec'], npix, scale):
+            extra.append((st['xi'], st['eta'], st['amp'] / sp if sp > 0 else st['amp']))
+            cat = None
+            if st['gaia']:
+                cat = dict(catalog="gaia", id=f"Gaia DR3 {4000000000 + st['i'] * 7919}", mag=round(19 - 2.5 * math.log10(max(st['amp'], 0.1)), 2), sep_arcsec=0.4,
+                           parallax_mas=st['plx'], pmra=-12.0 + st['i'], pmdec=4.0)
+            msrc.append(dict(xi=st['xi'], eta=st['eta'], a=st['amp'] / sp, cat=cat, kind="extended" if st['i'] % 17 == 3 else "point", blend=None))
+        for xi, eta, a in srcs[:len(STARS) + 1]:
+            msrc.append(dict(xi=xi, eta=eta, a=a, cat=dict(catalog="gaia", id=f"Gaia DR3 {5000 + int(abs(xi))}", mag=12.5, sep_arcsec=0.3, parallax_mas=3.1, pmra=0.0, pmdec=0.0), kind="point", blend=None))
+        # a close pair to exercise the blend list
+        px, py = srcs[0][0] + 9, srcs[0][1] - 7
+        extra.append((px, py, 12.0 / sp)); msrc.append(dict(xi=px, eta=py, a=12.0 / sp, cat=None, kind="point", blend=1))
+        msrc[-len(STARS) - 2]['blend'] = 1
+        for m in MOVERS:
+            xi, eta = mover_xy(m, mjd)
+            extra.append((xi, eta, m['amp'] / sp))
+            if m['modelled']: msrc.append(dict(xi=xi, eta=eta, a=m['amp'] / sp, cat=None, kind="point", blend=None, mover=m['id']))
+        srcs = srcs[:len(STARS) + 1] + extra
+        modimg = array('f', [0.0]) * (npix * npix)
+    if model is not None:
+        # modelled = everything except the faint unmodelled candidate mover
+        cand = {(round(mover_xy(m, mjd)[0], 6), round(mover_xy(m, mjd)[1], 6)) for m in MOVERS if not m['modelled']}
+        modset = {t for t in srcs if (round(t[0], 6), round(t[1], 6)) not in cand}
+    for xi, eta, a in srcs:
+        cx, cy = c - xi / scale, c - eta / scale
+        r = int(4 * sig) + 1
+        for y in range(max(0, int(cy) - r), min(npix, int(cy) + r + 1)):
+            for x in range(max(0, int(cx) - r), min(npix, int(cx) + r + 1)):
+                v = a * sp * math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sig * sig))
+                img[y * npix + x] += v
+                if model is not None and (xi, eta, a) in modset: modimg[y * npix + x] += v
+                if v > 0.5 * a * sp and a * sp > 8: flags[y * npix + x] |= 1 << 21
+    hr = random.Random(det * 77)
+    for _ in range(6):
+        hx, hy = hr.randrange(npix), hr.randrange(npix)
+        img[hy * npix + hx] += 3.0; flags[hy * npix + hx] |= 1 << 9
+    if f['_k'] % 3 == 0:
+        tx, ty = rnd.randrange(npix), rnd.randrange(npix); flags[ty * npix + tx] |= 1 << 0
+    nan = float('nan')
+    for y in range(npix - 8, npix):
+        for x in range(npix - 12, npix): img[y * npix + x] = nan
+    if f['_k'] % 5 == 4:
+        for y in range(npix):
+            for x in range(10, 13): img[y * npix + x] = nan
+    info = dict(noise=noise, wl=wl, sig=sig)
+    if model is not None:
+        left = array('f', [0.0]) * (npix * npix)
+        for i in range(npix * npix):
+            v = img[i]
+            left[i] = v - bgp[i] - modimg[i] if v == v else nan
+        out = []
+        for i, m in enumerate(msrc):
+            x, y = c - m['xi'] / scale, c - m['eta'] / scale
+            amp = m['a'] * sp
+            s2 = sig * (2.2 if m['kind'] == 'extended' else 1.0)
+            flux = amp * 2 * math.pi * s2 * s2
+            d = dict(id=i, x=round(x, 3), y=round(y, 3), sx=0.04 + 0.12 / max(amp, 1.0), sy=0.04 + 0.12 / max(amp, 1.0), amp=round(amp, 3), flux=round(flux, 3),
+                     flux_err=round(noise * 2 * math.pi * s2 * 1.5, 4), snr=round(amp / noise, 1), kind=m['kind'], fwhm=round(s2 * 2.355, 2), blend=m['blend'],
+                     saturated=amp > 400, cat=m['cat'])
+            out.append(d)
+        info.update(bg=bgp, left=left, sources=out)
+    return img, flags, info
+
+
+def aperture(img, flags, npix, x0, y0, r):
+    vals = [v for v in img if v == v]
+    vals.sort(); med = vals[len(vals) // 2] if vals else 0.0
+    s = 0.0; n = 0; fl = 0; nn = 0
+    for y in range(max(0, int(y0 - r - 1)), min(npix, int(y0 + r + 2))):
+        for x in range(max(0, int(x0 - r - 1)), min(npix, int(x0 + r + 2))):
+            if (x - x0) ** 2 + (y - y0) ** 2 <= r * r:
+                v = img[y * npix + x]; fl |= flags[y * npix + x]
+                n += 1
+                if v == v: s += v - med; nn += 1
+    return s * 0.89, fl, nn, n
+
+
+def target_px(f, npix, scale, pm, ra, dec):
+    c = (npix - 1) / 2
+    if pm[0] is None: xi = eta = 0.0
+    else:
+        dt = mjd_year(f['mjd']) - pm[2]; xi, eta = pm[0] * dt / 1000, pm[1] * dt / 1000
+    return c - xi / scale, c - eta / scale
+
+
+def frame_meta(f, npix, scale, pm, ra, dec, img, flags, info):
+    tx, ty = target_px(f, npix, scale, pm, ra, dec)
+    flux, fl, nn, n = aperture(img, flags, npix, tx, ty, 2.0)
+    lo, hi = BANDS[f['detector']]
+    sv = sorted(v for v in img if v == v)
+    valid = len(sv) / len(img)
+    return {
+        "type": "frame", "ok": True, "id": f['id'], "obsid": f['obsid'], "detector": f['detector'], "mjd": f['mjd'],
+        "date_iso": time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime((f['mjd'] - 40587) * 86400)),
+        "exptime": f['exptime'], "wavelength_um": info['wl'], "bandwidth_um": (hi - lo) / 17.0,
+        "dwave_dx": 0.0, "dwave_dy": (hi - lo) / 17.0 / 60.0 * 0.5, "psf_fwhm_arcsec": info['sig'] * 2.355 * scale,
+        "zodi_median": 0.0, "bkg_median": sv[len(sv) // 2], "noise": info['noise'], "frac_valid": valid, "dqa": "Pass",
+        "release": f['release'], "version": f['version'],
+        "cutout_url": f"https://example.invalid/mock/cutout/{f['id']}.fits", "file_url": f"https://example.invalid/mock/full/{f['id']}.fits",
+        "target": {"x": tx, "y": ty, "ra": ra, "dec": dec, "flux_mjy": flux, "flux_err_mjy": info['noise'] * math.sqrt(max(nn, 1)) * 0.89, "flags": fl},
+    }
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def send_json(self, obj, code=200):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+
+    def do_GET(self):
+        u = urlparse(self.path); p = {k: v[0] for k, v in parse_qs(u.query).items()}
+        try:
+            if u.path.startswith('/api/'): return self.api(u.path[5:], p)
+            return self.static(u.path)
+        except (BrokenPipeError, ConnectionResetError): pass
+        except Exception as e:
+            try: self.send_json({"detail": f"mock error: {e}"}, 500)
+            except Exception: pass
+
+    def static(self, path):
+        path = path.split('?')[0]
+        if path == '/': path = '/index.html'
+        fp = os.path.normpath(os.path.join(ROOT, path.lstrip('/')))
+        if path == '/js/blink/skygl.js' and not os.path.isfile(fp): fp = os.path.join(ROOT, 'dev', 'skygl-stub.js')
+        if not fp.startswith(ROOT) or not os.path.isfile(fp): return self.send_json({"detail": "not found"}, 404)
+        data = open(fp, 'rb').read()
+        self.send_response(200); self.send_header('Content-Type', mimetypes.guess_type(fp)[0] or 'application/octet-stream')
+        self.send_header('Content-Length', str(len(data))); self.send_header('Cache-Control', 'no-store'); self.end_headers(); self.wfile.write(data)
+
+    def mover_positions(self, m, p):
+        ra = float(p.get('ra', 0)); dec = float(p.get('dec', 0))
+        fov = float(p.get('fov', 0.1)); scale = float(p.get('scale', 6.15))
+        npix = int(round(fov * 3600 / scale)); npix += (npix % 2 == 0)
+        c = (npix - 1) / 2
+        _, sel = select(p, ra, dec)
+        pos = []
+        for f in sel:
+            xi, eta = mover_xy(m, f['mjd'])
+            pos.append(dict(frame_id=f['id'], mjd=f['mjd'], x=round(c - xi / scale, 3), y=round(c - eta / scale, 3)))
+        return pos
+
+    def movers(self, ep, p):
+        if ep == 'known':
+            objs = []
+            for m in MOVERS:
+                if m['kind'] != 'known': continue
+                r, pa = rate_pa(m)
+                objs.append(dict(name=m['name'], number=m['number'], **{"class": m['cls']}, vmag=m['vmag'], rate_arcsec_h=round(r, 3), pa_deg=round(pa, 1),
+                                 positions=self.mover_positions(m, p), stack=dict(snr=24.0, detected=True)))
+            return self.send_json({"objects": objs, "source": "skybot"})
+        if ep == 'linked':
+            out = []
+            for m in MOVERS:
+                if m['kind'] != 'linked': continue
+                r, pa = rate_pa(m)
+                out.append(dict(id=m['id'], rate_arcsec_h=round(r, 3), pa_deg=round(pa, 1), confidence=0.82, positions=[dict(q, flux=m['amp']) for q in self.mover_positions(m, p)]))
+            return self.send_json({"movers": out})
+        if ep == 'search/start':
+            job = uuid.uuid4().hex[:8]
+            JOBS[job] = dict(state='running', t0=time.time(), cancelled=False, params=dict(p))
+            return self.send_json({"job": job, "cached": False})
+        if ep == 'search/cancel':
+            j = JOBS.get(p.get('job', ''))
+            if j: j['cancelled'] = True; j['state'] = 'cancelled'
+            return self.send_json({"ok": True})
+        if ep == 'search/status':
+            j = JOBS.get(p.get('job', ''))
+            if not j: return self.send_json({"detail": "unknown job"}, 404)
+            if j['state'] == 'running':
+                prog = min(1.0, (time.time() - j['t0']) / 8.0)
+                if prog >= 1: j['state'] = 'done'
+            else: prog = 1.0 if j['state'] == 'done' else 0.3
+            cands = []
+            if prog >= 0.5 and j['state'] != 'cancelled':
+                m = [x for x in MOVERS if x['kind'] == 'candidate'][0]; r, pa = rate_pa(m)
+                cands.append(dict(id="C1", rate_arcsec_h=round(r, 3), pa_deg=round(pa, 1), confidence=0.46, snr=5.8, positions=self.mover_positions(m, j['params'])))
+            return self.send_json({"state": j['state'], "progress": round(prog, 3), "tried": int(prog * 400), "total": 400, "candidates": cands})
+        return self.send_json({"detail": "unknown endpoint"}, 404)
+
+    def api(self, ep, p):
+        if ep == 'health': return self.send_json({"ok": True})
+        if ep == 'resolve':
+            q = p.get('q', '').strip(); k = q.lower()
+            if k in NAMES:
+                n, ra, dec, pa, pd, plx, epo, ot = NAMES[k]
+                return self.send_json(dict(name=n, ra=ra, dec=dec, pmra=pa, pmdec=pd, plx=plx, epoch=epo, otype=ot, source="sesame"))
+            c = parse_coords(q)
+            if c: return self.send_json(dict(name=q, ra=c[0], dec=c[1], pmra=None, pmdec=None, plx=None, epoch=None, otype=None, source="coordinates"))
+            return self.send_json({"detail": f"Could not resolve '{q}'"}, 404)
+        if ep == 'coverage':
+            return self.send_json({"fields": [dict(ra=133.795129, dec=-7.245147, n_frames=18), dict(ra=270.0, dec=66.56, n_frames=18), dict(ra=269.452, dec=4.6934, n_frames=18)]})
+        if ep.startswith('movers/'): return self.movers(ep[7:], p)
+        ra = float(p.get('ra', 0)); dec = float(p.get('dec', 0))
+        if ep == 'frames':
+            fl = frame_list(ra, dec)
+            if abs(dec) > 85 or ra < 0:  # example: nothing
+                fl = []
+            by = {}
+            for f in fl: by[str(f['detector'])] = by.get(str(f['detector']), 0) + 1
+            clean = [{k: v for k, v in f.items() if not k.startswith('_')} for f in fl]
+            return self.send_json(dict(ra=ra, dec=dec, count=len(clean), frames=clean, by_detector=by))
+        if ep == 'catalog':
+            pa, pd, epo = LAST['pmra'], LAST['pmdec'], LAST['epoch']
+            cat = p.get('cat', 'gaia'); cosd = math.cos(math.radians(dec))
+            def sky(xi, eta): return ra + xi / 3600 / cosd, dec + eta / 3600
+            src = []
+            for i, (xi, eta, a) in enumerate(STARS + [VAR]):
+                r, d = sky(xi, eta); src.append(dict(id=f"{'Gaia DR3 ' if cat == 'gaia' else 'J'}{1000 + i}", ra=r, dec=d, pmra=0.0, pmdec=0.0, plx=1.0, mag=14 - a, epoch=2016.0 if cat == 'gaia' else 2010.5))
+            ye = 2016.0 if cat == 'gaia' else 2010.5
+            pm = (pa, pd, epo) if pa is not None else (None, None, None)
+            m0 = mover_offset(51544.5 + (ye - 2000) * 365.25, pm)
+            mp = (pa, pd) if pa is not None else (-6000.0, 4000.0)
+            r, d = sky(*m0); src.append(dict(id="mover", ra=r, dec=d, pmra=mp[0], pmdec=mp[1], plx=50.0, mag=12.0, epoch=ye))
+            return self.send_json(dict(cat=cat, sources=src))
+        pm = pm_of(p); LAST.update(pmra=pm[0], pmdec=pm[1], epoch=pm[2])
+        fov = float(p.get('fov', 0.1)); scale = float(p.get('scale', 6.15))
+        npix = int(round(fov * 3600 / scale)); npix += (npix % 2 == 0)
+        total, sel = select(p, ra, dec)
+        if abs(dec) > 85: total, sel = 0, []   # no coverage near the poles of the equatorial frame
+        if ep == 'stream':
+            self.send_response(200); self.send_header('Content-Type', 'application/octet-stream'); self.send_header('Cache-Control', 'no-store'); self.end_headers()
+            def rec(obj, payload=b''):
+                b = json.dumps(obj).encode(); self.wfile.write(struct.pack('<I', len(b)) + b + payload); self.wfile.flush()
+            use_model = p.get('model') in ('1', 'true')
+            mdl = dict(ra=ra, dec=dec) if use_model else None
+            st = dict(type="start", ra=ra, dec=dec, fov=fov, scale_arcsec=scale, npix=npix, total_available=total, selected=len(sel), flag_bits=FLAG_BITS, detectors=sorted({f['detector'] for f in sel}))
+            if use_model: st['model'] = True
+            if abs(ra - 10.0) < 1e-6 and abs(dec - 20.0) < 1e-6:  # slow field: exercises the loading state
+                for i in range(8): time.sleep(1.0); rec(dict(type='progress', done=i, total=18))
+            rec(st)
+            order = sel[:]; random.Random(5).shuffle(order); sent = 0; failed = 0
+            for f in order:
+                time.sleep(0.02 + random.random() * 0.04)
+                if f['_k'] == 7 and f['_e'] == 1 and f['detector'] == 2:
+                    failed += 1; rec(dict(type="frame", ok=False, id=f['id'], detector=f['detector'], mjd=f['mjd'], error="mock: cutout download failed (HTTP 503)")); continue
+                img, flags, info = render(f, npix, scale, pm, mdl)
+                meta = frame_meta(f, npix, scale, pm, ra, dec, img, flags, info)
+                if use_model:
+                    meta['model'] = dict(psf_fwhm_px=info['sig'] * 2.355, noise=info['noise'], quality=1.04, sources=info['sources'])
+                    rec(meta, img.tobytes() + flags.tobytes() + info['bg'].tobytes() + info['left'].tobytes())
+                else:
+                    rec(meta, img.tobytes() + flags.tobytes())
+                sent += 1
+                if use_model and sent % 4 == 0: rec(dict(type="progress", done=sent + failed, total=len(sel)))
+            rec(dict(type="end", sent=sent, failed=failed)); return
+        if ep == 'spectrum':
+            pra = float(p.get('pos_ra', ra)); pdec = float(p.get('pos_dec', dec))
+            aper = float(p.get('aper', 2.0)); c = (npix - 1) / 2; cosd = math.cos(math.radians(dec))
+            xi = (pra - ra) * cosd * 3600; eta = (pdec - dec) * 3600
+            pts = []
+            for f in sel:
+                if f['_k'] == 7 and f['_e'] == 1 and f['detector'] == 2: continue
+                img, flags, info = render(f, npix, scale, pm)
+                if pm[0] is not None:
+                    dt = mjd_year(f['mjd']) - pm[2]; x_, e_ = xi + pm[0] * dt / 1000, eta + pm[1] * dt / 1000
+                else: x_, e_ = xi, eta
+                flux, fl, nn, n = aperture(img, flags, npix, c - x_ / scale, c - e_ / scale, aper)
+                lo, hi = BANDS[f['detector']]
+                err = info['noise'] * math.sqrt(max(nn, 1)) * 0.89
+                names = [k for k, b in FLAG_BITS.items() if fl >> b & 1]
+                pts.append(dict(id=f['id'], detector=f['detector'], mjd=f['mjd'], wavelength_um=info['wl'], bandwidth_um=(hi - lo) / 17, flux_mjy=flux, err_mjy=err,
+                                snr=flux / err if err else None, flags=fl, flag_names=names, bad=bool(fl & BAD_MASK) or nn < 0.7 * n))
+            return self.send_json(dict(pos_ra=pra, pos_dec=pdec, aperture_px=aper, points=pts))
+        self.send_json({"detail": "unknown endpoint"}, 404)
+
+
+if __name__ == '__main__':
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8799
+    print(f"mock SPHEREx API + static frontend on http://127.0.0.1:{port}/")
+    ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()

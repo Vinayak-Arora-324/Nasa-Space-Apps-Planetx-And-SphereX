@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyRenderer demo</title>
+<style>
+  :root { --ground:#05070B; --ink:#E9E6DF; --accent:#F2B84B; }
+  html, body { margin:0; height:100%; background:var(--ground); color:var(--ink); font:13px system-ui, sans-serif; overflow:hidden; }
+  #stage { position:absolute; inset:0; display:flex; }
+  #stage canvas { flex:1 1 0; min-width:0; height:100%; display:block; }
+  #bar { position:absolute; left:8px; top:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; max-width:calc(100% - 16px); z-index:2; }
+  #bar button, #bar select { background:rgba(5,7,11,.55); color:var(--ink); border:1px solid rgba(233,230,223,.25); border-radius:999px; padding:4px 11px; font:inherit; cursor:pointer; }
+  #bar button.on { background:rgba(233,230,223,.92); color:#0A0C10; }
+  #info { position:absolute; left:8px; bottom:8px; font:12px ui-monospace, monospace; color:rgba(233,230,223,.8); z-index:2; white-space:pre; }
+  body.hide #bar, body.hide #info { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="bar"></div>
+<div id="info"></div>
+<script type="module">
+import { SkyRenderer, _internal } from '../js/blink/skygl.js';
+const q = new URLSearchParams(location.search);
+const P = {
+  layer: q.get('layer') || 'model', mode: q.get('mode') || 'video', stretch: q.get('stretch') || 'asinh',
+  grid: +(q.get('grid') || 101), zoom: q.get('zoom') ? +q.get('zoom') : null, frame: +(q.get('frame') || 0),
+  t: +(q.get('t') || 0), cx: q.get('cx') != null ? +q.get('cx') : null, cy: q.get('cy') != null ? +q.get('cy') : null,
+  play: q.has('play'), compare: q.has('compare'), fallback: q.has('fallback'), hide: q.has('hide'),
+  tint: (q.get('tint') || '1,1,1').split(',').map(Number), lo: q.get('lo'), hi: q.get('hi'),
+};
+if (P.hide) document.body.classList.add('hide');
+const NF = 12;
+
+// ---- deterministic synthetic sky
+function rng(seed) { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296); }
+function gauss(r) { return Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r()); }
+function makeSky(n) {
+  const r = rng(n * 7 + 1), sigPsf = 1.9 / 2.3548, noise = 0.012;
+  const scale = n / 101;
+  const stars = [];
+  const add = (x, y, amp, extra = {}) => stars.push({ x, y, amp, ...extra });
+  // bright stars
+  add(0.30 * n, 0.35 * n, 9.0); add(0.72 * n, 0.62 * n, 5.5); add(0.55 * n, 0.20 * n, 3.0);
+  // close pair (separation ~2.4 px)
+  add(0.42 * n, 0.70 * n, 2.2); add(0.42 * n + 2.4, 0.70 * n + 0.6, 1.4, { blend: 1 });
+  // extended blob
+  add(0.82 * n, 0.25 * n, 0.9, { kind: 'extended', fwhm: 5.5 });
+  const nf = Math.round(18 * scale * scale + 8);
+  for (let i = 0; i < nf; i++) add(r() * (n - 6) + 3, r() * (n - 6) + 3, 0.04 + Math.pow(r(), 3) * 1.4);
+  const sources = stars.map((s, i) => {
+    const sg = s.kind === 'extended' ? s.fwhm / 2.3548 : sigPsf;
+    const snr = s.amp / noise;
+    return { id: i, x: s.x, y: s.y, sx: 0.05 + 0.5 / Math.max(snr, 1) * (s.kind ? 3 : 1), sy: 0.05 + 0.55 / Math.max(snr, 1) * (s.kind ? 3 : 1),
+      amp: s.amp, flux: 2 * Math.PI * sg * sg * s.amp, flux_err: 0.02, snr, kind: s.kind || 'point', fwhm: s.fwhm || 1.9,
+      blend: s.blend || null, saturated: false, cat: null };
+  });
+  // smooth nebula
+  const bgA = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const u = x / n, v = y / n;
+    bgA[y * n + x] = 0.10 + 0.18 * u + 0.07 * v
+      + 0.35 * Math.exp(-(((u - 0.62) ** 2) / 0.04 + ((v - 0.38) ** 2) / 0.012))
+      + 0.15 * Math.exp(-(((u - 0.25) ** 2 + (v - 0.8) ** 2) / 0.03));
+  }
+  return { n, sources, bg: bgA, sigPsf, noise, r };
+}
+function stamp(img, n, x0, y0, amp, sg) {
+  const R = Math.ceil(sg * 5), xi = Math.round(x0), yi = Math.round(y0);
+  for (let y = Math.max(0, yi - R); y <= Math.min(n - 1, yi + R); y++) for (let x = Math.max(0, xi - R); x <= Math.min(n - 1, xi + R); x++)
+    img[y * n + x] += amp * Math.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * sg * sg));
+}
+function makeFrames(sky) {
+  const { n, sources, bg, sigPsf } = sky, out = [];
+  const r = rng(99 + n);
+  for (let f = 0; f < NF; f++) {
+    const img = new Float32Array(n * n), leftover = new Float32Array(n * n);
+    const mover = { id: 9000, x: n * (0.12 + 0.76 * f / (NF - 1)), y: n * (0.82 - 0.5 * f / (NF - 1)), sx: 0.08, sy: 0.08, amp: 1.2, flux: 2 * Math.PI * sigPsf ** 2 * 1.2, snr: 100, kind: 'point', fwhm: 1.9, cat: null };
+    const src = sources.concat([mover]);
+    // brightness varies a bit frame to frame
+    const gain = 1 + 0.02 * Math.sin(f);
+    for (let i = 0; i < n * n; i++) img[i] = bg[i] * gain;
+    for (const s of src) stamp(img, n, s.x, s.y, s.amp * gain, s.kind === 'extended' ? s.fwhm / 2.3548 : sigPsf);
+    for (let i = 0; i < n * n; i++) { const e = gauss(r) * sky.noise; img[i] += e; leftover[i] = e; }
+    const background = Float32Array.from(bg, (v) => v * gain);
+    // NaN edge strip + patch in raw only
+    for (let y = 0; y < n; y++) for (let x = 0; x < 2; x++) { img[y * n + x] = NaN; }
+    for (let y = Math.floor(n * .9); y < Math.floor(n * .95); y++) for (let x = Math.floor(n * .3); x < Math.floor(n * .36); x++) { img[y * n + x] = NaN; leftover[y * n + x] = NaN; }
+    out.push({ img, background, leftover, sources: src.map((s) => ({ ...s })), psfFwhmPx: 1.9 });
+  }
+  return out;
+}
+
+// ---- panels
+const stage = document.getElementById('stage');
+const sky = makeSky(P.grid), frames = makeFrames(sky);
+const panels = [];
+const kinds = P.compare ? ['nearest', 'bicubic', 'model'] : ['main'];
+for (const kind of kinds) {
+  const cv = document.createElement('canvas'); stage.appendChild(cv);
+  panels.push({ kind, cv, rend: null, ctx2: null });
+}
+for (const p of panels) {
+  if (p.kind === 'nearest') { p.ctx2 = p.cv.getContext('2d'); continue; }
+  p.rend = new SkyRenderer(p.cv, { fallback: P.fallback });
+  p.rend.setGrid(sky.n);
+  frames.forEach((f, i) => p.rend.setFrame('f' + i, f));
+}
+const R0 = panels.find((p) => p.rend).rend;
+
+let frame = P.frame, tFrac = P.t, view = null;
+function limits(layer) {
+  if (P.lo != null && P.hi != null) return { lo: +P.lo, hi: +P.hi };
+  if (layer === 'leftover') return { lo: -0.04, hi: 0.04 };
+  if (P.mode === 'diff') return { lo: -0.15, hi: 0.15 };
+  return { lo: 0.09, hi: 1.6 };
+}
+function drawNearest(p, layer) {
+  const cv = p.cv, ctx = p.ctx2, dpr = devicePixelRatio || 1;
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
+  const n = sky.n, off = document.createElement('canvas'); off.width = n; off.height = n;
+  const c = off.getContext('2d'), id = c.createImageData(n, n), lim = limits('raw'), arr = frames[frame].img;
+  for (let i = 0; i < n * n; i++) {
+    const v = arr[i], rgb = v === v ? _internal.colorOf(_internal.mapValue(v, lim.lo, lim.hi, false, P.stretch), false) : _internal.GROUND;
+    id.data[i * 4] = rgb[0]; id.data[i * 4 + 1] = rgb[1]; id.data[i * 4 + 2] = rgb[2]; id.data[i * 4 + 3] = 255;
+  }
+  c.putImageData(id, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#05070B'; ctx.fillRect(0, 0, cv.clientWidth, cv.clientHeight);
+  ctx.imageSmoothingEnabled = false;
+  const v = p.view, w = cv.clientWidth, h = cv.clientHeight, x0 = w / 2 + (-0.5 - v.cx) * v.pxPerData, y0 = h / 2 + (-0.5 - v.cy) * v.pxPerData;
+  ctx.drawImage(off, x0, y0, n * v.pxPerData, n * v.pxPerData);
+}
+function setupViews() {
+  for (const p of panels) {
+    const w = p.cv.clientWidth, h = p.cv.clientHeight, n = sky.n;
+    let v = _internal.fitView(n, w, h, true);
+    if (P.zoom) v.pxPerData = P.zoom;
+    if (P.cx != null) v.cx = P.cx; if (P.cy != null) v.cy = P.cy;
+    p.view = v; if (p.rend) { p.rend.resize(); p.rend.setView(v); }
+  }
+}
+function trailIds() { return Array.from({ length: frame + 1 }, (_, i) => 'f' + i); }
+function render() {
+  const layer = P.compare ? null : P.layer;
+  for (const p of panels) {
+    if (p.kind === 'nearest') { drawNearest(p); continue; }
+    const lay = P.compare ? (p.kind === 'bicubic' ? 'raw' : 'model') : layer;
+    const next = (frame + 1) % NF;
+    p.rend.render({ a: 'f' + frame, b: 'f' + next, t: tFrac, mode: P.mode, layer: lay, lim: limits(lay), stretch: P.stretch,
+      tint: P.tint, trail: trailIds(), prev: 'f' + Math.max(0, frame - 1) });
+  }
+  document.getElementById('info').textContent =
+    `backend=${R0.backendName} grid=${sky.n} layer=${P.compare ? 'compare' : P.layer} mode=${P.mode} stretch=${P.stretch} frame=${frame} t=${tFrac.toFixed(2)} zoom=${panels[0].view.pxPerData.toFixed(2)}`;
+}
+// ---- UI
+const bar = document.getElementById('bar');
+function btn(label, fn, on) { const b = document.createElement('button'); b.textContent = label; if (on) b.className = 'on'; b.onclick = fn; bar.appendChild(b); return b; }
+function buildBar() {
+  bar.textContent = '';
+  const upd = () => { const u = new URLSearchParams(); for (const k of ['layer', 'mode', 'stretch', 'grid']) u.set(k, P[k]); u.set('frame', frame); if (P.zoom) u.set('zoom', P.zoom); history.replaceState(null, '', '?' + u); };
+  for (const l of ['model', 'raw', 'leftover']) btn(l, () => { P.layer = l; upd(); buildBar(); render(); }, P.layer === l);
+  for (const m of ['video', 'blink', 'diff', 'trail']) btn(m, () => { P.mode = m; upd(); buildBar(); render(); }, P.mode === m);
+  for (const s of ['linear', 'asinh', 'log']) btn(s, () => { P.stretch = s; upd(); buildBar(); render(); }, P.stretch === s);
+  for (const z of [1, 4, 12, 30]) btn('x' + z, () => { P.zoom = z; setupViews(); upd(); render(); });
+  btn('fit', () => { P.zoom = null; setupViews(); render(); });
+  btn('grid ' + (P.grid === 101 ? 585 : 101), () => { P.grid = P.grid === 101 ? 585 : 101; location.search = '?' + new URLSearchParams({ layer: P.layer, mode: P.mode, grid: P.grid }); });
+  btn('prev', () => { frame = (frame + NF - 1) % NF; tFrac = 0; render(); });
+  btn('next', () => { frame = (frame + 1) % NF; tFrac = 0; render(); });
+  btn(playing ? 'pause' : 'play', () => { playing = !playing; buildBar(); });
+}
+let playing = P.play;
+buildBar();
+// pan / zoom with the mouse
+const stageEl = stage;
+stageEl.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const p = panels[0], rect = p.cv.getBoundingClientRect(), sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const f = Math.exp(-e.deltaY * 0.0015);
+  for (const q of panels) {
+    const before = q.rend ? q.rend.toData(sx, sy) : [0, 0];
+    q.view.pxPerData = Math.min(200, Math.max(0.2, q.view.pxPerData * f));
+    if (q.rend) { q.rend.setView(q.view); const after = q.rend.toData(sx, sy); q.view.cx += before[0] - after[0]; q.view.cy += before[1] - after[1]; q.rend.setView(q.view); }
+  }
+  render();
+}, { passive: false });
+let drag = null;
+stageEl.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; });
+addEventListener('pointerup', () => { drag = null; });
+addEventListener('pointermove', (e) => {
+  const rect = panels[0].cv.getBoundingClientRect(), sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  if (drag) {
+    for (const q of panels) { q.view.cx -= (e.clientX - drag.x) / q.view.pxPerData; q.view.cy -= (e.clientY - drag.y) / q.view.pxPerData; if (q.rend) q.rend.setView(q.view); }
+    drag = { x: e.clientX, y: e.clientY }; render();
+  } else {
+    const hit = R0.sourceAt(sx, sy, 'f' + frame, 12);
+    if (hit.length) document.getElementById('info').textContent += `\nhover: ${hit.map((s) => `#${s.id} flux=${s.flux.toFixed(2)}`).join(', ')}`;
+  }
+});
+addEventListener('resize', () => { setupViews(); render(); });
+let last = performance.now(), acc = 0;
+function loop(now) {
+  if (playing && P.mode !== 'none') {
+    acc += (now - last) / 1000 * 0.8; if (acc >= 1) { acc -= 1; frame = (frame + 1) % NF; }
+    tFrac = P.mode === 'video' ? acc : 0; render();
+  }
+  last = now; requestAnimationFrame(loop);
+}
+setupViews(); render();
+requestAnimationFrame(loop);
+window.__sky = { R0, panels, render, frames, sky, setFrame: (f, t = 0) => { frame = f; tFrac = t; render(); },
+  bench(nFrames = 30) {
+    const gl = R0.backend.gl; const px = new Uint8Array(4); const t0 = performance.now();
+    for (let i = 0; i < nFrames; i++) { frame = i % NF; tFrac = (i % 4) / 4; render(); if (gl) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+    return { ms: (performance.now() - t0) / nFrames }; } };
+document.title = 'SkyRenderer demo (' + R0.backendName + ')';
+window.__ready = true;
+</script>
+</body>
+</html>

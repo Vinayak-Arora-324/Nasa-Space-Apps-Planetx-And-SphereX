@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Blink — SPHEREx sky viewer</title>
+<meta name="description" content="Fly through the SPHEREx sky and watch a patch of it change over time.">
+<meta name="theme-color" content="#05070B">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305070B'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23F2B84B'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/blink.css">
+</head>
+<body>
+<div id="root" class="root">
+  <div id="stage" class="stage">
+    <div id="aladin" class="layer aladin-host" role="img" aria-label="Sky view"></div>
+    <canvas id="patch" class="layer patch-canvas" role="img" aria-label="Sky view"></canvas>
+    <canvas id="overlay" class="layer overlay-canvas" aria-hidden="true"></canvas>
+    <div id="sphere-note" class="sphere-note" hidden></div>
+    <div id="hover" class="hover-card" role="status" hidden></div>
+  </div>
+  <div id="veil" class="veil" aria-hidden="true"></div>
+
+  <div id="status" class="status" role="status" aria-live="polite" hidden>
+    <p id="status-title" class="status-title"></p>
+    <p id="status-text" class="status-text"></p>
+    <div id="status-bar" class="status-bar" hidden><span id="status-fill"></span></div>
+    <button type="button" id="status-cancel" class="pill status-cancel">Cancel</button>
+  </div>
+
+  <div id="ui" class="ui">
+    <div class="scrim"></div>
+    <header class="header">
+      <h1 class="wordmark">Blink</h1>
+      <div class="readouts" id="readouts">
+        <div id="ro-centre" class="ro"></div>
+        <div id="ro-mission" class="ro"></div>
+        <div id="ro-cursor" class="ro dim"></div>
+        <div id="ro-layer" class="ro dim"></div>
+      </div>
+    </header>
+
+    <div class="dock" id="dock">
+      <section class="col" aria-label="Where to look">
+        <h2 class="label">Coordinates</h2>
+        <form id="coord-form" class="coord-form" novalidate autocomplete="off">
+          <div class="field wide">
+            <label for="in-name">Object name</label>
+            <input id="in-name" type="text" inputmode="search" placeholder="e.g. Barnard's Star" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="in-ra">Right ascension</label>
+            <input id="in-ra" class="mono" type="text" inputmode="text" placeholder="270.0 or 18:00:00" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="in-dec">Declination</label>
+            <input id="in-dec" class="mono" type="text" inputmode="text" placeholder="+66.56" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="in-width">Patch width</label>
+            <select id="in-width">
+              <option value="0.25">0.25°</option>
+              <option value="0.5" selected>0.5°</option>
+              <option value="1">1°</option>
+              <option value="2">2°</option>
+              <option value="3.5">3.5°</option>
+            </select>
+          </div>
+          <div class="field submit">
+            <button type="submit" class="btn accent" id="btn-fly">Fly to this patch</button>
+          </div>
+          <p id="width-note" class="note" hidden>Large field — the first download is slow (it can take several minutes).</p>
+          <p id="coord-error" class="error" role="alert"></p>
+        </form>
+        <div class="presets" id="presets" role="group" aria-label="Places to try"></div>
+
+        <h2 class="label">Mission</h2>
+        <div class="mission"><span class="pill selected static" aria-label="Mission: SPHEREx">SPHEREx</span></div>
+
+        <details class="advanced" id="advanced">
+          <summary><span class="chev" aria-hidden="true"></span>Advanced options</summary>
+          <div class="adv-body">
+            <h3 class="label">Wavelength band</h3>
+            <p class="note">Which colour of light the picture is taken in. Different bands make different objects stand out.</p>
+            <div class="chips" id="band-chips" role="group" aria-label="Wavelength band"></div>
+
+            <h3 class="label">Display layer</h3>
+            <p class="note" id="layer-note"></p>
+            <div class="chips" id="layer-chips" role="group" aria-label="Display layer"></div>
+
+            <h3 class="label">Faint unknown movers</h3>
+            <label class="check"><input type="checkbox" id="chk-search"><span>Search for faint unknown movers</span></label>
+            <p class="note" id="search-note">Looks for faint things sliding across the patch that no catalogue lists. Slow; the answer is saved for next time.</p>
+
+            <h3 class="label">Moving objects found <span id="mover-count" class="count"></span></h3>
+            <p class="note">Things that change position between frames, such as asteroids. Each row shows how fast it moves and in which direction. Select one to keep it ringed.</p>
+            <ul class="movers" id="mover-list"><li class="empty">Open a patch to see its moving objects.</li></ul>
+
+            <a id="link-analysis" class="link" href="analysis.html" hidden>Open in analysis view</a>
+          </div>
+        </details>
+      </section>
+
+      <section class="right" id="right" aria-label="Controls">
+        <div id="sphere-dock" class="sphere-dock">
+          <p class="hint">You are inside the whole sky. Drag to look around, scroll to zoom, or click any spot to fly into it and watch it change over time.</p>
+          <div class="row">
+            <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
+            <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
+            <button type="button" class="btn accent" id="btn-open-centre">Open the patch at the centre</button>
+          </div>
+        </div>
+
+        <div id="play-dock" class="play-dock" hidden>
+          <div class="transport">
+            <button type="button" class="round play" id="btn-play" aria-label="Pause"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path id="play-icon" fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+            <div class="strip-wrap">
+              <div class="strip" id="strip" role="group" aria-label="Frames"></div>
+              <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono"></span></div>
+            </div>
+          </div>
+          <div class="row wrapRow">
+            <div class="pills" id="mode-pills" role="group" aria-label="View mode"></div>
+            <div class="pills" id="speed-pills" role="group" aria-label="Speed"></div>
+          </div>
+          <div class="row wrapRow">
+            <button type="button" class="pill toggle" id="btn-rings" aria-pressed="false">Ring the movers</button>
+            <button type="button" class="btn" id="btn-back">Back to the whole sky</button>
+            <span id="load-line" class="mono dim load-line"></span>
+          </div>
+          <p class="mode-note" id="mode-note"></p>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+<noscript><p style="position:fixed;inset:0;display:grid;place-items:center;color:#E9E6DF;background:#05070B;font:16px system-ui">Blink needs JavaScript to draw the sky.</p></noscript>
+<script type="module" src="js/blink/app.js"></script>
+</body>
+</html>

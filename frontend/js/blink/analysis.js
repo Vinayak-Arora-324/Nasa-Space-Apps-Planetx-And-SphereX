@@ -30,9 +30,11 @@ export function computeLimits(frames) {
   let lo = median(rawLo), hi = median(rawHi);
   if (!(hi > lo)) hi = lo + 1e-6;
   const noise = use[0].noise || 0.01;
+  // Difference mode shows each frame minus the one before it, so its range comes from two
+  // time-adjacent frames (frames are MJD-sorted), not from the spread-out sample above.
   let d = NaN;
-  if (use.length > 1) {
-    const a = use[0].img, b = use[1].img, diff = new Float32Array(a.length);
+  if (frames.length > 1) {
+    const a = frames[0].img, b = frames[1].img, diff = new Float32Array(a.length);
     for (let i = 0; i < a.length; i++) diff[i] = Math.abs(a[i] - b[i]);
     const s = sampleFinite(diff, 8192).sort((x, y) => x - y);
     if (s.length) d = pctOf(s, 99.5);
@@ -41,16 +43,21 @@ export function computeLimits(frames) {
   const lh = lf.length ? median(lf) : 4 * noise;
   // Model layer: black point at the dark end of the smooth background so the sky sits on the ground
   // colour; the white point scales with both the star dynamic range and diffuse background spread
-  // so later visits do not wash grey under asinh. Source glows keep `star` for brightness ordering.
-  const starRange = Math.max(hi - lo, peakAmp.length ? median(peakAmp) : 0, 1e-6);
+  // so later visits do not wash grey under asinh. The background top skips the single brightest
+  // sampled frame (when there are 3+) so one bad fit cannot dim every frame. Source glows keep the
+  // raw range (`star`) so their brightness ordering matches the raw pixels.
+  const star = Math.max(hi - lo, 1e-6);
+  const starRange = Math.max(star, peakAmp.length ? median(peakAmp) : 0);
   let mlo = lo, mhi = hi;
   if (bgLo.length) {
     mlo = median(bgLo);
-    const bgSpan = Math.max(0, Math.max(...bgHi) - mlo);
+    const tops = [...bgHi].sort((x, y) => x - y);
+    const bgTop = tops[tops.length >= 3 ? tops.length - 2 : tops.length - 1];
+    const bgSpan = Math.max(0, bgTop - mlo);
     mhi = mlo + Math.max(0.5 * starRange, bgSpan * 8, 6 * noise);
   }
   return {
-    model: { lo: mlo, hi: mhi, star: starRange }, raw: { lo, hi }, trail: { lo, hi },
+    model: { lo: mlo, hi: mhi, star }, raw: { lo, hi }, trail: { lo, hi },
     leftover: { lo: -lh, hi: lh }, diff: { lo: -d, hi: d },
   };
 }

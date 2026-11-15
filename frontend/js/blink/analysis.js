@@ -4,15 +4,28 @@ import { sampleFinite, pctOf } from '../data.js';
 
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
 
-/** Limits for every layer/mode from the first few frames; locked by the caller. */
+/** Limits for every layer/mode sampled across loaded frames; locked by the caller. */
 export function computeLimits(frames) {
-  const use = frames.slice(0, 3);
-  if (!use.length) return null;
-  const rawLo = [], rawHi = [], lf = [], bgLo = [], bgHi = [];
+  if (!frames.length) return null;
+  const pick = (arr, k = 6) => {
+    if (arr.length <= k) return arr;
+    const out = [];
+    for (let i = 0; i < k; i++) out.push(arr[Math.floor((i * (arr.length - 1)) / (k - 1))]);
+    return out;
+  };
+  const use = pick(frames, 6), modUse = pick(frames.filter((f) => f.bg), 6);
+  const rawLo = [], rawHi = [], lf = [], bgLo = [], bgHi = [], peakAmp = [];
   for (const f of use) {
     const l = autoLimits(f.img, 99.5); rawLo.push(l.lo); rawHi.push(l.hi);
-    if (f.bg) { const bs = sampleFinite(f.bg, 8192).sort((x, y) => x - y); if (bs.length) { bgLo.push(pctOf(bs, 5)); bgHi.push(pctOf(bs, 99.5)); } }
+  }
+  for (const f of modUse) {
+    const bs = sampleFinite(f.bg, 8192).sort((x, y) => x - y);
+    if (bs.length) { bgLo.push(pctOf(bs, 5)); bgHi.push(pctOf(bs, 99.5)); }
     if (f.left) lf.push(symLimits(f.left, 99.5).hi);
+    if (f.sources && f.sources.length) {
+      const amps = f.sources.map((s) => s.amp || 0).filter((a) => a > 0).sort((a, b) => a - b);
+      if (amps.length) peakAmp.push(pctOf(amps, 90));
+    }
   }
   let lo = median(rawLo), hi = median(rawHi);
   if (!(hi > lo)) hi = lo + 1e-6;
@@ -27,15 +40,17 @@ export function computeLimits(frames) {
   if (!(d > 0)) d = 4 * noise;
   const lh = lf.length ? median(lf) : 4 * noise;
   // Model layer: black point at the dark end of the smooth background so the sky sits on the ground
-  // colour; the white point follows the raw white point. Source glows use the
-  // raw white point (`star`) so brightness ordering matches the raw pixels.
+  // colour; the white point scales with both the star dynamic range and diffuse background spread
+  // so later visits do not wash grey under asinh. Source glows keep `star` for brightness ordering.
+  const starRange = Math.max(hi - lo, peakAmp.length ? median(peakAmp) : 0, 1e-6);
   let mlo = lo, mhi = hi;
   if (bgLo.length) {
     mlo = median(bgLo);
-    mhi = mlo + 0.5 * (hi - lo);   // same scale as the raw pixels (a little boosted) so both layers show the same sky
+    const bgSpan = Math.max(0, Math.max(...bgHi) - mlo);
+    mhi = mlo + Math.max(0.5 * starRange, bgSpan * 8, 6 * noise);
   }
   return {
-    model: { lo: mlo, hi: mhi, star: Math.max(hi - lo, 1e-6) }, raw: { lo, hi }, trail: { lo, hi },
+    model: { lo: mlo, hi: mhi, star: starRange }, raw: { lo, hi }, trail: { lo, hi },
     leftover: { lo: -lh, hi: lh }, diff: { lo: -d, hi: d },
   };
 }

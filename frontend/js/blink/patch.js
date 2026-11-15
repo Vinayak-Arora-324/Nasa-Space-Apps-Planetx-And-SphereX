@@ -95,7 +95,11 @@ export class PatchView {
     f.bg = bg; f.left = left; f.sources = m.sources || []; f.psf = m.psf_fwhm_px || f.psf || 2;
     f.noise = m.noise || f.noise || 0.01; f.quality = m.quality; f.unexp = null; f.modelPending = false;
     f.meta.model = m;
-    if (!s.modelLimits && s.frames.slice(0, 3).every((x) => !!x.bg)) { s.limits = computeLimits(s.frames); s.modelLimits = true; }
+    const nBg = s.frames.reduce((n, x) => n + (x.bg ? 1 : 0), 0);
+    if (!s.modelLimits && nBg > 0) {
+      s.limits = computeLimits(s.frames);
+      if (nBg >= Math.min(3, s.frames.length)) s.modelLimits = true;
+    }
     if (s.active && this.renderer && this._gridFor === s) {
       this.renderer.setModel(f.id, { background: bg, leftover: left, sources: f.sources, psfFwhmPx: f.psf, noise: f.noise }, { fade: true });
     }
@@ -122,7 +126,8 @@ export class PatchView {
   }
   _lock(s) {
     s.limits = computeLimits(s.frames); s.limitsLocked = !!s.limits && (s.frames.length >= 3 || s.status !== 'loading');
-    s.modelLimits = s.frames.slice(0, 3).every((x) => !!x.bg);
+    const nBg = s.frames.reduce((n, x) => n + (x.bg ? 1 : 0), 0);
+    s.modelLimits = nBg > 0 && (nBg >= Math.min(3, s.frames.length) || s.status !== 'loading');
   }
   _finalize(s) {
     if (s.active && s.frames.length) { this._lock(s); this.cb.onFramesChanged(); }
@@ -253,9 +258,12 @@ export class PatchView {
     const s = this.session, r = this.renderer;
     ctx.save();
     ctx.lineWidth = 1.5; ctx.font = '500 11px "IBM Plex Mono", ui-monospace, monospace';
+    const items = [];
     for (const m of this.visibleMovers()) {
       const pos = positionAt(m, st.mjd); if (!pos) continue;
-      const sel = m.key === this.selectedKey, q = r.toScreen(pos.x, pos.y);
+      items.push({ m, sel: m.key === this.selectedKey, q: r.toScreen(pos.x, pos.y) });
+    }
+    for (const { m, sel, q } of items) {
       if (this.mode === 'trail') {
         const path = pathUntil(m, st.mjd);
         if (path.length > 1) { ctx.strokeStyle = 'rgba(242,184,75,0.65)'; ctx.setLineDash([]); ctx.lineWidth = 1; ctx.beginPath(); path.forEach((pt, i) => { const z = r.toScreen(pt.x, pt.y); i ? ctx.lineTo(z.x, z.y) : ctx.moveTo(z.x, z.y); }); ctx.stroke(); }
@@ -263,9 +271,32 @@ export class PatchView {
       ctx.strokeStyle = ACCENT; ctx.lineWidth = sel ? 3 : 1.5;
       ctx.setLineDash(m.kind === 'candidate' ? [4, 4] : []);
       ctx.beginPath(); ctx.arc(q.x, q.y, 20, 0, Math.PI * 2); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillStyle = ACCENT; ctx.shadowColor = 'rgba(5,7,11,.9)'; ctx.shadowBlur = 4;
-      ctx.fillText(m.short, q.x + 16, q.y - 16); ctx.shadowBlur = 0;
     }
+    const placed = [];
+    ctx.setLineDash([]); ctx.fillStyle = ACCENT; ctx.shadowColor = 'rgba(5,7,11,.9)'; ctx.shadowBlur = 4;
+    for (let i = 0; i < items.length; i++) {
+      const { m, q } = items[i], tw = ctx.measureText(m.short).width;
+      const cands = [
+        [q.x + 16, q.y - 16], [q.x - 16 - tw, q.y + 24], [q.x - 16 - tw, q.y - 16],
+        [q.x + 16, q.y + 24], [q.x - tw / 2, q.y - 25], [q.x - tw / 2, q.y + 32],
+      ];
+      let best = cands[0], bestScore = Infinity;
+      for (let k = 0; k < cands.length; k++) {
+        const [lx, ly] = cands[k], x0 = lx - 2, y0 = ly - 12, x1 = lx + tw + 2, y1 = ly + 2;
+        let score = k * 0.01;
+        for (const b of placed) if (x0 < b[2] && x1 > b[0] && y0 < b[3] && y1 > b[1]) score += 100;
+        for (let j = 0; j < items.length; j++) {
+          if (j === i) continue;
+          const o = items[j].q, dx = Math.max(x0 - o.x, 0, o.x - x1), dy = Math.max(y0 - o.y, 0, o.y - y1);
+          if (Math.hypot(dx, dy) < 22) score += 10;
+        }
+        if (score < bestScore) { bestScore = score; best = cands[k]; }
+        if (score < 1) break;
+      }
+      ctx.fillText(m.short, best[0], best[1]);
+      placed.push([best[0] - 2, best[1] - 12, best[0] + tw + 2, best[1] + 2]);
+    }
+    ctx.shadowBlur = 0;
     if (uiVisible && this.layer !== 'raw' && this.mode !== 'diff') {
       const f = this.frames[st.nearest];
       if (f) {

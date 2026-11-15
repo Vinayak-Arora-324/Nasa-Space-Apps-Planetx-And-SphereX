@@ -136,7 +136,8 @@ def field_stars(ra, dec, npix, scale):
     rnd = random.Random(int(round(ra * 100)) * 1000 + int(round(dec * 100)) + 7)
     c = (npix - 1) / 2
     out = []
-    for i in range(30 + npix // 8):
+    count = min(180, 30 + (npix * npix) // 500)
+    for i in range(count):
         amp = 1.5 * (1 - rnd.random()) ** -0.9
         out.append(dict(xi=(rnd.random() - 0.5) * (npix - 8) * scale, eta=(rnd.random() - 0.5) * (npix - 8) * scale, amp=min(amp, 25.0),
                         gaia=rnd.random() < 0.7, plx=rnd.choice([None, 0.8, 3.1, 12.5, 54.0]), i=i))
@@ -160,8 +161,10 @@ def render(f, npix, scale, pm, model=None):
     wl = f['_wl']
     sp = (wl / 1.0) ** -1.5 * (1.0 if det < 4 else 1.4) * (0.25 if model else 1.0)
     noise = 0.04 + 0.01 * det
-    b0 = (rnd.random() - 0.5) * (0.2 if model else 3.0)
-    gx, gy = (rnd.random() - 0.5) * (0.005 if model else 0.02), (rnd.random() - 0.5) * (0.005 if model else 0.02)
+    gscale = 60.0 / max(npix, 60)
+    b0 = (rnd.random() - 0.5) * (0.12 if model else 3.0)
+    gx = (rnd.random() - 0.5) * (0.004 if model else 0.02) * gscale
+    gy = (rnd.random() - 0.5) * (0.004 if model else 0.02) * gscale
     img = array('f', [0.0]) * (npix * npix)
     for y in range(npix):
         row = y * npix

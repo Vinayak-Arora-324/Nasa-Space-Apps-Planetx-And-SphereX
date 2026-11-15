@@ -132,7 +132,8 @@ def env(tmp_path, monkeypatch):
     def fit_frame(img, bad, psf_fwhm_px, priors=None, **kw):
         calls.append((img.shape, bad.dtype, psf_fwhm_px, priors))
         return FakeFrameModel(
-            sources=[{"id": 0, "x": 1.0, "y": 2.0, "amp": np.float32(3.0), "snr": float("nan")}],
+            sources=[{"id": 0, "x": 1.0, "y": 2.0, "amp": np.float32(3.0), "snr": float("nan"),
+                      "cat": {"catalog": "gaia", "id": "1", "sep_px": 0.5}}],
             background=np.full(img.shape, 7.0, np.float32),
             leftover=np.full(img.shape, 0.5, np.float32),
             psf_fwhm_px=psf_fwhm_px, noise=0.01, quality=1.0)
@@ -187,6 +188,7 @@ def test_stream_model_layout_and_cache(env):
     m = f["model"]
     assert set(m) >= {"psf_fwhm_px", "noise", "quality", "sources"}
     assert m["sources"][0]["snr"] is None and m["sources"][0]["amp"] == 3.0
+    assert m["sources"][0]["cat"]["sep_arcsec"] == round(0.5 * 6.15, 3)
     # header PSF in quadrature with the detector-pixel response (see processing.effective_psf_px)
     assert abs(m["psf_fwhm_px"] - math.hypot(6.5, 2.3548 * 0.29 * 6.15) / 6.15) < 1e-3
     shape, dt, psf, priors = env.calls[0]

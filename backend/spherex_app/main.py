@@ -326,6 +326,10 @@ def fit_model(img: np.ndarray, flags: np.ndarray, bits: dict, meta: dict, detect
         priors = _priors_at(rows, grid, mjd, prior_cls) if rows else []
         bad = ((flags & processing.bad_mask(bits)) != 0) | ~np.isfinite(img)
         fm = sources.fit_frame(img, bad, psf, priors or None)
+        for src in fm.sources:
+            cat = src.get("cat")
+            if isinstance(cat, dict) and "sep_px" in cat and "sep_arcsec" not in cat:
+                cat["sep_arcsec"] = round(float(cat["sep_px"]) * grid.scale, 3)
         bg = np.asarray(fm.background, np.float32)
         left = np.asarray(fm.leftover, np.float32)
         model = _clean({"psf_fwhm_px": fm.psf_fwhm_px, "noise": fm.noise, "quality": fm.quality,

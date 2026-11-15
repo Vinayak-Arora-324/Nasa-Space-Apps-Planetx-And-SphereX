@@ -74,7 +74,9 @@ button, input, select { font: inherit; color: inherit; }
 /* ---- UI layer ---- */
 .ui { position: absolute; inset: 0; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.9s ease; }
 .ui.visible { opacity: 1; }
-.ui.visible .col, .ui.visible .right, .ui.visible .header .readouts { pointer-events: auto; }
+/* Only the controls take clicks: empty space beside them belongs to the sky (click-to-fly). */
+.ui.visible .col, .ui.visible .sphere-dock, .ui.visible .play-dock, .ui.visible .header .readouts { pointer-events: auto; }
+.sphere-dock { max-width: 600px; }
 .scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 62%; pointer-events: none;
   background: linear-gradient(to top, rgba(5, 7, 11, 0.82), rgba(5, 7, 11, 0.45) 45%, rgba(5, 7, 11, 0)); }
 .scrim { transition: height 0.4s ease; }
@@ -192,6 +194,36 @@ input[aria-invalid=true] { border-color: var(--error); }
 .hover-card .hc-row b { color: var(--text); font-weight: 500; font-family: var(--mono); font-size: 12px; }
 .hover-card .hc-blend { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--ctl-border); color: var(--text-2); }
 
+/* ---- whole-sky rewind ---- */
+.rewind-input { z-index: 3; cursor: grab; touch-action: none; outline: none; }
+.rewind-input.dragging { cursor: grabbing; }
+.root.rewinding .sphere-only { display: none; }
+.rewind { margin-top: 18px; max-width: 560px; }
+.sphere-dock .rewind:first-child, .root.rewinding .rewind { margin-top: 0; }
+.rw-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.rw-custom { margin-top: 8px; }
+.rw-span2 { grid-column: span 2; }
+.rw-span3 { grid-column: span 3; }
+.rw-pair { display: flex; gap: 6px; }
+.rw-pair input { flex: 1 1 auto; }
+.rw-pair select { flex: 0 0 84px; width: 84px; }
+.rw-actions { margin-top: 12px; }
+.rw-accuracy { margin-top: 6px; }
+.rw-accuracy .note { max-width: 540px; }
+.btn[disabled] { opacity: 0.45; cursor: default; }
+/* While the sky turns the year is large and centred; once it lands it moves to the top left, off the pole. */
+.rewind-hud { position: absolute; z-index: 7; left: 50%; top: clamp(64px, 11vh, 120px); transform: translateX(-50%); width: min(680px, calc(100% - 2 * var(--pad)));
+  text-align: center; pointer-events: none; text-shadow: var(--shadow); opacity: 0;
+  transition: opacity 0.7s ease, left 0.9s cubic-bezier(0.2, 0.6, 0.2, 1), top 0.9s cubic-bezier(0.2, 0.6, 0.2, 1), transform 0.9s cubic-bezier(0.2, 0.6, 0.2, 1); }
+.rewind-hud.on { opacity: 1; }
+.rewind-hud.landed { left: var(--pad); top: clamp(70px, 9vh, 92px); transform: none; text-align: left; width: min(580px, calc(100% - 2 * var(--pad))); }
+.rwh-year { margin: 0; font: 500 clamp(44px, 7.5vw, 84px)/1 var(--serif); letter-spacing: 0.01em; font-variant-numeric: lining-nums tabular-nums; transition: font-size 0.9s ease; }
+.rewind-hud.landed .rwh-year { font-size: clamp(30px, 3.6vw, 42px); }
+.rewind-hud.landed .rwh-sub { margin-top: 6px; }
+.rwh-sub { margin: 10px 0 0; font: 400 13px/1.45 var(--mono); color: var(--text-2); }
+.rwh-legend { margin: 6px 0 0; font-size: 12.5px; color: var(--text-2); }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
 /* ---- phone ---- */
 @media (max-width: 720px) {
   .wordmark { font-size: 26px; }
@@ -200,6 +232,8 @@ input[aria-invalid=true] { border-color: var(--error); }
   .col, .right { flex: 0 0 auto; max-width: none; width: 100%; }
   .right { flex: 0 0 auto; }
   .status.corner { top: 66px; }
+  .rewind-hud.landed { top: 104px; }
+  .root.ui-on .rewind-hud { opacity: 0; }   /* the dock scrolls over it on a phone */
   .root.in-patch .right { order: -1; }
   .transport { gap: 10px; }
   .pills .pill { padding: 0 13px; }
@@ -210,4 +244,5 @@ input[aria-invalid=true] { border-color: var(--error); }
   .veil, .veil.lift { transition: none; }
   .ui { transition: none; }
   .status-bar span, .chev, .btn, .pill, .round, .strip button::after { transition: none; }
+  .rewind-hud, .rwh-year { transition: none; }
 }

@@ -169,6 +169,8 @@ The Blink page is an ES module app with no framework. Its code is in `frontend/j
 - `analysis.js`: display limits, locked across frames, and the unexplained-light finder.
 - `hover.js`: hover card contents for the patch view.
 - `util.js`: small shared helpers for maths, coordinate parsing and formatting, and URL state.
+- `rewind.js`: the whole-sky rewind ("Turn back the sky"): horizon camera, the whirl animation, overlays and the controls in the sphere dock.
+- `skytime.js`: the rewind's astronomy (calendar, ΔT, long-term precession, Earth rotation, horizon frame, 3-D star motion), with no DOM.
 
 Blink also uses `frontend/js/api.js` (streaming, including the model planes), `frontend/js/wcs.js` and `frontend/js/data.js`.
 
@@ -179,6 +181,23 @@ Blink also uses `frontend/js/api.js` (streaming, including the model planes), `f
 - **Wavelength:** SPHEREx uses linear variable filters, so every detector pixel sees a different wavelength and a given sky position has a different wavelength in each frame. The backend evaluates the `WAVE-TAB` alternate WCS by bilinear lookup in the `WCS-WAVE` table. That table is a per-detector calibration, fetched once per (detector, processing version) with a small suffix Range request to the public S3 mirror and then cached. The lookup is checked against astropy's own `-TAB` implementation in the tests and live comparisons (maximum difference 8.9e-16 micrometres). Calibration reads have their own bounded queue so the first frame need not wait for every cutout to download.
 - **Resampling** is bilinear for pixels and nearest-neighbour for flags, using the SIP WCS. No-data pixels are NaN.
 - **Photometry** is quick-look only. It uses a circular aperture (fractional pixels) on the native cutout pixels, a sigma-clipped median background in a 4–7 px annulus, and errors from the VARIANCE plane plus background scatter. Results are converted from MJy/sr to mJy with the local pixel solid angle (about 0.889 mJy per MJy/sr per pixel). **No aperture correction is applied**, so fluxes of point sources are underestimates by the fraction of the PSF outside the aperture. That fraction depends on detector and wavelength. A point is marked `bad` if a serious pixel flag (saturation/overflow, transient, hot/cold, nonlinear, persistence, outlier, missing data and similar) is set inside the aperture, or if the result is not finite. Very bright stars, roughly K < 8, are saturated and come out `bad`.
+
+## Turning back the sky
+
+In the sphere view, the **Turn back the sky…** button opens a small form (folded away by default so the dock leaves the sky free for click-to-fly). It shows the sky above a place (Giza by default, or any latitude and longitude) on a chosen night between 15,000 BCE and 15,000 CE, at a local solar time. The sky whirls backwards (or forwards) around the celestial pole while a year counter runs, then stops on that night. Afterwards you can drag to look around, scroll to zoom, or use the arrow keys, and Escape leaves.
+
+- **The SPHEREx map is turned, not redrawn.** Each frame sets Aladin's centre and view rotation so that the ICRS map appears as the horizon view of the place: ICRS → mean equator of date (the Vondrák, Capitaine & Wallace 2011 long-term precession with the ICRS frame bias, ERFA `eraLtpb`) → local sidereal angle (Earth Rotation Angle minus the equation of the origins) → horizon. Precession and Earth rotation are frame rotations, so they are exact for every pixel of the map. The CIO locator *s* is integrated from the same long-term pole, because the IAU 2006 polynomial for *s* is only fitted near J2000 (it is already 280″ by 26 CE).
+- **Stars that move against the others** come from XHIP (Hipparcos 2007 astrometry plus radial velocities; 3,114 stars brighter than V = 5 or faster than 400 mas/yr, in `frontend/data/rewind-stars.json`). They are moved in a straight line through space with the light-time and relativistic terms of ERFA `eraStarpm`. Over 2,000 years this puts Barnard's Star 5.0° from its 1991 position, where a straight line on the sky gives 5.8°. Because the map is a 2025 snapshot, each fast star is drawn in gold where it was on the chosen date, with a ring where the map shows it.
+- **Checked against ERFA and astropy** (`frontend/tests/skytime.test.mjs`): the precession matrix matches `eraLtpb` to 1e-9″, the Earth Rotation Angle matches `eraEra00`, star positions match `eraPmsafe` to 1 mas at 5000 BCE, 26 CE and 13,700 CE, and altitude/azimuth at Giza agree with astropy's `AltAz` to within 30″ in 2026 and 21″ in 26 CE. The residual is nutation and aberration, which are left out (under 40″ together, a fraction of a screen pixel). Thuban came within 0.1° of the pole in about 2800 BCE; Vega's closest approach in the coming cycle is 5.7° in about 13,600 CE.
+- **The whirl is faster than real time.** Each turn stands for many thousands of nights. During the whirl the date, precession and star motions are those of the year shown, but the turn angle is compressed; where it stops is exact. Times are local mean solar time, which fixes Earth's rotation directly (UT), so the uncertainty of ΔT (minutes, 2,000 years ago) does not move the stars. Dates before 15 October 1582 use the Julian calendar.
+- **Not modelled:** nutation, annual aberration, atmospheric refraction (about 0.5° at the horizon) and brightness changes. Stars not in the list stay where the 2025 map has them.
+- **Cost:** on an AMD Radeon 780M (integrated), a full frame during the whirl (overlay plus Aladin's render) took a median 10 ms (p90 12.7 ms) at 1543×964 pixels, against 1.4 ms for the ordinary sphere view.
+
+The star list is rebuilt from VizieR (CDS, with mirrors as fallback) with:
+
+```sh
+uv run python backend/scripts/build_rewind_stars.py
+```
 
 ## New data releases
 
@@ -193,6 +212,7 @@ Nothing needs to change when IRSA ingests new SPHEREx data or a new release (`qr
 - Catalogue priors are limited to Gaia G ≤ 19 and a capped count (`PRIOR_MAX` = 3000). Many faint stars are therefore fitted as unmatched free detections.
 - SkyBoT positions are geocentric. Main-belt objects carry a parallax error of a few arcseconds, and near-Earth objects more.
 - Large patches (1° and above) download several GB, because the S3 reader fetches whole detector rows.
+- The sky rewind turns the 2025 map; only the 3,114 listed stars are moved. Aladin paints tiles it has not loaded yet in flat grey, so a slow connection shows grey patches while the whirl uncovers new sky.
 
 ## Download benchmark (2026-11-14)
 

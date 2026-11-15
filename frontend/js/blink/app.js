@@ -3,6 +3,7 @@ import { Sphere, SPHEREX_HIPS } from './sphere.js';
 import { PatchView, MODES } from './patch.js';
 import { FlyController, reduceMotion } from './fly.js';
 import { SearchJob, loadCoverage, dirName } from './movers.js';
+import { Rewind, RewindPanel } from './rewind.js';
 import { resolve } from '../api.js';
 import { BANDS } from '../data.js';
 import { mjdToDate, propagate } from '../wcs.js';
@@ -75,14 +76,28 @@ const patch = new PatchView(patchCanvas, $('hover'), {
 });
 const fly = new FlyController(applyFly);
 const octx = overlay.getContext('2d');
+let rwPanel = null;
+const rewind = new Rewind({
+  sphere, input: $('rewind-input'),
+  hud: { box: $('rewind-hud'), year: $('rwh-year'), sub: $('rwh-sub'), legend: $('rwh-legend'), live: $('rwh-live') },
+  onChange: () => { root.classList.toggle('rewinding', rewind.active); if (rwPanel) rwPanel.sync(); updateReadouts(true); },
+});
+rwPanel = new RewindPanel(rewind, {
+  // The whirl plays with the controls out of the way; focus moves to the sky so arrow keys look around afterwards.
+  onBeforeStart: () => {
+    S.drifting = false;
+    const inp = $('rewind-input'); inp.hidden = false; inp.focus({ preventScroll: true });
+    if (!reduceMotion()) { clearTimeout(hideTimer); setUi(false); }
+  },
+});
 
 // =====================================================================================
 // UI visibility and idle fade
 // =====================================================================================
 let hideTimer = 0, loadStart = performance.now();
-function setUi(v) { S.uiVisible = v; ui.classList.toggle('visible', v); }
+function setUi(v) { S.uiVisible = v; ui.classList.toggle('visible', v); root.classList.toggle('ui-on', v); }
 function reveal() {
-  if (performance.now() - loadStart < IGNORE_MS) return;
+  if (performance.now() - loadStart < IGNORE_MS || rewind.busy) return;
   S.drifting = false;
   setUi(true);
   clearTimeout(hideTimer);
@@ -109,7 +124,7 @@ aladinEl.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.cl
 window.addEventListener('pointerup', (e) => {
   S.dragging = false;
   const d = down; down = null;
-  if (!d || S.view !== 'sphere' || fly.active || e.target !== aladinEl && !aladinEl.contains(e.target)) return;
+  if (!d || S.view !== 'sphere' || fly.active || rewind.active || e.target !== aladinEl && !aladinEl.contains(e.target)) return;
   if (d.hidden || Math.hypot(e.clientX - d.x, e.clientY - d.y) >= 6) return;
   const r = aladinEl.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
   const hit = markerAt(x, y), w = sphere.screen2world(x, y);
@@ -188,6 +203,7 @@ function fillCoords(ra, dec, name) {
 
 /** Start loading a patch and fly to it from wherever we are. */
 async function flyTo(ra, dec, name, named = null) {
+  if (rewind.active) rewind.exitNow();
   const inPatch = S.view === 'patch' && patch.opacity > 0.5 && !!S.target;
   const from = inPatch
     ? { ra: S.target.ra, dec: S.target.dec, fov: S.target.width, inPatch: true }
@@ -248,7 +264,7 @@ async function leaveToSphere() {
 }
 
 async function zoomButton(factor) {
-  if (S.view !== 'sphere' || fly.active) return;
+  if (S.view !== 'sphere' || fly.active || rewind.active) return;
   const cam = sphere.readCamera();
   const to = clamp(cam.fov * factor, 3.5, 100);
   S.drifting = false;
@@ -350,7 +366,7 @@ $('btn-rings').addEventListener('click', () => {
 $('btn-back').addEventListener('click', leaveToSphere);
 $('btn-zoom-in').addEventListener('click', () => zoomButton(0.55));
 $('btn-zoom-out').addEventListener('click', () => zoomButton(1.8));
-$('btn-open-centre').addEventListener('click', () => { if (fly.active) return; const c = sphere.readCamera(); S.drifting = false; flyTo(c.ra, c.dec); });
+$('btn-open-centre').addEventListener('click', () => { if (fly.active || rewind.active) return; const c = sphere.readCamera(); S.drifting = false; flyTo(c.ra, c.dec); });
 $('btn-play').addEventListener('click', () => { patch.setPlaying(!patch.playing); syncPlay(); });
 function syncPlay() {
   const b = $('btn-play'), n = patch.n;
@@ -532,6 +548,12 @@ function updateReadouts(force) {
     if (raw.length) layerTxt = rawNote(raw, patch.session.frames.length);
   }
   $('ro-layer').textContent = layerTxt;
+  if (rewind.active) {
+    const r = rewind.readouts();
+    $('ro-centre').textContent = r.centre; $('ro-cursor').textContent = r.cursor; $('ro-layer').textContent = r.layer;
+    if (force) updateTimeLabels();
+    return;
+  }
   const label = S.view === 'patch' && t
     ? `Patch of the sky centred on right ascension ${fmtRA(t.ra)}, declination ${fmtDec(t.dec)}, ${t.width} degrees wide, SPHEREx band D${S.band}`
     : cam ? `The whole sky, centred on right ascension ${fmtRA(cam.ra)}, declination ${fmtDec(cam.dec)}, ${cam.fov.toFixed(0)} degrees across` : 'Sky view';
@@ -562,7 +584,7 @@ window.addEventListener('resize', sizeOverlay);
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   // sphere camera: drift, auto-fly, clamp
-  if (S.view === 'sphere' && !fly.active) {
+  if (S.view === 'sphere' && !fly.active && !rewind.active) {
     if (S.drifting) { const c = sphere.cam; sphere.setCamera(wrap360(c.ra + DRIFT_DEG_S * dt), c.dec, c.fov); }
     else {
       const c = sphere.readCamera();
@@ -586,8 +608,9 @@ function loop(now) {
   if (aladinEl.style.visibility !== hide) aladinEl.style.visibility = hide;
 
   octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, W, H);
-  if (S.uiVisible && patch.opacity < 0.5 && S.view !== 'patch') drawMarkers(octx, W, H);
+  if (S.uiVisible && patch.opacity < 0.5 && S.view !== 'patch' && !rewind.active) drawMarkers(octx, W, H);
   patch.frame(dt, octx, dpr, S.uiVisible);
+  rewind.frame(dt, octx, W, H, dpr);
 
   if (now - tick5 > 200) { tick5 = now; updateReadouts(false); updateTimeLabels(); }
   if (now - tickStatus > 500) { tickStatus = now; renderStatus(); }
@@ -638,4 +661,4 @@ async function start() {
 }
 start();
 // For tests and debugging from the console.
-window.__blink = { S, sphere, patch, fly, flyTo, leaveToSphere, SPHEREX_HIPS };
+window.__blink = { S, sphere, patch, fly, flyTo, leaveToSphere, rewind, rwPanel, SPHEREX_HIPS };

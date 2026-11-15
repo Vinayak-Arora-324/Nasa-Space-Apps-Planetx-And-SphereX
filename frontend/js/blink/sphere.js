@@ -28,6 +28,7 @@ export class Sphere {
     this.al = null; this.A = null; this.cube = null;
     this.source = 'none';          // 'spherex' | '2mass' | 'none'
     this.cam = { ra: 285, dec: -8, fov: 85 };
+    this.rot = 0;                  // view rotation in degrees (0 = north up); the rewind turns the view to the horizon
     this.band = 2;
     this.onSource = () => {};
   }
@@ -99,6 +100,12 @@ export class Sphere {
     try { this.al.gotoRaDec(ra, dec); this.al.setFoV(fov); } catch (_) { /* mid-load */ }
   }
   setCenter(ra, dec) { this.setCamera(ra, dec, this.cam.fov); }
+  setRotation(deg) {
+    this.rot = deg;
+    if (!this.al) return;
+    // Aladin ignores a falsy angle (`if (!angle) return`), so 0 is sent as a negligible non-zero angle.
+    try { this.al.setRotation(deg || 1e-9); } catch (_) { /* mid-load */ }
+  }
 
   /** Read the live camera (the user may have dragged/scrolled through Aladin). */
   readCamera() {

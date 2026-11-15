@@ -18,9 +18,16 @@
     <div id="aladin" class="layer aladin-host" role="img" aria-label="Sky view"></div>
     <canvas id="patch" class="layer patch-canvas" role="img" aria-label="Sky view"></canvas>
     <canvas id="overlay" class="layer overlay-canvas" aria-hidden="true"></canvas>
+    <div id="rewind-input" class="layer rewind-input" role="application" aria-label="The sky above the chosen place. Arrow keys look around, plus and minus zoom, Escape leaves." hidden></div>
     <div id="sphere-note" class="sphere-note" hidden></div>
     <div id="hover" class="hover-card" role="status" hidden></div>
   </div>
+  <div id="rewind-hud" class="rewind-hud" aria-hidden="true" hidden>
+    <p id="rwh-year" class="rwh-year"></p>
+    <p id="rwh-sub" class="rwh-sub"></p>
+    <p id="rwh-legend" class="rwh-legend" hidden></p>
+  </div>
+  <p id="rwh-live" class="visually-hidden" role="status" aria-live="polite"></p>
   <div id="veil" class="veil" aria-hidden="true"></div>
 
   <div id="status" class="status" role="status" aria-live="polite" hidden>
@@ -105,12 +112,48 @@
 
       <section class="right" id="right" aria-label="Controls">
         <div id="sphere-dock" class="sphere-dock">
-          <p class="hint">You are inside the whole sky. Drag to look around, scroll to zoom, or click any spot to fly into it and watch it change over time.</p>
-          <div class="row">
+          <p class="hint sphere-only">You are inside the whole sky. Drag to look around, scroll to zoom, or click any spot to fly into it and watch it change over time.</p>
+          <div class="row sphere-only">
             <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
             <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
             <button type="button" class="btn accent" id="btn-open-centre">Open the patch at the centre</button>
+            <button type="button" class="btn" id="rw-open" aria-expanded="false" aria-controls="rw-form">Turn back the sky…</button>
           </div>
+
+          <form id="rw-form" class="rewind" novalidate autocomplete="off" hidden>
+            <h2 class="label">Turn back the sky</h2>
+            <p class="note">See the sky over a place on any night between 15,000 BCE and 15,000 CE, worked out from Earth’s slow wobble and the measured motions of the stars.</p>
+            <div class="rw-grid">
+              <div class="field rw-span3"><label for="rw-place">Place</label><select id="rw-place"></select></div>
+              <div class="field rw-span3"><label for="rw-year">Year</label>
+                <div class="rw-pair"><input id="rw-year" class="mono" type="text" inputmode="numeric" spellcheck="false"><select id="rw-era" aria-label="Era"><option>CE</option><option>BCE</option></select></div>
+              </div>
+              <div class="field rw-span2"><label for="rw-month">Month</label><select id="rw-month"></select></div>
+              <div class="field rw-span2"><label for="rw-day">Day</label><input id="rw-day" class="mono" type="text" inputmode="numeric" spellcheck="false"></div>
+              <div class="field rw-span2"><label for="rw-time">Local solar time</label><input id="rw-time" class="mono" type="text" inputmode="numeric" placeholder="22:00" spellcheck="false"></div>
+            </div>
+            <div id="rw-custom" class="rw-grid rw-custom" hidden>
+              <div class="field rw-span2"><label for="rw-lat">Latitude</label><input id="rw-lat" class="mono" type="text" placeholder="29.98 (N +)" spellcheck="false"></div>
+              <div class="field rw-span2"><label for="rw-lon">Longitude</label><input id="rw-lon" class="mono" type="text" placeholder="31.13 (E +)" spellcheck="false"></div>
+              <div class="field submit rw-span2"><button type="button" class="btn" id="rw-locate">Use my location</button></div>
+            </div>
+            <div class="presets" id="rw-presets" role="group" aria-label="Moments to try"></div>
+            <div class="row rw-actions">
+              <button type="submit" class="btn accent" id="rw-go">Turn back the sky</button>
+              <button type="button" class="btn" id="rw-today" hidden>Back to tonight</button>
+              <button type="button" class="btn" id="rw-exit" hidden>Back to the whole sky</button>
+            </div>
+            <p id="rw-error" class="error" role="alert"></p>
+            <details class="advanced rw-accuracy">
+              <summary><span class="chev" aria-hidden="true"></span>How accurate is this?</summary>
+              <div class="adv-body">
+                <p class="note">The picture is SPHEREx’s 2025 all-sky map. Turning it to another date and place is a rotation, which is exact for every pixel: Earth’s slow wobble (precession, from the long-term model of Vondrák, Capitaine &amp; Wallace 2011 used in the IAU’s SOFA and ERFA libraries) and Earth’s daily spin.</p>
+                <p class="note">Stars that drift against the others are moved through space from their Hipparcos positions, motions, distances and radial velocities (the XHIP catalogue). They agree with ERFA to a thousandth of an arcsecond. They are drawn in gold where they really were; a ring marks where the 2025 map shows them. Fainter stars stay where the map has them: over 2,000 years almost all move less than a pixel at this zoom.</p>
+                <p class="note">The whirl is faster than real time: each turn stands for many thousands of nights. Where it stops is exact for the date and local solar time you chose.</p>
+                <p class="note">Left out: nutation and aberration (together under 40″, a fraction of a pixel), atmospheric refraction (it lifts stars by about half a degree at the horizon) and changes in brightness. Dates before 15 October 1582 are in the Julian calendar.</p>
+              </div>
+            </details>
+          </form>
         </div>
 
         <div id="play-dock" class="play-dock" hidden>

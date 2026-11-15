@@ -18,7 +18,7 @@
     <div id="aladin" class="layer aladin-host" role="img" aria-label="Sky view"></div>
     <canvas id="patch" class="layer patch-canvas" role="img" aria-label="Sky view"></canvas>
     <canvas id="overlay" class="layer overlay-canvas" aria-hidden="true"></canvas>
-    <div id="rewind-input" class="layer rewind-input" role="application" aria-label="The sky above the chosen place. Arrow keys look around, plus and minus zoom, Escape leaves." hidden></div>
+    <div id="rewind-input" class="layer rewind-input" role="application" aria-label="The sky above the chosen place. Arrow keys look around, plus and minus zoom." hidden></div>
     <div id="sphere-note" class="sphere-note" hidden></div>
     <div id="hover" class="hover-card" role="status" hidden></div>
   </div>
@@ -146,25 +146,27 @@
       </div>
 
       <div id="sphere-dock" class="sphere-dock">
-        <p class="hint sphere-only" id="hint">Drag to look around · scroll to zoom · click a spot to open it · <kbd>H</kbd> hides the controls</p>
+        <p class="hint sphere-only" id="hint">Drag to look around · scroll to zoom · click a spot to open it</p>
         <p id="bar-msg" class="error bar-msg sphere-only" role="alert"></p>
         <div class="bar sphere-only">
           <form class="search" id="q-form" role="search" autocomplete="off">
             <input id="q" type="text" inputmode="search" placeholder="Find an object…" aria-label="Find an object by name" aria-controls="q-list" aria-expanded="false" spellcheck="false">
             <ul id="q-list" class="q-list" role="list" aria-label="Places to try" hidden></ul>
           </form>
-          <span class="bar-group">
+          <span class="bar-group full-only">
             <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
             <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
           </span>
-          <button type="button" class="btn accent" id="btn-open-centre">Open the centre</button>
-          <button type="button" class="btn quiet" id="btn-find" aria-expanded="false" aria-controls="panel-find">Coordinates</button>
-          <button type="button" class="btn quiet" id="rw-open" aria-expanded="false" aria-controls="panel-rewind">Turn back the sky</button>
+          <button type="button" class="btn accent full-only" id="btn-open-centre">Open the centre</button>
+          <button type="button" class="btn quiet full-only" id="btn-find" aria-expanded="false" aria-controls="panel-find">Coordinates</button>
+          <button type="button" class="btn quiet full-only" id="rw-open" aria-expanded="false" aria-controls="panel-rewind">Turn back the sky</button>
+          <button type="button" class="btn quiet more-btn" aria-expanded="false" aria-keyshortcuts="Escape"><span class="more-label">All controls</span><kbd>Esc</kbd></button>
         </div>
         <div class="bar rewind-only">
-          <button type="button" class="btn quiet" id="rw-change" aria-expanded="false" aria-controls="panel-rewind">Change date or place</button>
-          <button type="button" class="btn quiet" id="rw-today" hidden>Back to tonight</button>
+          <button type="button" class="btn quiet full-only" id="rw-change" aria-expanded="false" aria-controls="panel-rewind">Change date or place</button>
+          <button type="button" class="btn quiet full-only" id="rw-today" hidden>Back to tonight</button>
           <button type="button" class="btn accent" id="rw-exit">Back to the whole sky</button>
+          <button type="button" class="btn quiet more-btn" aria-expanded="false" aria-keyshortcuts="Escape"><span class="more-label">All controls</span><kbd>Esc</kbd></button>
         </div>
       </div>
 
@@ -175,18 +177,19 @@
             <div class="strip" id="strip" role="group" aria-label="Frames"></div>
             <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono"></span></div>
           </div>
+          <button type="button" class="btn quiet more-btn" aria-expanded="false" aria-keyshortcuts="Escape"><span class="more-label">All controls</span><kbd>Esc</kbd></button>
         </div>
-        <div class="row wrapRow">
+        <div class="row wrapRow full-only">
           <div class="pills" id="mode-pills" role="group" aria-label="View mode"></div>
           <div class="pills" id="speed-pills" role="group" aria-label="Speed"></div>
         </div>
-        <div class="row wrapRow">
+        <div class="row wrapRow full-only">
           <button type="button" class="pill toggle" id="btn-rings" aria-pressed="false">Ring the movers</button>
           <button type="button" class="btn quiet" id="btn-find-2" aria-expanded="false" aria-controls="panel-find">Coordinates &amp; options</button>
           <button type="button" class="btn" id="btn-back">Back to the whole sky</button>
           <span id="load-line" class="mono dim load-line"></span>
         </div>
-        <p class="mode-note" id="mode-note"></p>
+        <p class="mode-note full-only" id="mode-note"></p>
       </div>
     </div>
   </div>

@@ -284,7 +284,6 @@ export class Rewind {
       else if (k === 'ArrowDown') this.cam.alt = clamp(this.cam.alt - step, 0, 80);
       else if (k === '+' || k === '=') this.cam.fov = clamp(this.cam.fov / 1.15, 25, 150);
       else if (k === '-') this.cam.fov = clamp(this.cam.fov * 1.15, 25, 150);
-      else if (k === 'Escape') this.leave();
       else return;
       e.preventDefault();
     });

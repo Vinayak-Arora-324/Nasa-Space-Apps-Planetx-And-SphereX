@@ -87,8 +87,9 @@ One root element, `height: 100vh` (min 560px), `overflow: hidden`.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The bar changes with the view: the sphere bar above; in a rewind, "Change date or place · Back to tonight · Back to
-the whole sky"; in a patch, the playback controls with a "Coordinates & options" button.
+The bar above is the full level (Esc). The calm level shows only the search box and "All controls `Esc`". The bar
+changes with the view: in a rewind, "Back to the whole sky" (plus "Change date or place · Back to tonight" when
+full); in a patch, the play button and frame strip (plus modes, speeds and "Coordinates & options" when full).
 
 - **Canvas:** absolutely positioned, fills the root, `object-fit: cover`. Internal resolution 1600×1000 in the prototype; a real build should match device pixels.
 - **UI layer:** absolutely positioned over the canvas, `pointer-events: none` on the layer itself so the sky stays interactive in empty areas.
@@ -107,30 +108,23 @@ the whole sky"; in a patch, the playback controls with a "Coordinates & options"
 3. The sphere view is already live and drifting slowly (right ascension increases about 1.1° per second) until the user first interacts.
 4. All controls are at opacity 0.
 
-### Revealing controls
+### Two levels of controls
 
-The sky comes first: looking around never brings the controls up.
+The UI never disappears; it has a calm level that is always there and a full level behind Esc.
 
-- Moving the mouse within 150px of the bottom edge or 80px of the top edge, or over a control, reveals the UI. Moving it over the rest of the sky does not.
-- A tap on the sky while the UI is hidden reveals it, as does a mouse click on the sky during the opening drift or in a rewind.
-- Any key press reveals the UI, except the look-around keys (arrows, `+`, `-`) on the sky. `H` toggles the controls (outside text fields).
-- Interaction during the first part of the load fade is ignored, so the opening stays clean.
-- While hidden, controls have `pointer-events: none` but remain keyboard-focusable; focusing one reveals the UI.
-- A one-line hint above the bar ("Drag to look around · scroll to zoom · click a spot to open it · H hides the controls") shows until the sky is first dragged or scrolled, and is remembered per browser.
-
-### Hiding controls
-
-- Dragging (6px or more) or scrolling on the sky hides the UI at once. So do flying to a patch, leaving one, and starting a rewind.
-- Otherwise, after 3.5 seconds without interaction the UI fades out. The timer does not fire while the pointer is over the controls, focus is inside them, during a drag, or while a panel is open.
+- **Calm (default):** the wordmark, one read-out line, the place markers, a one-line hint ("Drag to look around · scroll to zoom · click a spot to open it") and a small bar: the search box and an "All controls `Esc`" button. In a rewind the bar holds "Back to the whole sky" and the toggle; in a patch, the play button, the frame strip and the toggle.
+- **Full:** Esc, or the toggle button, adds everything else: zoom, "Open the centre", "Coordinates" and "Turn back the sky" in the sphere view; "Change date or place" and "Back to tonight" in a rewind; the view modes, speeds, "Ring the movers", "Coordinates & options", "Back to the whole sky" and the mode note in a patch. The button reads "Fewer controls" while it is open.
+- Esc acts on the innermost thing first: it closes the search suggestions, then an open panel, and otherwise toggles between calm and full.
+- Dragging (6px or more) or scrolling the sky folds the full level back to calm, unless a panel is open. Flying to a patch, leaving one and starting a rewind also return to calm.
+- The calm layer fades in after the first part of the load fade, so the opening stays clean. The dock steps aside (opacity 0, no clicks) while a flight or the rewind whirl plays; the header stays.
 
 ### Panels
 
-- "Coordinates" and "Turn back the sky" each open a panel above the bar; opening one closes the other. The × button, Escape (with focus in the panel) or a click on the sky closes it. A click that closes a panel does not also navigate.
+- "Coordinates" and "Turn back the sky" each open a panel above the bar; opening one closes the other. The × button, Esc or a click on the sky closes it. A click that closes a panel does not also navigate.
 
 ### Other rules tied to visibility
 
-- The centre crosshair and the sphere's place markers draw only while the UI is visible.
-- With a mouse, a click on the sky flies there even while the UI is hidden (after the opening drift has stopped). A touch on the sky while the UI is hidden only reveals the UI.
+- A click on the sky flies there (sphere view) or re-centres (patch view).
 - With `prefers-reduced-motion`: no fade, no scale, no drift, playback starts paused.
 
 ---
@@ -365,7 +359,7 @@ Adapt to whatever framework the existing front end uses.
 ## 13. Acceptance checklist
 
 - [ ] On load, only the sky is visible; it fades in and is already moving.
-- [ ] Controls appear near the edges, on a tap, key press or focus; dragging or scrolling the sky hides them at once; they fade after idle unless hovered, focused or a panel is open.
+- [ ] A calm set of controls is always on screen; Esc (or "All controls") shows the rest and Esc folds it back; dragging or scrolling the sky also folds it back.
 - [ ] Drag turns the sphere; scroll zooms; clicking a spot flies in and opens its patch.
 - [ ] Entering valid coordinates flies to them from either view; invalid input shows the right message.
 - [ ] In a patch, fixed stars stay still across frames in all four modes.

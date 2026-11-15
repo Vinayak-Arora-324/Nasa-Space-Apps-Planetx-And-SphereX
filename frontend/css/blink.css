@@ -72,11 +72,16 @@ button, input, select { font: inherit; color: inherit; }
 .status.error .status-title { color: var(--error); }
 
 /* ---- UI layer ---- */
-/* The layer itself never takes clicks and fades per child, so the patch view can keep its read-outs on screen. */
+/* Two levels: a calm layer that is always there, and everything else behind Esc (.full). The layer itself never takes
+   clicks. It fades in after the opening, and the dock steps aside while a flight or the rewind whirl plays. */
 .ui { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
-.ui > * { opacity: 0; transition: opacity 0.5s ease; }
-.ui.visible > * { opacity: 1; transition-duration: 0.35s; }
-.root.in-patch .ui > .header { opacity: 0.9; }
+.ui > * { transition: opacity 0.6s ease; }
+.ui:not(.ready) > *, .ui:not(.visible) > .dock { opacity: 0; }
+.ui:not(.full) .full-only { display: none !important; }
+kbd { font: 500 11px/1 var(--mono); padding: 2px 5px; border: 1px solid var(--ctl-border); border-radius: 4px; color: var(--text-2); }
+.more-btn { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.more-btn[aria-expanded=true] { color: var(--text); }
+@media (hover: none) { .more-btn kbd { display: none; } }
 /* Only the controls take clicks: empty space beside them belongs to the sky (click-to-fly). */
 .ui.visible .sheet, .ui.visible .bar, .ui.visible .hint, .ui.visible .header .readouts { pointer-events: auto; }
 .scrim { position: absolute; left: 0; right: 0; top: 0; height: 130px; pointer-events: none; background: linear-gradient(to bottom, rgba(5, 7, 11, 0.55), rgba(5, 7, 11, 0)); }
@@ -109,7 +114,6 @@ button, input, select { font: inherit; color: inherit; }
 .bar .round:hover { background: rgba(233, 230, 223, 0.08); }
 .root.rewinding .sphere-only, .root:not(.rewinding) .rewind-only, .root:not(.in-patch) .patch-only { display: none !important; }
 .hint { margin: 0; padding: 4px 12px; border-radius: 999px; font-size: 12px; color: var(--text-2); text-shadow: var(--shadow); text-align: center; }
-.hint kbd { font: 500 11px var(--mono); padding: 1px 5px; border: 1px solid var(--ctl-border); border-radius: 4px; }
 .bar-msg { margin: 0; padding: 0 8px; text-align: center; text-shadow: var(--shadow); }
 
 /* search with place suggestions, opening upwards */
@@ -204,6 +208,7 @@ input[aria-invalid=true] { border-color: var(--error); }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .wrapRow { margin-top: 12px; row-gap: 10px; column-gap: 24px; }
 .transport { display: flex; gap: 14px; align-items: flex-start; }
+.transport .more-btn { margin-top: 2px; }
 .strip-wrap { flex: 1 1 auto; min-width: 0; }
 .strip { display: flex; align-items: center; height: 44px; gap: 0; }
 .strip button { flex: 1 1 0; min-width: 2px; max-width: 26px; height: 44px; padding: 0; border: 0; background: transparent; cursor: pointer; position: relative; }
@@ -266,7 +271,10 @@ input[aria-invalid=true] { border-color: var(--error); }
   .bar { width: 100%; }
   .search { flex: 1 1 100%; max-width: none; }
   .sheet { max-height: 62vh; padding: 12px 14px 10px; border-radius: 16px; }
-  .hint, .mode-note { display: none; }
+  .mode-note { display: none; }
+  .hint { font-size: 11.5px; }
+  .transport .more-label { display: none; }
+  .transport .more-btn::before { content: '⋯'; font-size: 18px; }
   .status.corner { top: 66px; }
   .rewind-hud.landed { top: 104px; }
   .root.sheet-open .rewind-hud { opacity: 0; }   /* the panel covers it on a phone */

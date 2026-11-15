@@ -563,8 +563,8 @@ export class Rewind {
 // ------------------------------------------------------------------ panel (form in the sphere dock)
 /** Wires the "Turn back the sky" controls. ids: element ids used in index.html. */
 export class RewindPanel {
-  constructor(rewind, { onBeforeStart } = {}) {
-    this.r = rewind; this.onBeforeStart = onBeforeStart || (() => {});
+  constructor(rewind, { onBeforeStart, onOpen } = {}) {
+    this.r = rewind; this.onBeforeStart = onBeforeStart || (() => {}); this.onOpen = onOpen || (() => {});
     const $ = (id) => document.getElementById(id);
     this.$ = $;
     this.f = {
@@ -593,16 +593,13 @@ export class RewindPanel {
     f.today.addEventListener('click', () => { f.error.textContent = ''; this.r.returnToday(); });
     f.exit.addEventListener('click', () => this.r.leave());
     f.locate.addEventListener('click', () => this._locate());
-    // The form stays folded away until asked for, so the dock keeps the sky clear for click-to-fly.
-    this.form = $('rw-form'); this.toggle = $('rw-open');
-    this.toggle.addEventListener('click', () => this.setOpen(this.form.hidden, true));
+    // The form lives in a panel the shell opens and closes (onOpen), so the sky stays clear until it is asked for.
+    this.form = $('rw-form');
     this.form.addEventListener('submit', (e) => { e.preventDefault(); this.go(); });
     this._syncPlace(); this._syncLabel();
   }
   setOpen(open, focus = false) {
-    this.form.hidden = !open;
-    this.toggle.setAttribute('aria-expanded', String(open));
-    this.toggle.textContent = open ? 'Hide the sky rewind' : 'Turn back the sky…';
+    this.onOpen(open);
     if (open && focus) this.f.year.focus({ preventScroll: true });
   }
   setWhen(w) {
@@ -638,7 +635,6 @@ export class RewindPanel {
   }
   sync() {
     const r = this.r;
-    if (r.active && this.form.hidden) this.setOpen(true);
     this.f.today.hidden = !r.active || !r.when || r.when.year === new Date().getUTCFullYear();
     this.f.exit.hidden = !r.active;
     this.f.go.disabled = r.busy; this.f.today.disabled = r.busy;

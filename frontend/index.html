@@ -41,87 +41,77 @@
     <div class="scrim"></div>
     <header class="header">
       <h1 class="wordmark">Blink</h1>
-      <div class="readouts" id="readouts">
+      <div class="readouts" id="readouts" tabindex="0" aria-label="Read-outs">
         <div id="ro-centre" class="ro"></div>
-        <div id="ro-mission" class="ro"></div>
+        <div id="ro-mission" class="ro more"></div>
         <div id="ro-cursor" class="ro dim"></div>
-        <div id="ro-layer" class="ro dim"></div>
+        <div id="ro-layer" class="ro dim more"></div>
       </div>
     </header>
 
     <div class="dock" id="dock">
-      <section class="col" aria-label="Where to look">
-        <h2 class="label">Coordinates</h2>
-        <form id="coord-form" class="coord-form" novalidate autocomplete="off">
-          <div class="field wide">
-            <label for="in-name">Object name</label>
-            <input id="in-name" type="text" inputmode="search" placeholder="e.g. Barnard's Star" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="in-ra">Right ascension</label>
-            <input id="in-ra" class="mono" type="text" inputmode="text" placeholder="270.0 or 18:00:00" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="in-dec">Declination</label>
-            <input id="in-dec" class="mono" type="text" inputmode="text" placeholder="+66.56" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="in-width">Patch width</label>
-            <select id="in-width">
-              <option value="0.25">0.25°</option>
-              <option value="0.5" selected>0.5°</option>
-              <option value="1">1°</option>
-              <option value="2">2°</option>
-              <option value="3.5">3.5°</option>
-            </select>
-          </div>
-          <div class="field submit">
-            <button type="submit" class="btn accent" id="btn-fly">Fly to this patch</button>
-          </div>
-          <p id="width-note" class="note" hidden>Large field — the first download is slow (it can take several minutes).</p>
-          <p id="coord-error" class="error" role="alert"></p>
-        </form>
-        <div class="presets" id="presets" role="group" aria-label="Places to try"></div>
+      <!-- One panel at a time opens above the bar; the sky stays clear otherwise. -->
+      <div class="sheet" id="sheet" hidden>
+        <section class="panel" id="panel-find" aria-labelledby="pf-title" hidden>
+          <div class="panel-head"><h2 class="label" id="pf-title">Coordinates</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+          <form id="coord-form" class="coord-form" novalidate autocomplete="off">
+            <div class="field wide">
+              <label for="in-name">Object name</label>
+              <input id="in-name" type="text" inputmode="search" placeholder="e.g. Barnard's Star" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="in-ra">Right ascension</label>
+              <input id="in-ra" class="mono" type="text" inputmode="text" placeholder="270.0 or 18:00:00" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="in-dec">Declination</label>
+              <input id="in-dec" class="mono" type="text" inputmode="text" placeholder="+66.56" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="in-width">Patch width</label>
+              <select id="in-width">
+                <option value="0.25">0.25°</option>
+                <option value="0.5" selected>0.5°</option>
+                <option value="1">1°</option>
+                <option value="2">2°</option>
+                <option value="3.5">3.5°</option>
+              </select>
+            </div>
+            <div class="field submit">
+              <button type="submit" class="btn accent" id="btn-fly">Fly to this patch</button>
+            </div>
+            <p id="width-note" class="note" hidden>Large field — the first download is slow (it can take several minutes).</p>
+            <p id="coord-error" class="error" role="alert"></p>
+          </form>
+          <div class="presets patch-only" id="presets" role="group" aria-label="Places to try"></div>
 
-        <h2 class="label">Mission</h2>
-        <div class="mission"><span class="pill selected static" aria-label="Mission: SPHEREx">SPHEREx</span></div>
+          <details class="advanced" id="advanced">
+            <summary><span class="chev" aria-hidden="true"></span>Advanced options</summary>
+            <div class="adv-body">
+              <h3 class="label">Wavelength band</h3>
+              <p class="note">Which colour of light the picture is taken in. Different bands make different objects stand out.</p>
+              <div class="chips" id="band-chips" role="group" aria-label="Wavelength band"></div>
 
-        <details class="advanced" id="advanced">
-          <summary><span class="chev" aria-hidden="true"></span>Advanced options</summary>
-          <div class="adv-body">
-            <h3 class="label">Wavelength band</h3>
-            <p class="note">Which colour of light the picture is taken in. Different bands make different objects stand out.</p>
-            <div class="chips" id="band-chips" role="group" aria-label="Wavelength band"></div>
+              <h3 class="label">Display layer</h3>
+              <p class="note" id="layer-note"></p>
+              <div class="chips" id="layer-chips" role="group" aria-label="Display layer"></div>
 
-            <h3 class="label">Display layer</h3>
-            <p class="note" id="layer-note"></p>
-            <div class="chips" id="layer-chips" role="group" aria-label="Display layer"></div>
+              <h3 class="label">Faint unknown movers</h3>
+              <label class="check"><input type="checkbox" id="chk-search"><span>Search for faint unknown movers</span></label>
+              <p class="note" id="search-note">Looks for faint things sliding across the patch that no catalogue lists. Slow; the answer is saved for next time.</p>
 
-            <h3 class="label">Faint unknown movers</h3>
-            <label class="check"><input type="checkbox" id="chk-search"><span>Search for faint unknown movers</span></label>
-            <p class="note" id="search-note">Looks for faint things sliding across the patch that no catalogue lists. Slow; the answer is saved for next time.</p>
+              <h3 class="label">Moving objects found <span id="mover-count" class="count"></span></h3>
+              <p class="note">Things that change position between frames, such as asteroids. Each row shows how fast it moves and in which direction. Select one to keep it ringed.</p>
+              <ul class="movers" id="mover-list"><li class="empty">Open a patch to see its moving objects.</li></ul>
 
-            <h3 class="label">Moving objects found <span id="mover-count" class="count"></span></h3>
-            <p class="note">Things that change position between frames, such as asteroids. Each row shows how fast it moves and in which direction. Select one to keep it ringed.</p>
-            <ul class="movers" id="mover-list"><li class="empty">Open a patch to see its moving objects.</li></ul>
+              <a id="link-analysis" class="link" href="analysis.html" hidden>Open in analysis view</a>
+            </div>
+          </details>
+        </section>
 
-            <a id="link-analysis" class="link" href="analysis.html" hidden>Open in analysis view</a>
-          </div>
-        </details>
-      </section>
-
-      <section class="right" id="right" aria-label="Controls">
-        <div id="sphere-dock" class="sphere-dock">
-          <p class="hint sphere-only">You are inside the whole sky. Drag to look around, scroll to zoom, or click any spot to fly into it and watch it change over time.</p>
-          <div class="row sphere-only">
-            <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
-            <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
-            <button type="button" class="btn accent" id="btn-open-centre">Open the patch at the centre</button>
-            <button type="button" class="btn" id="rw-open" aria-expanded="false" aria-controls="rw-form">Turn back the sky…</button>
-          </div>
-
-          <form id="rw-form" class="rewind" novalidate autocomplete="off" hidden>
-            <h2 class="label">Turn back the sky</h2>
+        <section class="panel" id="panel-rewind" aria-labelledby="pr-title" hidden>
+          <div class="panel-head"><h2 class="label" id="pr-title">Turn back the sky</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+          <form id="rw-form" class="rewind" novalidate autocomplete="off">
             <p class="note">See the sky over a place on any night between 15,000 BCE and 15,000 CE, worked out from Earth’s slow wobble and the measured motions of the stars.</p>
             <div class="rw-grid">
               <div class="field rw-span3"><label for="rw-place">Place</label><select id="rw-place"></select></div>
@@ -140,8 +130,6 @@
             <div class="presets" id="rw-presets" role="group" aria-label="Moments to try"></div>
             <div class="row rw-actions">
               <button type="submit" class="btn accent" id="rw-go">Turn back the sky</button>
-              <button type="button" class="btn" id="rw-today" hidden>Back to tonight</button>
-              <button type="button" class="btn" id="rw-exit" hidden>Back to the whole sky</button>
             </div>
             <p id="rw-error" class="error" role="alert"></p>
             <details class="advanced rw-accuracy">
@@ -154,28 +142,52 @@
               </div>
             </details>
           </form>
-        </div>
+        </section>
+      </div>
 
-        <div id="play-dock" class="play-dock" hidden>
-          <div class="transport">
-            <button type="button" class="round play" id="btn-play" aria-label="Pause"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path id="play-icon" fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
-            <div class="strip-wrap">
-              <div class="strip" id="strip" role="group" aria-label="Frames"></div>
-              <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono"></span></div>
-            </div>
-          </div>
-          <div class="row wrapRow">
-            <div class="pills" id="mode-pills" role="group" aria-label="View mode"></div>
-            <div class="pills" id="speed-pills" role="group" aria-label="Speed"></div>
-          </div>
-          <div class="row wrapRow">
-            <button type="button" class="pill toggle" id="btn-rings" aria-pressed="false">Ring the movers</button>
-            <button type="button" class="btn" id="btn-back">Back to the whole sky</button>
-            <span id="load-line" class="mono dim load-line"></span>
-          </div>
-          <p class="mode-note" id="mode-note"></p>
+      <div id="sphere-dock" class="sphere-dock">
+        <p class="hint sphere-only" id="hint">Drag to look around · scroll to zoom · click a spot to open it · <kbd>H</kbd> hides the controls</p>
+        <p id="bar-msg" class="error bar-msg sphere-only" role="alert"></p>
+        <div class="bar sphere-only">
+          <form class="search" id="q-form" role="search" autocomplete="off">
+            <input id="q" type="text" inputmode="search" placeholder="Find an object…" aria-label="Find an object by name" aria-controls="q-list" aria-expanded="false" spellcheck="false">
+            <ul id="q-list" class="q-list" role="list" aria-label="Places to try" hidden></ul>
+          </form>
+          <span class="bar-group">
+            <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
+            <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
+          </span>
+          <button type="button" class="btn accent" id="btn-open-centre">Open the centre</button>
+          <button type="button" class="btn quiet" id="btn-find" aria-expanded="false" aria-controls="panel-find">Coordinates</button>
+          <button type="button" class="btn quiet" id="rw-open" aria-expanded="false" aria-controls="panel-rewind">Turn back the sky</button>
         </div>
-      </section>
+        <div class="bar rewind-only">
+          <button type="button" class="btn quiet" id="rw-change" aria-expanded="false" aria-controls="panel-rewind">Change date or place</button>
+          <button type="button" class="btn quiet" id="rw-today" hidden>Back to tonight</button>
+          <button type="button" class="btn accent" id="rw-exit">Back to the whole sky</button>
+        </div>
+      </div>
+
+      <div id="play-dock" class="bar play-dock" hidden>
+        <div class="transport">
+          <button type="button" class="round play" id="btn-play" aria-label="Pause"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path id="play-icon" fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+          <div class="strip-wrap">
+            <div class="strip" id="strip" role="group" aria-label="Frames"></div>
+            <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono"></span></div>
+          </div>
+        </div>
+        <div class="row wrapRow">
+          <div class="pills" id="mode-pills" role="group" aria-label="View mode"></div>
+          <div class="pills" id="speed-pills" role="group" aria-label="Speed"></div>
+        </div>
+        <div class="row wrapRow">
+          <button type="button" class="pill toggle" id="btn-rings" aria-pressed="false">Ring the movers</button>
+          <button type="button" class="btn quiet" id="btn-find-2" aria-expanded="false" aria-controls="panel-find">Coordinates &amp; options</button>
+          <button type="button" class="btn" id="btn-back">Back to the whole sky</button>
+          <span id="load-line" class="mono dim load-line"></span>
+        </div>
+        <p class="mode-note" id="mode-note"></p>
+      </div>
     </div>
   </div>
 </div>

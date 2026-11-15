@@ -16,6 +16,9 @@ const DEFAULTS = { width: 0.5, band: 2, layer: 'model', mode: 'video' };
 // The field of view is measured across the longer side in portrait too; keep the sphere's edge off screen on phones.
 const START = { ra: 285, dec: -8, fov: window.innerHeight > window.innerWidth * 1.2 ? 55 : 85 };
 const IDLE_MS = 3500, IGNORE_MS = 1500, DRIFT_DEG_S = 1.1, AUTO_FLY_FOV = 4.5;
+// Pointer movement only brings the controls back near the edges where they live; over the sky it leaves them hidden.
+const EDGE_BOTTOM_PX = 150, EDGE_TOP_PX = 80, DRAG_PX = 6;
+const LOOK_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-']);
 const PRESETS = [
   { label: 'North Ecliptic Pole', ra: 270.0, dec: 66.56, pole: true },
   { label: 'South Ecliptic Pole', ra: 90.0, dec: -66.56, pole: true },
@@ -62,7 +65,7 @@ function rawNote(list, total) {
 
 const S = {
   view: 'sphere', width: DEFAULTS.width, band: DEFAULTS.band, layer: DEFAULTS.layer, mode: DEFAULTS.mode,
-  target: null, pending: null, uiVisible: false, hiddenAtDown: false, drifting: !reduceMotion(),
+  target: null, pending: null, uiVisible: false, hiddenAtDown: false, panelAtDown: false, drifting: !reduceMotion(),
   flyMix: 0, fading: false, readyFade: 0, readyTarget: 0, readyDur: 0.8, committed: true, cursor: null, hoverUi: false, dragging: false,
   hips: 'none', coverage: [], job: null, loadedAt: 0,
 };
@@ -72,7 +75,7 @@ const sphere = new Sphere($('aladin'));
 const patch = new PatchView(patchCanvas, $('hover'), {
   onUpdate: onSessionUpdate, onFrameIndex, onFramesChanged: () => scheduleStrip(), onCursor: (sky) => { S.cursor = sky; },
   onRecentre: (ra, dec) => openFade(ra, dec), onLeave: () => leaveToSphere(), onPickMover: (k) => pickMover(k),
-  uiVisible: () => S.uiVisible, clickAllowed: () => !S.hiddenAtDown, onMovers: () => renderMovers(),
+  uiVisible: () => S.uiVisible, clickAllowed: () => !S.hiddenAtDown && !S.panelAtDown, onMovers: () => renderMovers(),
 });
 const fly = new FlyController(applyFly);
 const octx = overlay.getContext('2d');
@@ -85,15 +88,18 @@ const rewind = new Rewind({
 rwPanel = new RewindPanel(rewind, {
   // The whirl plays with the controls out of the way; focus moves to the sky so arrow keys look around afterwards.
   onBeforeStart: () => {
-    S.drifting = false;
+    S.drifting = false; setPanel(null);
     const inp = $('rewind-input'); inp.hidden = false; inp.focus({ preventScroll: true });
-    if (!reduceMotion()) { clearTimeout(hideTimer); setUi(false); }
+    if (!reduceMotion()) hideNow();
   },
+  onOpen: (open) => setPanel(open ? 'rewind' : null),
 });
 
 // =====================================================================================
 // UI visibility and idle fade
 // =====================================================================================
+// The sky comes first: dragging, scrolling or flying hides the controls at once. They come back when the pointer
+// nears the bar or the header, on a tap or click on the sky, on a key press, or with H (which also hides them).
 let hideTimer = 0, loadStart = performance.now();
 function setUi(v) { S.uiVisible = v; ui.classList.toggle('visible', v); root.classList.toggle('ui-on', v); }
 function reveal() {
@@ -103,24 +109,99 @@ function reveal() {
   clearTimeout(hideTimer);
   hideTimer = setTimeout(maybeHide, IDLE_MS);
 }
+function hideNow() { clearTimeout(hideTimer); setUi(false); }
 function maybeHide() {
   const focusIn = ui.contains(document.activeElement) && document.activeElement !== document.body;
-  if (S.hoverUi || focusIn || S.dragging) { hideTimer = setTimeout(maybeHide, 600); return; }
+  // an open panel stays until it is closed, the sky is dragged or scrolled, or H is pressed
+  if (S.hoverUi || focusIn || S.dragging || openPanel) { hideTimer = setTimeout(maybeHide, 600); return; }
   setUi(false);
 }
-window.addEventListener('pointerdown', () => { S.hiddenAtDown = !S.uiVisible; }, true);
-for (const ev of ['pointermove', 'pointerdown', 'touchstart', 'wheel', 'keydown']) window.addEventListener(ev, () => reveal(), { passive: true });
+const onControls = (t) => !!(t && t.closest && t.closest('.sheet, .bar, .hint, .readouts, .status'));
+const nearEdge = (y) => y > window.innerHeight - EDGE_BOTTOM_PX || y < EDGE_TOP_PX;
+let tap = null;
+window.addEventListener('pointerdown', (e) => {
+  // A touch on hidden controls only brings them back. A mouse click on the sky still flies there once the opening
+  // drift has stopped: the controls are hidden most of the time, so it should not take two clicks.
+  S.hiddenAtDown = !S.uiVisible && (e.pointerType !== 'mouse' || S.drifting);
+  S.panelAtDown = S.uiVisible && !!openPanel;
+  if (onControls(e.target)) { tap = null; reveal(); return; }
+  tap = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (tap && e.pointerId === tap.id) {
+    if (!tap.moved && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) >= DRAG_PX) { tap.moved = true; S.drifting = false; teach(); if (!reduceMotion()) hideNow(); }
+    return;
+  }
+  if (e.pointerType === 'mouse' && (onControls(e.target) || nearEdge(e.clientY))) reveal();
+}, { capture: true, passive: true });
+const endTap = (e) => {
+  const t = tap; tap = null;
+  if (!t || e.pointerId !== t.id || e.type === 'pointercancel' || t.moved) return;
+  // a click on the sky: shows hidden controls, or closes an open panel; otherwise the sky handles it (fly there)
+  if (S.hiddenAtDown || (!S.uiVisible && rewind.active)) reveal();
+  else if (S.panelAtDown) setPanel(null);
+};
+window.addEventListener('pointerup', endTap, true); window.addEventListener('pointercancel', endTap, true);
+window.addEventListener('wheel', (e) => { if (onControls(e.target)) return; S.drifting = false; teach(); if (!reduceMotion()) hideNow(); }, { capture: true, passive: true });
+window.addEventListener('keydown', (e) => {
+  const field = e.target.closest && e.target.closest('input, select, textarea');
+  if (!field && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'h' || e.key === 'H')) {
+    if (S.uiVisible) { setPanel(null); hideNow(); } else reveal();
+    return;
+  }
+  if (e.key === 'Escape' && openPanel && ui.contains(e.target)) { const by = panelOpener(); setPanel(null); if (by) by.focus(); return; }
+  if (LOOK_KEYS.has(e.key) && !ui.contains(e.target)) return;   // looking around the sky
+  reveal();
+}, true);
 document.addEventListener('focusin', (e) => { if (ui.contains(e.target)) reveal(); });
-for (const n of document.querySelectorAll('.col, .right, .readouts')) {
+for (const n of document.querySelectorAll('.sheet, .bar, .readouts')) {
   n.addEventListener('pointerenter', () => { S.hoverUi = true; }); n.addEventListener('pointerleave', () => { S.hoverUi = false; });
 }
+
+// The one-line hint above the bar goes once the sky has been dragged, scrolled or clicked.
+let taught = false;
+try { taught = localStorage.getItem('blink.taught') === '1'; } catch (_) { /* storage blocked */ }
+if (taught) $('hint').hidden = true;
+function teach() {
+  if (taught) return; taught = true; $('hint').hidden = true;
+  try { localStorage.setItem('blink.taught', '1'); } catch (_) { /* storage blocked */ }
+}
+
+// =====================================================================================
+// Panels: at most one open above the bar
+// =====================================================================================
+const PANELS = { find: $('panel-find'), rewind: $('panel-rewind') };
+const OPENERS = { find: ['btn-find', 'btn-find-2'], rewind: ['rw-open', 'rw-change'] };
+let openPanel = null;
+function setPanel(name) {
+  openPanel = name && PANELS[name] ? name : null;
+  for (const [k, n] of Object.entries(PANELS)) n.hidden = k !== openPanel;
+  $('sheet').hidden = !openPanel;
+  root.classList.toggle('sheet-open', !!openPanel);
+  for (const [k, ids] of Object.entries(OPENERS)) for (const id of ids) $(id).setAttribute('aria-expanded', String(k === openPanel));
+  if (openPanel) { $('sheet').scrollTop = 0; reveal(); }
+}
+function panelOpener() {
+  if (!openPanel) return null;
+  return OPENERS[openPanel].map($).find((b) => b.offsetParent !== null) || null;
+}
+function togglePanel(name, focusId) {
+  if (openPanel === name) { setPanel(null); return; }
+  setPanel(name);
+  if (focusId) $(focusId).focus({ preventScroll: true });
+}
+$('btn-find').addEventListener('click', () => togglePanel('find', 'in-ra'));
+$('btn-find-2').addEventListener('click', () => togglePanel('find'));
+$('rw-open').addEventListener('click', () => togglePanel('rewind', 'rw-year'));
+$('rw-change').addEventListener('click', () => togglePanel('rewind', 'rw-year'));
+for (const b of document.querySelectorAll('[data-close]')) b.addEventListener('click', () => { const by = panelOpener(); setPanel(null); if (by) by.focus(); });
 
 // =====================================================================================
 // Sphere interaction (click-to-fly, auto-fly on zoom) and markers
 // =====================================================================================
 const aladinEl = $('aladin');
 let down = null;
-aladinEl.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, hidden: !S.uiVisible || S.hiddenAtDown }; S.dragging = true; }, true);
+aladinEl.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, hidden: S.hiddenAtDown || S.panelAtDown }; S.dragging = true; }, true);
 window.addEventListener('pointerup', (e) => {
   S.dragging = false;
   const d = down; down = null;
@@ -204,6 +285,8 @@ function fillCoords(ra, dec, name) {
 /** Start loading a patch and fly to it from wherever we are. */
 async function flyTo(ra, dec, name, named = null) {
   if (rewind.active) rewind.exitNow();
+  setPanel(null); closeSuggest();
+  if (!reduceMotion()) hideNow();
   const inPatch = S.view === 'patch' && patch.opacity > 0.5 && !!S.target;
   const from = inPatch
     ? { ra: S.target.ra, dec: S.target.dec, fov: S.target.width, inPatch: true }
@@ -255,6 +338,8 @@ async function leaveToSphere() {
   if (patch.session) patch.session.abort();
   stopSearch();
   const t = S.target;
+  setPanel(null);
+  if (!reduceMotion()) hideNow();
   S.committed = true; S.flyMix = 1;
   sphere.setCamera(t.ra, t.dec, t.width);
   setView('sphere'); S.cursor = null;
@@ -303,8 +388,7 @@ function presetByName(q) {
   const n = norm(q), want = ALIASES[n];
   return PRESETS.find((p) => (want && p.label === want) || norm(p.label) === n) || null;
 }
-async function goName(q) {
-  const err = $('coord-error');
+async function goName(q, err = $('coord-error')) {
   const local = presetByName(q);
   if (local) { err.textContent = ''; go(local.ra, local.dec, local.label, local.plx ? { name: local.label, plx: local.plx } : null); return; }
   err.textContent = `Looking up “${q}”…`;
@@ -375,7 +459,37 @@ function syncPlay() {
   $('play-icon').setAttribute('d', patch.playing ? 'M7 5h4v14H7zM13 5h4v14h-4z' : 'M8 5v14l11-7z');
 }
 
-$('advanced').addEventListener('toggle', () => ui.classList.toggle('adv-open', $('advanced').open));
+// ---- search box in the bar: places to try, then any name the resolver knows ----
+const qIn = $('q'), qList = $('q-list');
+function closeSuggest() { qList.hidden = true; qIn.setAttribute('aria-expanded', 'false'); }
+function renderSuggest() {
+  const raw = qIn.value.trim(), n = norm(raw);
+  const hits = PRESETS.filter((p) => !n || norm(p.label).includes(n));
+  const kids = [];
+  if (hits.length) kids.push(el('li', { class: 'q-head', text: n ? 'Places' : 'Places to try' }));
+  for (const p of hits) kids.push(el('li', {}, el('button', { type: 'button', text: p.label, onclick: () => goPreset(p) })));
+  if (raw && !presetByName(raw)) kids.push(el('li', {}, el('button', { type: 'button', class: 'q-go', text: `Look up “${raw}”`, onclick: () => searchBar(raw) })));
+  qList.replaceChildren(...kids);
+  qList.hidden = !kids.length; qIn.setAttribute('aria-expanded', String(!qList.hidden));
+}
+function goPreset(p) { qIn.value = ''; closeSuggest(); $('bar-msg').textContent = ''; S.drifting = false; go(p.ra, p.dec, p.label, p.plx ? { name: p.label, plx: p.plx } : null); }
+function searchBar(q) { closeSuggest(); if (!q) return; S.drifting = false; goName(q, $('bar-msg')).then(() => { if (!$('bar-msg').textContent) qIn.value = ''; }); }
+qIn.addEventListener('focus', renderSuggest);
+qIn.addEventListener('input', () => { $('bar-msg').textContent = ''; renderSuggest(); });
+$('q-form').addEventListener('submit', (e) => { e.preventDefault(); searchBar(qIn.value.trim()); });
+$('q-form').addEventListener('focusout', (e) => { if (!$('q-form').contains(e.relatedTarget)) closeSuggest(); });
+$('q-form').addEventListener('keydown', (e) => {
+  const items = [...qList.querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  if (e.key === 'Escape' && !qList.hidden) { e.preventDefault(); e.stopPropagation(); closeSuggest(); qIn.focus(); }
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if (qList.hidden) renderSuggest();
+    const list = [...qList.querySelectorAll('button')]; if (!list.length) return;
+    e.preventDefault(); e.stopPropagation();
+    // the list opens upwards, so ArrowUp moves away from the box
+    const next = i < 0 ? (e.key === 'ArrowUp' ? list.length - 1 : 0) : i + (e.key === 'ArrowUp' ? -1 : 1);
+    if (next < 0 || next >= list.length) qIn.focus(); else list[next].focus();
+  }
+});
 
 // ---- frame strip ----
 let stripQueued = false, stripKey = '';

@@ -72,30 +72,29 @@ One root element, `height: 100vh` (min 560px), `overflow: hidden`.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Blink                                   centre coords · width │  header (top)
-│                                         mission · band        │
-│                                         cursor coords / hint  │
-│                                         SIMULATED IMAGERY     │
+│ Blink                                   centre coords · width │  header: one read-out line,
+│                                                               │  the rest on hover / focus
 │                                                               │
 │                     full-bleed sky canvas                     │
 │                                                               │
-│ COORDINATES            ┌─ sphere view: hint + zoom buttons ─┐ │
-│ [RA] [Dec]             │  or                                │ │  dock (bottom)
-│ [Patch width] [Fly to] │─ patch view: playback controls ────┘ │
-│ preset pills                                                  │
-│ MISSION                                                       │
-│ ▸ Advanced options                                            │
+│               ┌──────── one panel at a time ────────┐         │  sheet (only when opened):
+│               │ Coordinates  or  Turn back the sky   │         │  coordinates + advanced, or
+│               └──────────────────────────────────────┘         │  the rewind form
+│   ╭──────────────────────────────────────────────────────╮    │
+│   │ Find an object…  −  +  Open the centre  Coordinates  │    │  bar (bottom centre)
+│   │                               Turn back the sky       │    │
+│   ╰──────────────────────────────────────────────────────╯    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+The bar changes with the view: the sphere bar above; in a rewind, "Change date or place · Back to tonight · Back to
+the whole sky"; in a patch, the playback controls with a "Coordinates & options" button.
+
 - **Canvas:** absolutely positioned, fills the root, `object-fit: cover`. Internal resolution 1600×1000 in the prototype; a real build should match device pixels.
 - **UI layer:** absolutely positioned over the canvas, `pointer-events: none` on the layer itself so the sky stays interactive in empty areas.
-- **Scrim:** a bottom gradient inside the UI layer for legibility, 62% of the height: `linear-gradient(to top, rgba(5,7,11,0.82), rgba(5,7,11,0.45) 45%, rgba(5,7,11,0))`. It fades with the UI.
-- **Header:** top, wordmark left, four right-aligned mono lines on the right.
-- **Dock:** bottom, a wrapping flex row, `align-items: flex-end`, gap `24px 48px`, `max-height: calc(100% - 96px)`, `overflow-y: auto`.
-  - Left column: `flex: 1 1 290px; max-width: 340px`.
-  - Right block: `flex: 999 1 420px`.
-  - On a phone the two stack and the dock scrolls.
+- **Scrim:** only a short top gradient behind the header. The bar and sheet carry their own frosted, blurred background, so the rest of the sky is not darkened.
+- **Header:** top, wordmark left, one right-aligned mono line (centre coordinates) on the right; the other read-outs appear on hover or focus. In a patch the header stays on screen (with the cursor position) while the rest of the UI is hidden.
+- **Dock:** a column at the bottom centre: the sheet (at most one panel, scrolling inside itself) above the bar. On a phone both span the width and the sheet is capped at 62% of the height.
 
 ---
 
@@ -110,19 +109,28 @@ One root element, `height: 100vh` (min 560px), `overflow: hidden`.
 
 ### Revealing controls
 
-- Any mouse move, touch, or keyboard focus inside the page sets the UI layer to opacity 1 (transition `opacity 0.9s ease`).
+The sky comes first: looking around never brings the controls up.
+
+- Moving the mouse within 150px of the bottom edge or 80px of the top edge, or over a control, reveals the UI. Moving it over the rest of the sky does not.
+- A tap on the sky while the UI is hidden reveals it, as does a mouse click on the sky during the opening drift or in a rewind.
+- Any key press reveals the UI, except the look-around keys (arrows, `+`, `-`) on the sky. `H` toggles the controls (outside text fields).
 - Interaction during the first part of the load fade is ignored, so the opening stays clean.
-- While hidden, dock controls have `pointer-events: none` but remain keyboard-focusable; focusing one reveals the UI.
+- While hidden, controls have `pointer-events: none` but remain keyboard-focusable; focusing one reveals the UI.
+- A one-line hint above the bar ("Drag to look around · scroll to zoom · click a spot to open it · H hides the controls") shows until the sky is first dragged or scrolled, and is remembered per browser.
 
 ### Hiding controls
 
-- After 3.5 seconds without interaction the UI fades back to 0 (adjustable 1.5–10s in the prototype).
-- The timer does not fire while the pointer is over the dock, while focus is inside the page, or during a drag.
+- Dragging (6px or more) or scrolling on the sky hides the UI at once. So do flying to a patch, leaving one, and starting a rewind.
+- Otherwise, after 3.5 seconds without interaction the UI fades out. The timer does not fire while the pointer is over the controls, focus is inside them, during a drag, or while a panel is open.
+
+### Panels
+
+- "Coordinates" and "Turn back the sky" each open a panel above the bar; opening one closes the other. The × button, Escape (with focus in the panel) or a click on the sky closes it. A click that closes a panel does not also navigate.
 
 ### Other rules tied to visibility
 
 - The centre crosshair and the sphere's place markers draw only while the UI is visible.
-- A click on the sky while the UI is hidden only reveals the UI. It does not navigate.
+- With a mouse, a click on the sky flies there even while the UI is hidden (after the opening drift has stopped). A touch on the sky while the UI is hidden only reveals the UI.
 - With `prefers-reduced-motion`: no fade, no scale, no drift, playback starts paused.
 
 ---
@@ -158,8 +166,8 @@ All input is ignored while a fly animation is running. Cursor is `grab`.
 
 ### Dock (right block)
 
-- One sentence: "You are inside the whole sky. Drag to look around, scroll to zoom, or click any spot to fly into it and watch it change over time."
-- Zoom out button, zoom in button, and the accent-outlined "Open the patch at the centre".
+- A search box ("Find an object…"). Focusing it lists the preset places; typing filters them and offers "Look up “…”" for any other name, resolved as in the coordinates form.
+- Zoom out button, zoom in button, the accent-outlined "Open the centre" (the only accent control in the bar), and quiet "Coordinates" and "Turn back the sky" buttons that open their panels.
 
 ---
 
@@ -230,7 +238,7 @@ Triggered by a sphere click, a preset, the coordinates form, or zooming past the
 
 ## 8. Left column controls
 
-### Coordinates (always visible with the UI)
+### Coordinates (in the Coordinates panel)
 
 - **Right ascension** text input. Accepts decimal degrees (`270.0`) or sexagesimal hours (`18:00:00`, `18h 00m 00s`). Valid range 0 ≤ RA < 360°.
 - **Declination** text input. Accepts decimal degrees (`+66.56`) or sexagesimal degrees. Valid range −90° to +90°.
@@ -357,7 +365,7 @@ Adapt to whatever framework the existing front end uses.
 ## 13. Acceptance checklist
 
 - [ ] On load, only the sky is visible; it fades in and is already moving.
-- [ ] Controls appear on movement, touch or focus, and fade after idle unless hovered or focused.
+- [ ] Controls appear near the edges, on a tap, key press or focus; dragging or scrolling the sky hides them at once; they fade after idle unless hovered, focused or a panel is open.
 - [ ] Drag turns the sphere; scroll zooms; clicking a spot flies in and opens its patch.
 - [ ] Entering valid coordinates flies to them from either view; invalid input shows the right message.
 - [ ] In a patch, fixed stars stay still across frames in all four modes.

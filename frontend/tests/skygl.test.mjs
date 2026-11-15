@@ -97,3 +97,98 @@ test('trail / diff glows keep only sources without a counterpart in the other fr
   assert.deepEqual(plan.glows.map((g) => [g.id, g.vs || null]), [['b', 'a'], ['a', null]]);
   delete globalThis.document;
 });
+
+/** Canvas2D-backed renderer with a stubbed DOM (no browser). Caller must delete globalThis.document. */
+function c2dRenderer(opts = {}) {
+  globalThis.document = { createElement: () => ({ getContext: () => null }) };
+  const ctx = new Proxy({}, { get: () => () => {} });
+  const canvas = { clientWidth: 400, clientHeight: 300, width: 400, height: 300, getContext: (k) => (k === '2d' ? ctx : null) };
+  return new SkyRenderer(canvas, opts);
+}
+
+test('setModel keeps the raw image, replaces background and sources, false for unknown ids', () => {
+  try {
+    const r = c2dRenderer();
+    r.setGrid(2);
+    const img = Float32Array.of(1, 2, 3, 4);
+    r.setFrame('a', { img, background: Float32Array.of(0, 0, 0, 0) });
+    const bg2 = Float32Array.of(9, 9, 9, 9);
+    assert.equal(r.setModel('a', { background: bg2, sources: [{ x: 1, y: 1, flux: 1 }] }), true);
+    const f = r.frames.get('a');
+    assert.equal(f.img, img);
+    assert.equal(f.background, bg2);
+    assert.equal(f.sources.length, 1);
+    assert.equal(f.psfFwhmPx, 1.9);
+    assert.equal(r.setModel('nope', { background: bg2 }), false);
+    assert.equal(r.frames.has('nope'), false);
+  } finally { delete globalThis.document; }
+});
+
+test('setModel crossfades raw -> model over fadeMs (Canvas2D combine)', () => {
+  try {
+    let now = 1000;
+    const r = c2dRenderer({ now: () => now, fadeMs: 600 });
+    r.setGrid(2);
+    r.setFrame('a', { img: Float32Array.of(2, 2, 2, 2), background: Float32Array.of(2, 2, 2, 2) });
+    r.setModel('a', { background: Float32Array.of(0, 0, 0, 0), sources: [{ x: 0, y: 0, flux: 5, snr: 20 }] });
+    const view = { a: 'a', mode: 'video', layer: 'model', lim: { lo: 0, hi: 1 } };
+    let plan = r.buildPlan(view);
+    assert.ok(Math.abs(plan.bg.fa - 1) < 1e-6);
+    assert.equal(plan.glows.length, 0);                       // w = 0 glows are dropped
+    assert.equal(r.fading, true);
+    assert.ok(Math.abs(r.backend.combine(plan)[0] - 2) < 1e-6);
+    now += 300;
+    plan = r.buildPlan(view);
+    assert.ok(Math.abs(plan.bg.fa - 0.5) < 1e-6);
+    assert.ok(Math.abs(plan.glows[0].w - 0.5) < 1e-6);
+    assert.ok(Math.abs(r.backend.combine(plan)[0] - 1) < 1e-6);
+    now += 600;
+    plan = r.buildPlan(view);
+    assert.equal(plan.bg.fa, 0);
+    assert.equal(plan.glows[0].w, 1);
+    assert.equal(r.backend.combine(plan)[0], 0);
+    assert.equal(r.fading, false);
+  } finally { delete globalThis.document; }
+});
+
+test('raw layer and diff / trail plans never crossfade (fa = fb = 0 mid-fade)', () => {
+  try {
+    let now = 1000;
+    const r = c2dRenderer({ now: () => now, fadeMs: 600 });
+    r.setGrid(2);
+    r.setFrame('a', { img: Float32Array.of(1, 1, 1, 1), background: Float32Array.of(1, 1, 1, 1) });
+    r.setFrame('b', { img: Float32Array.of(2, 2, 2, 2), background: Float32Array.of(2, 2, 2, 2) });
+    r.setModel('a', { background: Float32Array.of(0, 0, 0, 0), sources: [{ x: 0, y: 0, flux: 5, snr: 20 }] });
+    r.setModel('b', { background: Float32Array.of(0, 0, 0, 0) });
+    now += 300;                                                // mid-fade
+    const lim = { lo: 0, hi: 1 };
+    const plans = [
+      { a: 'a', layer: 'raw', lim },
+      { a: 'a', prev: 'b', mode: 'diff', layer: 'model', lim },
+      { a: 'a', trail: ['b', 'a'], mode: 'trail', layer: 'model', lim },
+    ].map((o) => r.buildPlan(o));
+    for (const p of plans) { assert.equal(p.bg.fa, 0); assert.equal(p.bg.fb, 0); }
+    assert.ok(r.buildPlan({ a: 'a', layer: 'model', lim }).bg.fa > 0); // sanity: the model layer does fade
+  } finally { delete globalThis.document; }
+});
+
+test('Canvas2D combine: NaN in the model uses raw, NaN in raw uses model', () => {
+  try {
+    let now = 1000;
+    const r = c2dRenderer({ now: () => now });
+    r.setGrid(2);
+    r.setFrame('a', { img: Float32Array.of(2, NaN, 2, NaN), background: Float32Array.of(0, 0, 0, 0) });
+    r.setModel('a', { background: Float32Array.of(NaN, 4, 6, NaN) });
+    const plan = r.buildPlan({ a: 'a', layer: 'model', lim: { lo: 0, hi: 1 } });
+    assert.equal(plan.bg.fa, 1);                              // just attached: fully raw
+    const v = r.backend.combine(plan);
+    assert.ok(Math.abs(v[0] - 2) < 1e-6);                     // model NaN -> raw
+    assert.ok(Math.abs(v[1] - 4) < 1e-6);                     // raw NaN -> model
+    now += 300;                                                // fa = 0.5
+    const mid = r.backend.combine(r.buildPlan({ a: 'a', layer: 'model', lim: { lo: 0, hi: 1 } }));
+    assert.ok(Math.abs(mid[0] - 2) < 1e-6);
+    assert.ok(Math.abs(mid[1] - 4) < 1e-6);
+    assert.ok(Math.abs(mid[2] - 4) < 1e-6);                   // 0.5 * 6 + 0.5 * 2
+    assert.ok(Number.isNaN(mid[3]));                          // both NaN stays NaN
+  } finally { delete globalThis.document; }
+});

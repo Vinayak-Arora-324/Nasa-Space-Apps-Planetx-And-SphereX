@@ -52,13 +52,14 @@ export class PatchView {
     const s = new Session(target);
     const scale = Math.max(6.15, target.width * 3600 / 1000);
     s.scale = scale;
-    const params = { ra: target.ra, dec: target.dec, fov: target.width, scale, detectors: target.band, per_visit: 6, max_frames: 400, model: 1 };
+    const params = { ra: target.ra, dec: target.dec, fov: target.width, scale, detectors: target.band, per_visit: 6, max_frames: 400, model: 'progressive' };
     s.params = params;
     streamFrames(params, {
       signal: s.ctl.signal,
       onStart: (m) => { s.npix = m.npix; s.scale = m.scale_arcsec || scale; s.total = m.selected; s.startMeta = m; this._changed(s); },
       onProgress: (m) => { s.progress = m; this._changed(s); },
       onFrame: (meta, img, flags, bg, left) => this._addFrame(s, meta, img, bg, left),
+      onModel: (meta, bg, left) => this._addModel(s, meta, bg, left),
       onEnd: () => {},
     }).then(() => {
       if (s.status === 'loading') s.status = s.frames.length ? 'ready' : 'empty';
@@ -79,12 +80,33 @@ export class PatchView {
     if (!meta.ok) { s.failed++; this._changed(s); return; }
     const m = meta.model || {};
     const f = { id: meta.id, mjd: meta.mjd, meta, img, bg: bg || null, left: left || null, sources: m.sources || [], psf: m.psf_fwhm_px || 2, noise: m.noise || 0.01, quality: m.quality, unexp: null };
+    f.modelPending = s.startMeta && s.startMeta.model === 'progressive' && !meta.model;
     let lo = 0, hi = s.frames.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (s.frames[mid].mjd <= f.mjd) lo = mid + 1; else hi = mid; }
     s.frames.splice(lo, 0, f); s.byId.set(f.id, f);
     this._visits(s);
     if (s.active) this._push(s, f);
     this._changed(s);
+  }
+  /** A fitted model for a raw frame (progressive mode). Crossfades the frame to the measured sky when it is on screen. */
+  _addModel(s, meta, bg, left) {
+    const f = s.byId.get(meta.id); if (!f) return;
+    const m = meta.model || {};
+    f.bg = bg; f.left = left; f.sources = m.sources || []; f.psf = m.psf_fwhm_px || f.psf || 2;
+    f.noise = m.noise || f.noise || 0.01; f.quality = m.quality; f.unexp = null; f.modelPending = false;
+    f.meta.model = m;
+    if (!s.modelLimits && s.frames.slice(0, 3).every((x) => !!x.bg)) { s.limits = computeLimits(s.frames); s.modelLimits = true; }
+    if (s.active && this.renderer && this._gridFor === s) {
+      this.renderer.setModel(f.id, { background: bg, leftover: left, sources: f.sources, psfFwhmPx: f.psf, noise: f.noise }, { fade: true });
+    }
+    this.dirty = true; this.cb.onFramesChanged(); this._changed(s);
+  }
+  /** 1-based positions (time order) of frames still waiting for their fitted model. */
+  rawFrames(s = this.session) {
+    if (!s) return [];
+    const out = [];
+    s.frames.forEach((f, i) => { if (f.modelPending) out.push(i + 1); });
+    return out;
   }
   _visits(s) {
     let v = 0;
@@ -98,7 +120,10 @@ export class PatchView {
     this.cb.onFramesChanged();
     this.dirty = true;
   }
-  _lock(s) { s.limits = computeLimits(s.frames); s.limitsLocked = !!s.limits && (s.frames.length >= 3 || s.status !== 'loading'); }
+  _lock(s) {
+    s.limits = computeLimits(s.frames); s.limitsLocked = !!s.limits && (s.frames.length >= 3 || s.status !== 'loading');
+    s.modelLimits = s.frames.slice(0, 3).every((x) => !!x.bg);
+  }
   _finalize(s) {
     if (s.active && s.frames.length) { this._lock(s); this.cb.onFramesChanged(); }
     this._changed(s);
@@ -198,6 +223,7 @@ export class PatchView {
     const st = this._state();
     if (!st) return;
     if (st.nearest !== this.lastIdx) { this.lastIdx = st.nearest; this.cb.onFrameIndex(st.nearest, st, this.frames[st.nearest]); }
+    if (r.fading) this.dirty = true;   // keep redrawing while a raw -> model crossfade runs
     if (this.dirty || this.opacity > 0) {
       const F = this.frames, lim = s.limits || { model: { lo: 0, hi: 1 }, raw: { lo: 0, hi: 1 }, trail: { lo: 0, hi: 1 }, leftover: { lo: -1, hi: 1 }, diff: { lo: -1, hi: 1 } };
       const key = this.mode === 'diff' ? 'diff' : this.layer;

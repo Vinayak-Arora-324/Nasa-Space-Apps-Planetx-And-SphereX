@@ -100,6 +100,8 @@ uniform float u_wa, u_wb, u_n, u_base, u_diff, u_trail;
 uniform sampler2D u_c, u_d; // trail: running max of past residuals, and this frame's residual
 uniform vec3 u_view;      // cx, cy, pxPerData (device)
 uniform vec2 u_dev;       // canvas device size
+uniform float u_fadeOn;   // crossfade raw (u_c/u_d) -> model (u_a/u_b), single/blend only
+uniform vec2 u_fade;      // raw fraction of slot a, slot b
 out vec4 o;
 ${NANF}
 float mitch(float x){
@@ -144,8 +146,20 @@ void main(){
   vec2 p = vec2(u_view.x + (gl_FragCoord.x - 0.5*u_dev.x)/u_view.z,
                 u_view.y + (0.5*u_dev.y - gl_FragCoord.y)/u_view.z);
   bool va = false, vb = false; float a = 0.0, b = 0.0;
-  if (u_wa != 0.0) a = sampleAA(u_a, p, va);
-  if (u_wb != 0.0) b = sampleAA(u_b, p, vb);
+  if (u_fadeOn > 0.5){
+    bool vm = false, vr = false; float am = 0.0, ar = 0.0;
+    if (u_wa != 0.0){
+      am = sampleAA(u_a, p, vm); ar = sampleAA(u_c, p, vr);
+      va = vm || vr; a = (vm && vr) ? mix(am, ar, u_fade.x) : (vm ? am : ar);
+    }
+    if (u_wb != 0.0){
+      am = sampleAA(u_b, p, vm); ar = sampleAA(u_d, p, vr);
+      vb = vm || vr; b = (vm && vr) ? mix(am, ar, u_fade.y) : (vm ? am : ar);
+    }
+  } else {
+    if (u_wa != 0.0) a = sampleAA(u_a, p, va);
+    if (u_wb != 0.0) b = sampleAA(u_b, p, vb);
+  }
   float r = 0.0, g = 0.0;
   if (u_diff > 0.5){ if (va && vb){ r = u_wa*a + u_wb*b; g = 1.0; } }
   else {
@@ -412,14 +426,22 @@ class GLBackend {
     gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
     let tA = null, tB = null, wa = plan.bg.wa, wb = plan.bg.wb;
     const bg = plan.bg;
-    let tC = null, tD = null;
+    let tC = null, tD = null, fa = 0, fb = 0;
+    // crossfade (model layer, single/blend): raw pixels of each slot, mixed in the shader by u_fade
+    const fade = (bg.type === 'single' || bg.type === 'blend') && (bg.fa > 0 || bg.fb > 0);
+    if (fade) {
+      protect.add(bg.a + '\u0000img'); if (bg.b != null) protect.add(bg.b + '\u0000img');
+      tC = this.getTex(bg.a, 'img', protect); tD = bg.b != null ? this.getTex(bg.b, 'img', protect) : null;
+      fa = bg.fa; fb = bg.fb;
+    }
     tA = bg.a != null ? this.getTex(bg.a, plan.plane, protect) : null;
     if (bg.type === 'trail') {
       protect.add(bg.a + '\u0000' + bg.resid);
       tC = this.accumulate(bg.resid, bg.trail, protect); tD = this.getTex(bg.a, bg.resid, protect);
       wa = 1; wb = 0;
     } else tB = bg.b != null ? this.getTex(bg.b, plan.plane, protect) : null;
-    if (!tA && tB) { tA = tB; wa = wb; wb = 0; if (bg.type === 'diff') { tA = null; } }
+    if (!tA && tB) { tA = tB; wa = wb; wb = 0; [tC, tD] = [tD, tC]; [fa, fb] = [fb, fa]; if (bg.type === 'diff') { tA = null; } }
+    if (fade && !tA && tC) tA = tC; // no model texture yet: show the raw pixels
     if (tA) {
       const p = this.progBg;
       gl.useProgram(p); gl.bindVertexArray(this.emptyVao);
@@ -429,7 +451,8 @@ class GLBackend {
       gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, tD || tA);
       gl.uniform1i(this.U(p, 'u_a'), 0); gl.uniform1i(this.U(p, 'u_b'), 1);
       gl.uniform1i(this.U(p, 'u_c'), 2); gl.uniform1i(this.U(p, 'u_d'), 3);
-      gl.uniform1f(this.U(p, 'u_trail'), tC && tD ? 1 : 0);
+      gl.uniform1f(this.U(p, 'u_trail'), !fade && tC && tD ? 1 : 0);
+      gl.uniform1f(this.U(p, 'u_fadeOn'), fade ? 1 : 0); gl.uniform2f(this.U(p, 'u_fade'), fa, fb);
       if (bg.type === 'diff' && !tB) wb = 0;
       gl.uniform1f(this.U(p, 'u_wa'), wa); gl.uniform1f(this.U(p, 'u_wb'), tB ? wb : 0);
       gl.uniform1f(this.U(p, 'u_n'), this.owner.npix);
@@ -508,7 +531,20 @@ class C2DBackend {
       for (let k = 0; k < N; k++) { const d = t.acc[k] - cr[k]; if (d > 0 && out[k] === out[k]) out[k] += d; }
       return out;
     }
-    const A = bg.a != null ? get(bg.a) : null, B = bg.b != null ? get(bg.b) : null;
+    // crossfade (single/blend): each slot mixes model (f = 1 - raw fraction) with raw pixels, NaN-aware
+    const fadeOn = bg.type === 'single' || bg.type === 'blend';
+    const rawOf = (id) => { const f = own.frames.get(id); const a = f && f.img; return a && a.length >= N ? a : null; };
+    const slot = (id, f) => {
+      const M = id != null ? get(id) : null;
+      if (!(fadeOn && f > 0)) return M;
+      const R = rawOf(id);
+      if (!R) return M;
+      if (!M) return R;
+      const out = new Float32Array(N);
+      for (let k = 0; k < N; k++) { const m = M[k], r = R[k]; out[k] = m !== m ? r : (r !== r ? m : (1 - f) * m + f * r); }
+      return out;
+    };
+    const A = slot(bg.a, bg.fa), B = slot(bg.b, bg.fb);
     if (!A && !B) return null;
     if (bg.type === 'single' || !B || !A) return A || (bg.type === 'diff' ? null : B);
     const out = new Float32Array(N), wa = bg.wa, wb = bg.wb;
@@ -574,6 +610,8 @@ export class SkyRenderer {
     this.frames = new Map(); this.view = { cx: 0, cy: 0, pxPerData: 1 };
     this.cacheFrames = opts.cacheFrames || 64;
     this.glowParams = { ...GLOW_DEFAULTS, ...(opts.glow || {}) };
+    this.fadeMs = opts.fadeMs ?? 600;
+    this.now = opts.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this._inst = new Map();
     this.cssW = 1; this.cssH = 1; this.dpr = 1;
     this.backend = null;
@@ -614,6 +652,33 @@ export class SkyRenderer {
       const a = d.img || d.background || d.leftover;
       if (a) this.setGrid(Math.round(Math.sqrt(a.length)));
     }
+  }
+  /** Attach the fitted model to a frame that already has its raw image; crossfades raw -> model. Returns false if the frame is unknown. */
+  setModel(id, { background, leftover, sources, psfFwhmPx, noise } = {}, { fade = true } = {}) {
+    const f = this.frames.get(id); if (!f) return false;
+    f.background = background || null;
+    if (leftover) f.leftover = leftover;
+    f.sources = sources || [];
+    f.psfFwhmPx = psfFwhmPx || f.psfFwhmPx || 1.9;
+    f.noise = noise ?? f.noise ?? 0;
+    delete f.residRaw; delete f.residLeft; // lazily derived planes depend on the model
+    this.backend.dropFrame(id); this._dropInst(id);
+    if (fade) f.fadeStart = this.now(); else delete f.fadeStart;
+    return true;
+  }
+  /** 0..1: how far frame `id` has faded from raw to model (1 = fully model, also for unknown frames / no fade). */
+  modelMix(id) {
+    const f = this.frames.get(id);
+    if (!f || f.fadeStart == null) return 1;
+    const m = this.fadeMs > 0 ? Math.min(1, Math.max(0, (this.now() - f.fadeStart) / this.fadeMs)) : 1;
+    if (m >= 1) delete f.fadeStart;
+    return m;
+  }
+  /** True while any frame is still crossfading (the caller keeps redrawing). */
+  get fading() {
+    const t = this.now();
+    for (const f of this.frames.values()) if (f.fadeStart != null && this.fadeMs > 0 && t - f.fadeStart < this.fadeMs) return true;
+    return false;
   }
   dropFrame(id) { this.backend.dropFrame(id); this.frames.delete(id); this._dropInst(id); }
   _dropInst(id) { for (const k of [...this._inst.keys()]) if (k === id || String(k).startsWith(id + '~') || String(k).includes('~' + id + '~')) this._inst.delete(k); }
@@ -721,6 +786,11 @@ export class SkyRenderer {
       glows = [{ id: a, w: 1 - t }, { id: o.b, w: t }].filter((g) => g.w > 0);
     } else { bg = { type: 'single', a, b: null, wa: 1, wb: 0 }; glows = [{ id: a, w: 1 }]; }
     if (layer !== 'model') glows = [];
+    // crossfade: bg.fa / bg.fb = raw fraction of each slot; glows scale with their frame's model mix
+    if (layer === 'model' && (bg.type === 'single' || bg.type === 'blend')) {
+      bg.fa = 1 - this.modelMix(a); bg.fb = bg.b != null ? 1 - this.modelMix(bg.b) : 0;
+      glows = glows.map((g) => ({ ...g, w: g.w * this.modelMix(g.id) })).filter((g) => g.w !== 0);
+    } else { bg.fa = 0; bg.fb = 0; }
     const tint0 = o.tint || [1, 1, 1], mx = Math.max(...tint0, 1e-6);
     const tint = tint0.map((c) => 1 - 0.75 * (1 - c / mx));
     return {

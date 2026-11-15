@@ -43,6 +43,22 @@ const LAYER_NOTES = {
 const LAYER_RO = { model: 'Rendered from measurements', raw: 'Raw pixels', leftover: 'Leftover (data minus model)' };
 const WIDE_NOTE = 1;
 
+/** Header note for the model layer while some frames still show raw pixels. list: 1-based positions, total: frame count. */
+function rawNote(list, total) {
+  const head = LAYER_RO.model;
+  if (total === 1 || list.length === total) return `${head} · ${total === 1 ? 'frame' : `all ${total} frames`} still raw`;
+  const parts = [];
+  for (let i = 0; i < list.length;) {
+    let j = i;
+    while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+    parts.push(j > i ? `${list[i]}–${list[j]}` : `${list[i]}`);
+    i = j + 1;
+  }
+  const text = parts.join(', ');
+  if (text.length > 32) return `${head} · ${list.length} of ${total} frames still raw`;
+  return `${head} · ${list.length === 1 ? 'frame' : 'frames'} ${text} of ${total} still raw`;
+}
+
 const S = {
   view: 'sphere', width: DEFAULTS.width, band: DEFAULTS.band, layer: DEFAULTS.layer, mode: DEFAULTS.mode,
   target: null, pending: null, uiVisible: false, hiddenAtDown: false, drifting: !reduceMotion(),
@@ -509,8 +525,13 @@ function updateReadouts(force) {
   if (S.view === 'patch' && S.cursor) cur = `${fmtRA(S.cursor.ra)}  ${fmtDec(S.cursor.dec)}`;
   else cur = S.view === 'patch' ? 'Click the sky to re-centre' : 'Drag to look around';
   $('ro-cursor').textContent = cur;
-  $('ro-layer').textContent = S.view === 'patch' ? LAYER_RO[S.layer]
+  let layerTxt = S.view === 'patch' ? LAYER_RO[S.layer]
     : S.hips === 'spherex' ? 'SPHEREx all-sky map' : S.hips === '2mass' ? 'Backdrop: 2MASS all-sky survey' : '';
+  if (S.view === 'patch' && S.layer === 'model' && patch.session) {
+    const raw = patch.rawFrames();
+    if (raw.length) layerTxt = rawNote(raw, patch.session.frames.length);
+  }
+  $('ro-layer').textContent = layerTxt;
   const label = S.view === 'patch' && t
     ? `Patch of the sky centred on right ascension ${fmtRA(t.ra)}, declination ${fmtDec(t.dec)}, ${t.width} degrees wide, SPHEREx band D${S.band}`
     : cam ? `The whole sky, centred on right ascension ${fmtRA(cam.ra)}, declination ${fmtDec(cam.dec)}, ${cam.fov.toFixed(0)} degrees across` : 'Sky view';

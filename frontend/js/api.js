@@ -26,11 +26,19 @@ export const health = () => getJSON('/api/health');
 /**
  * Stream frames. Records: u32le N | N bytes JSON | optional payload.
  * Payload (ok frames): npix*npix float32 LE image + npix*npix uint32 LE flags.
- * When the start record has `model: true` (request `model=1`) two more float32 planes follow:
- * background and leftover; onFrame(meta, img, flags, background, leftover).
+ *
+ * Model modes (request `model=`):
+ * - `model=1`: the start record has `model: true` and every ok frame carries two more float32
+ *   planes after the flags, background and leftover; onFrame(meta, img, flags, background, leftover).
+ * - `model=progressive`: the start record has `model: "progressive"`. Ok frames are raw only
+ *   (image + flags; onFrame(meta, img, flags)) and the fitted model follows later in
+ *   `{type: "model", id, model}` records. Their payload is background + leftover float32 planes,
+ *   delivered as onModel(meta, background, leftover). A model record always comes after its frame
+ *   record, failed frames never get one, and the end record may carry `models` (the count).
+ * - no model: image + flags only.
  * Payload bytes are COPIED into fresh typed arrays (no alignment assumptions).
  */
-export async function streamFrames(params, { signal, onStart, onFrame, onEnd, onProgress }) {
+export async function streamFrames(params, { signal, onStart, onFrame, onEnd, onProgress, onModel }) {
   const res = await fetch(`/api/stream?${qs(params)}`, { signal });
   if (!res.ok) throw await httpError(res);
   if (!res.body) throw new Error('Streaming is not supported by this browser');
@@ -57,10 +65,11 @@ export async function streamFrames(params, { signal, onStart, onFrame, onEnd, on
       const meta = JSON.parse(td.decode(buf.subarray(pos + 4, pos + 4 + n)));
       let payload = 0;
       if (meta.type === 'frame' && meta.ok) payload = npix * npix * 4 * planes;
+      else if (meta.type === 'model') payload = npix * npix * 8;
       if (len - pos < 4 + n + payload) break;
       const a = pos + 4 + n;
       pos += 4 + n + payload;
-      if (meta.type === 'start') { npix = meta.npix; planes = meta.model ? 4 : 2; onStart && onStart(meta); }
+      if (meta.type === 'start') { npix = meta.npix; planes = meta.model === true ? 4 : 2; onStart && onStart(meta); }
       else if (meta.type === 'frame') {
         let img = null, flags = null, background, leftover;
         if (meta.ok) {
@@ -74,6 +83,13 @@ export async function streamFrames(params, { signal, onStart, onFrame, onEnd, on
         }
         if (planes === 4) onFrame && onFrame(meta, img, flags, background, leftover);
         else onFrame && onFrame(meta, img, flags);
+      } else if (meta.type === 'model') {
+        if (onModel) {  // progressive: background and leftover planes for an earlier frame
+          const np = npix * npix;
+          const background = new Float32Array(np); new Uint8Array(background.buffer).set(buf.subarray(a, a + np * 4));
+          const leftover = new Float32Array(np); new Uint8Array(leftover.buffer).set(buf.subarray(a + np * 4, a + np * 8));
+          onModel(meta, background, leftover);
+        }
       } else if (meta.type === 'end') { ended = true; onEnd && onEnd(meta); }
       else if (meta.type === 'progress') onProgress && onProgress(meta);
     }

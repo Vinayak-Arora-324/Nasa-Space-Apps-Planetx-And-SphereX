@@ -58,6 +58,7 @@ IRSA_CONCURRENCY = int(_env("SPHEREX_IRSA_CONCURRENCY", "6"))
 # CPU work (header/WCS parsing is GIL-bound): a few threads at most, so frames finish
 # progressively instead of all at once
 CPU_CONCURRENCY = int(_env("SPHEREX_CPU_CONCURRENCY", "3"))
+FIT_CONCURRENCY = int(_env("SPHEREX_FIT_CONCURRENCY", str(CPU_CONCURRENCY)))  # source-model fits, separate from frame processing
 # IRSA can answer even serial requests with HTTP 503. Bound retries and use capped
 # exponential backoff with jitter before the alternate source is attempted.
 RETRY_ATTEMPTS = int(_env("SPHEREX_RETRY_ATTEMPTS", "10"))
@@ -78,6 +79,11 @@ TAP_TTL_S = float(_env("SPHEREX_TAP_TTL", "600"))  # frame lists: short, so new 
 FRAMES_DISK_TTL_S = float(_env("SPHEREX_FRAMES_DISK_TTL", str(6 * 3600)))
 FRAMES_STALE_MAX_S = float(_env("SPHEREX_FRAMES_STALE_MAX", str(7 * 86400)))
 CATALOG_TTL_S = float(_env("SPHEREX_CATALOG_TTL", str(30 * 86400)))
+# A catalogue query that failed is not retried for this long (in memory, per field).
+CATALOG_FAIL_TTL_S = float(_env("SPHEREX_CATALOG_FAIL_TTL", "600"))
+# Catalogue TAP queries (CatWISE can take > 400 s): their own read timeout and attempt count.
+CATALOG_READ_TIMEOUT_S = float(_env("SPHEREX_CATALOG_READ_TIMEOUT", "900"))
+CATALOG_RETRY_ATTEMPTS = int(_env("SPHEREX_CATALOG_RETRY_ATTEMPTS", "2"))
 RESOLVE_TTL_S = float(_env("SPHEREX_RESOLVE_TTL", "86400"))
 CUTOUT_SIZE_FACTOR = 1.45  # cutout size = fov * factor, to fill a north-up square at any roll
 CUTOUT_SIZE_QUANTUM_DEG = 0.01  # round cutout size up to this so cache keys repeat
@@ -134,7 +140,10 @@ PRIOR_GAIA_G_MAX = 19.0
 # CatWISE rows in catalogs.catalog carry W2 (w2mpro_pm) as `mag`; W2 <= 15.5 ~ W1 <= 16
 PRIOR_CATWISE_W2_MAX = 15.5
 PRIOR_FAST_PM_MASYR = 500.0  # fast movers: always included as priors
-PRIOR_FETCH_TIMEOUT_S = 30.0
+# The stream never blocks on catalogues: a fit uses the priors already cached and a missing
+# catalogue is fetched in the background. A stream waits at most this long for missing ones.
+PRIOR_WAIT_S = float(_env("SPHEREX_PRIOR_WAIT", "0"))
+PRIOR_CATALOGS = ("gaia", "catwise")  # order used in model cache keys
 PRIOR_MAX = 3000
 PRIOR_PAD_PX = 2.0  # keep priors up to this far outside the grid edge
 # SPHEREx detector size (px): cutouts are clipped to it

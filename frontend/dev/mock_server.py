@@ -12,7 +12,8 @@ Synthetic sky (offsets xi=east, eta=north in arcsec from the request centre):
 3 epochs (MJD ~60800, 61000, 61200) x 6 detectors x 8 frames, wavelength varying per frame.
 
 Blink extensions: stream `model=1` (extra background + leftover planes, fitted-source metadata,
-field stars, moving objects), `per_visit`, fov up to 3.5 (client picks scale), /api/coverage,
+field stars, moving objects) or `model=progressive` (raw frames first, then one `model` record per
+ok frame carrying the background + leftover planes), `per_visit`, fov up to 3.5 (client picks scale), /api/coverage,
 /api/movers/{known,linked,search/*}. If frontend/js/blink/skygl.js does not exist yet, a Canvas2D
 stub (dev/skygl-stub.js) is served in its place so the shell can be tested alone.
 """
@@ -403,28 +404,39 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header('Content-Type', 'application/octet-stream'); self.send_header('Cache-Control', 'no-store'); self.end_headers()
             def rec(obj, payload=b''):
                 b = json.dumps(obj).encode(); self.wfile.write(struct.pack('<I', len(b)) + b + payload); self.wfile.flush()
-            use_model = p.get('model') in ('1', 'true')
+            use_model = p.get('model') in ('1', 'true', 'progressive')
+            progressive = p.get('model') == 'progressive'
             mdl = dict(ra=ra, dec=dec) if use_model else None
             st = dict(type="start", ra=ra, dec=dec, fov=fov, scale_arcsec=scale, npix=npix, total_available=total, selected=len(sel), flag_bits=FLAG_BITS, detectors=sorted({f['detector'] for f in sel}))
-            if use_model: st['model'] = True
+            if use_model: st['model'] = 'progressive' if progressive else True
             if abs(ra - 10.0) < 1e-6 and abs(dec - 20.0) < 1e-6:  # slow field: exercises the loading state
                 for i in range(8): time.sleep(1.0); rec(dict(type='progress', done=i, total=18))
             rec(st)
             order = sel[:]; random.Random(5).shuffle(order); sent = 0; failed = 0
+            held = []  # progressive: (frame id, model dict, planes) sent after all raw frames
             for f in order:
                 time.sleep(0.02 + random.random() * 0.04)
                 if f['_k'] == 7 and f['_e'] == 1 and f['detector'] == 2:
                     failed += 1; rec(dict(type="frame", ok=False, id=f['id'], detector=f['detector'], mjd=f['mjd'], error="mock: cutout download failed (HTTP 503)")); continue
                 img, flags, info = render(f, npix, scale, pm, mdl)
                 meta = frame_meta(f, npix, scale, pm, ra, dec, img, flags, info)
-                if use_model:
+                if progressive:
+                    rec(meta, img.tobytes() + flags.tobytes())
+                    held.append((f['id'], dict(psf_fwhm_px=info['sig'] * 2.355, noise=info['noise'], quality=1.04, sources=info['sources']),
+                                 info['bg'].tobytes() + info['left'].tobytes()))
+                elif use_model:
                     meta['model'] = dict(psf_fwhm_px=info['sig'] * 2.355, noise=info['noise'], quality=1.04, sources=info['sources'])
                     rec(meta, img.tobytes() + flags.tobytes() + info['bg'].tobytes() + info['left'].tobytes())
                 else:
                     rec(meta, img.tobytes() + flags.tobytes())
                 sent += 1
                 if use_model and sent % 4 == 0: rec(dict(type="progress", done=sent + failed, total=len(sel)))
-            rec(dict(type="end", sent=sent, failed=failed)); return
+            for fid, mdict, planes in held:  # progressive: models trail the raw frames, one every 0.15 s
+                time.sleep(0.15)
+                rec(dict(type="model", id=fid, model=mdict), planes)
+            end = dict(type="end", sent=sent, failed=failed)
+            if progressive: end['models'] = len(held)
+            rec(end); return
         if ep == 'spectrum':
             pra = float(p.get('pos_ra', ra)); pdec = float(p.get('pos_dec', dec))
             aper = float(p.get('aper', 2.0)); c = (npix - 1) / 2; cosd = math.cos(math.radians(dec))

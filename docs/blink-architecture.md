@@ -71,9 +71,27 @@ All existing parameters and behaviour stay the same when the new parameters are 
   }
   ```
   `flux` = integrated model flux in image units × pixels (MJy/sr·px); `amp` = peak MJy/sr.
+- New `model=progressive` (optional; `model=1` stays inline): the `start` record gets
+  `"model": "progressive"`. Each ok `frame` record is sent as soon as its raw product is ready, with
+  payload image | flags only (two planes) and no `"model"` key. Then, for each ok frame, exactly one
+  record follows it:
+
+  `{"type": "model", "id": <frame id>, "model": {...}}`
+
+  with the same `model` object that `model=1` puts in the frame record, and payload
+
+  payload = background f32 LE (npix²) | leftover f32 LE (npix²)
+
+  Failed frames get no model record. `progress` records add `"models"` (model records so far), and
+  the `end` record has `"models"` (model records sent) next to `sent`, `failed` and `model_stats`.
+  Both model modes share the same model cache, so a stream in one mode reuses what the other fitted.
 - Fitting uses catalogue priors (Gaia DR3 + CatWISE positions propagated to the frame epoch) to
   deblend overlaps; sources without a prior are fitted freely (that is how movers get found).
-- Model results are cached on disk keyed by (cutout key, grid, model version).
+- Model results are cached on disk keyed by (cutout key, grid, model version, catalogues used).
+  The catalogues are named by the tag `gaia+catwise`, `gaia`, `catwise` or `none`. A cached fit
+  made with at least the catalogues available now is reused; otherwise the frame is refitted. The
+  stream never waits for a catalogue: missing ones load in the background, and a failed lookup is
+  remembered for 10 minutes.
 
 ## Backend: `sources.py` (owner: source-fitting workstream) — pure, no I/O
 

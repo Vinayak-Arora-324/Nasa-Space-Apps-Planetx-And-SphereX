@@ -58,20 +58,79 @@ All URLs and tunables are in `backend/spherex_app/config.py`. Most of them can b
 | `SPHEREX_RETRY_BACKOFF` | 0.5 s | first delay between IRSA retries (capped exponential backoff) |
 | `SPHEREX_RESOLVE_TTL` | 86400 s | in-memory lifetime of a name resolution |
 | `SPHEREX_CATALOG_TTL` | 30 days | cache lifetime of catalogue overlays and priors |
+| `SPHEREX_CATALOG_READ_TIMEOUT` | 900 s | read timeout of a catalogue TAP query (uncached CatWISE queries can take more than 400 s) |
+| `SPHEREX_CATALOG_RETRY_ATTEMPTS` | 2 | attempts per catalogue TAP query |
+| `SPHEREX_CATALOG_FAIL_TTL` | 600 s | a catalogue query that failed is not retried for this field for this long (in memory) |
+| `SPHEREX_PRIOR_WAIT` | 0 s | how long a model stream waits for a catalogue that is not cached yet before fitting without it |
+| `SPHEREX_FIT_CONCURRENCY` | = `SPHEREX_CPU_CONCURRENCY` | parallel source-model fits, limited separately from frame processing |
 
 The cache is safe to delete at any time.
 
 ### Pre-warming the cache
 
-`backend/scripts/prewarm.py` loads targets the same way the page does: it resolves the name, propagates a moving target to epoch 2026.0, rounds the centre to seven decimals, and calls `/api/stream` with fov 0.1, scale 6.15, all detectors and cap 400 (no `per_visit` and no `model`). Both the centre and the quantized cutout size (0.15 degrees) therefore match the app's cache keys. This warms frames and cutouts only. Blink's default patch width is 0.5 degrees, so warm with `--fov 0.5` for Blink, and `model=1` results are not warmed. The command exits nonzero if any target or frame fails.
+`backend/scripts/prewarm.py` loads targets the same way the pages do, so its centres and the quantized cutout size match the app's cache keys. There are two kinds of target:
+
+- **Analysis-page targets** (Barnard's Star, eps Ind B, WISE 0855, RW Aur, R Dra): the name is resolved, a moving target is propagated to epoch 2026.0 and the centre is rounded to seven decimals. The proper motion is sent with the stream request.
+- **Blink presets** (North and South Ecliptic Poles, Orion Nebula, Galactic Centre, Barnard's Star, ε Indi B, WISE 0855, R Draconis): centred exactly as `frontend/js/blink/app.js` does (fixed coordinates, high proper-motion stars propagated from 2000.0 to 2026.0), with no proper motion in the request, as Blink sends it.
+
+Options match what Blink requests: `--width` (alias `--fov`), `--band` (detectors, e.g. `2`), `--per-visit`, and `--model`, which requests `model=1`. Models are cached per frame, field and catalogues used, and shared with Blink's progressive mode, so warming with `model=1` also warms Blink. With `--model`, the script first fetches **both** fit catalogues (Gaia DR3 and CatWISE2020) for every target and waits as long as they take. Fetches for all targets start up front, `--catalog-concurrency` (default 3) at a time. They bypass the server's 10-minute failure cache, so the fits are made with full priors and the first visitor never waits. `--blink` is shorthand for `--width 0.5 --band 2 --per-visit 6 --model` (Blink's defaults) and, with no targets given, warms only the eight Blink presets. Explicit options override it. Each output line reports frames, failures, model cache hits and fits, the catalogues the fits used, and the catalogue wait. The command exits nonzero if any target, frame or catalogue fails.
 
 ```sh
-uv run python backend/scripts/prewarm.py                    # Barnard's Star, eps Ind B, WISE 0855, RW Aur, R Dra at fov 0.1
-uv run python backend/scripts/prewarm.py --fov 0.2 "RW Aur"  # other targets / field sizes
-uv run python backend/scripts/prewarm.py --server http://localhost:8000   # warm a running server
+uv run python backend/scripts/prewarm.py --blink                       # Blink's eight presets, as Blink opens them
+uv run python backend/scripts/prewarm.py --blink --band 3 "WISE 0855"  # another band / one preset
+uv run python backend/scripts/prewarm.py                               # analysis targets, then Blink presets, at fov 0.1, no model
+uv run python backend/scripts/prewarm.py --fov 0.2 "RW Aur"            # other targets / field sizes
+uv run python backend/scripts/prewarm.py --server http://localhost:8000 --blink   # warm a running server
 ```
 
-It uses the same `SPHEREX_CACHE_DIR` as the server. A ~260-frame field used 0.71 GB of S3 traffic and roughly 46–50 s of download/processing time at fov 0.1, plus a much slower synchronous TAP query on a completely cold cache. Run prewarm before a demo. On 2026-11-14 the complete command was verified for all five targets against an existing populated cache: 358 / 400 / 258 / 335 / 400 frames, zero failures, 44.9 s total, and no cutout downloads. This is a cache-hit verification, not a cold-prewarm measurement.
+It uses the same `SPHEREX_CACHE_DIR` as the server. With `--server`, catalogues are fetched through the server's `/api/catalog`, which joins any catalogue query the server already has running for that field. A ~260-frame field used 0.71 GB of S3 traffic and roughly 46–50 s of download/processing time at fov 0.1, plus a much slower synchronous TAP query on a completely cold cache. Run prewarm before a demo. On 2026-11-14 the earlier five-target fov 0.1 command (the analysis targets only) was verified against an existing populated cache: 358 / 400 / 258 / 335 / 400 frames, zero failures, 44.9 s total, and no cutout downloads. This is a cache-hit verification, not a cold-prewarm measurement.
+
+### Coverage index for cold fields
+
+Opening a field nobody has opened before first spends two to five minutes on the IRSA TAP query that lists its exposures. `backend/scripts/warm_coverage.py` runs only that query, ahead of time, for a list or grid of fields. It downloads no cutouts and fits no models. Each list is cached on disk and indexed, so the field appears as a "ready" marker on Blink's sphere (from `/api/coverage`) and opens without the TAP wait.
+
+```sh
+uv run python backend/scripts/warm_coverage.py "10.6847 41.2690" "56.75,24.1167"    # fields as "ra dec"
+uv run python backend/scripts/warm_coverage.py --file fields.txt                    # one "ra dec [label]" per line, # comments
+uv run python backend/scripts/warm_coverage.py --grid 80 90 -10 0 1                 # RA 80-90, Dec -10-0, ~1 degree apart
+uv run python backend/scripts/warm_coverage.py --file fields.txt --dry-run          # show what would be queried
+```
+
+A field whose list on disk is younger than `SPHEREX_FRAMES_DISK_TTL` (6 h) is skipped as fresh; `--force` queries it anyway. Older lists are queried again, so a scheduled run also picks up new data releases. `--concurrency` (default 2) limits parallel TAP queries. The script exits nonzero if any field failed.
+
+To run it on a schedule, use the absolute path to `uv`, since cron and systemd have a minimal `PATH` (`command -v uv` prints it). For example, nightly at 03:30 from cron (`crontab -e`):
+
+```cron
+30 3 * * *  cd /path/to/repo && /home/you/.local/bin/uv run python backend/scripts/warm_coverage.py --file fields.txt >> /path/to/warm_coverage.log 2>&1
+```
+
+Or as a systemd user timer, with `~/.config/systemd/user/spherex-coverage.service`:
+
+```ini
+[Unit]
+Description=Pre-warm SPHEREx exposure lists
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/repo
+ExecStart=/home/you/.local/bin/uv run python backend/scripts/warm_coverage.py --file fields.txt
+```
+
+and `~/.config/systemd/user/spherex-coverage.timer`:
+
+```ini
+[Unit]
+Description=Pre-warm SPHEREx exposure lists nightly
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable it with `systemctl --user daemon-reload && systemctl --user enable --now spherex-coverage.timer`, check it with `systemctl --user list-timers` and `journalctl --user -u spherex-coverage`. If you set `SPHEREX_CACHE_DIR` for the server, set the same value here (`Environment=SPHEREX_CACHE_DIR=...` in the service, or in the crontab line). Blink loads `/api/coverage` when the page opens, so new markers appear on the next page load.
 
 ## API summary
 
@@ -82,7 +141,9 @@ All angles are ICRS degrees and times are MJD. Proper motions are in mas/yr with
 - `GET /api/frames?ra&dec` lists all SPHEREx frames covering the position (metadata only).
 - `GET /api/stream?ra&dec&fov=0.1&scale=6.15&detectors=1,…,6&mjd_min&mjd_max&max_frames=400&pmra&pmdec&epoch&per_visit&model=0` returns a binary stream of length-prefixed JSON records plus image payloads, one per frame, in completion order. `fov` is in degrees, from 0.01 to 3.5. Each image is IMAGE − ZODI in MJy/sr, resampled onto a north-up TAN grid (row 0 = north, column 0 = east), followed by its flag plane. Each frame also carries metadata, the wavelength at the field centre, and quick-look photometry of the (optionally moving) target.
   - `per_visit=N` keeps at most N frames for each (detector, visit) pair, spread evenly in time. A gap of more than 20 days starts a new visit. It is applied before `max_frames`.
-  - `model=1` fits a source model to each frame. The `start` record then has `"model": true`, and each ok frame record has a `model` object: `psf_fwhm_px`, `noise`, `quality` (leftover RMS over expected noise; about 1 means the model explains the data) and a `sources` list. Each source has a position `x`, `y` in grid pixels, `flux`, `flux_err`, `snr`, `kind` (`point` or `extended`), `saturated` and a `cat` match or `null`. The payload gains two planes after the flags: background (the smooth diffuse light) and leftover (image − background − sources), both float32.
+  - `model=1` fits a source model to each frame. The `start` record then has `"model": true`, and each ok frame record has a `model` object: `psf_fwhm_px`, `noise`, `quality` (leftover RMS over expected noise; about 1 means the model explains the data) and a `sources` list. Each source has a position `x`, `y` in grid pixels, `flux`, `flux_err`, `snr`, `kind` (`point` or `extended`), `saturated` and a `cat` match or `null`. The payload gains two planes after the flags: background (the smooth diffuse light) and leftover (image − background − sources), both float32. The `end` record gains `model_stats` (`cached`, `fitted`, and the `priors` catalogues the fits in this stream used).
+  - `model=progressive` sends raw pixels first and the model later; Blink uses it. The `start` record has `"model": "progressive"`, and each ok frame record goes out as soon as its pixels are ready, with image and flags only. Later, a `{"type": "model", "id": <frame id>, "model": {…}}` record carries the same model object, followed by the background and leftover planes. Progress and end records count the model records sent (`models`). Both model modes share one model cache.
+  - Catalogue priors never delay frames. A cached model is used without any catalogue lookup. A fit uses the catalogues already cached (usually Gaia); a missing one is fetched in the background, one shared query per field, and saved to disk for later loads. A failed query is not retried for 10 minutes. The model cache key records the catalogues a fit used, so a field fitted with Gaia only is refitted once CatWISE is cached, and is otherwise reused.
 - `GET /api/spectrum?ra&dec&fov&pos_ra&pos_dec&…&aper=2` returns per-frame aperture photometry at a position, with the wavelength each frame saw there. That is a spectrum and light curve in one. It uses the same frame selection as `/api/stream` and so reuses its cached cutouts. The response also includes a `failed` count of frames that could not be fetched.
 - `GET /api/catalog?cat=gaia|catwise&ra&dec&radius` returns Gaia DR3 or CatWISE2020 sources for overlays, with proper motions in mas/yr and the epoch of each catalogue position.
 - `GET /api/coverage` returns the fields that already have cached frame lists, as `{"fields":[{"ra","dec","n_frames"}]}`. Those fields open instantly.

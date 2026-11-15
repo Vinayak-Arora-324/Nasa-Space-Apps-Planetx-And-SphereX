@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import itertools
 import json
 import logging
 import math
@@ -32,6 +33,7 @@ if not log.handlers:  # uvicorn only configures its own loggers
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
+    await catalogs.close()
     await archive.close()
 
 
@@ -115,6 +117,19 @@ async def _run_cpu(fn, *args):
         return await asyncio.to_thread(fn, *args)
 
 
+_fit_sem: asyncio.Semaphore | None = None
+
+
+async def _run_fit(fn, *args):
+    """Run a source-model fit in a worker thread, at most FIT_CONCURRENCY at a time. Fits have
+    their own limit so that queued fits never hold back the raw products of later frames."""
+    global _fit_sem
+    if _fit_sem is None:
+        _fit_sem = asyncio.Semaphore(config.FIT_CONCURRENCY)
+    async with _fit_sem:
+        return await asyncio.to_thread(fn, *args)
+
+
 # --- endpoints -------------------------------------------------------------------------
 
 @app.get("/api/health")
@@ -177,24 +192,61 @@ def _clean(o):
     return o
 
 
-async def _fetch_priors(ra: float, dec: float, fov: float):
-    """Catalogue rows (gaia, catwise) for the field. A catalogue that fails (or times out) is
-    left empty so the other still seeds the fit; None only when both are unavailable."""
-    radius = fov * 0.7072 + 0.02
+def prior_radius(fov: float) -> float:
+    """Radius (deg) of the catalogue query that seeds the source fit of a field of view `fov`."""
+    return fov * 0.7072 + 0.02
 
-    async def one(name):
-        try:
-            return await asyncio.wait_for(catalogs.catalog(name, ra, dec, radius),
-                                          config.PRIOR_FETCH_TIMEOUT_S)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            log.warning("%s priors unavailable: %s: %s", name, type(e).__name__, e)
-            return None
-    gaia, cw = await asyncio.gather(one("gaia"), one("catwise"))
-    if gaia is None and cw is None:
+
+def _prior_tag(names) -> str:
+    """Cache-key part naming the catalogues a fit used ("gaia+catwise", "gaia", or "none")."""
+    return "+".join(c for c in config.PRIOR_CATALOGS if c in names) or "none"
+
+
+def _superset_tags(names) -> list[str]:
+    """Tags of every catalogue subset that contains all of `names`, largest first. A cached fit
+    that used more catalogues than are available right now is still a valid result."""
+    names = set(names)
+    cats = config.PRIOR_CATALOGS
+    return ["+".join(combo) or "none"
+            for k in range(len(cats), -1, -1)
+            for combo in itertools.combinations(cats, k)
+            if names <= set(combo)]
+
+
+def _model_key(uri, ra, dec, size, grid: Grid, tag: str) -> str:
+    return cache.key_hash("model", config.MODEL_VERSION, uri, f"{ra:.7f}", f"{dec:.7f}",
+                          f"{size:g}", f"{grid.ra:.7f}", f"{grid.dec:.7f}", grid.scale,
+                          grid.npix, tag)
+
+
+def _cached_model(ckey: str, npix: int):
+    """(model, bg bytes, leftover bytes) from the disk cache, or None on miss or corrupt entry."""
+    hit = cache.get_bytes("model", ckey)
+    if hit is None:
         return None
-    return {"gaia": gaia or [], "catwise": cw or []}
+    try:
+        return _unpack_model(hit, npix)
+    except (ValueError, struct.error):
+        return None
+
+
+class _StreamPriors:
+    """Catalogue priors for one stream, resolved on first use (never before frames start)."""
+    def __init__(self, ra, dec, fov):
+        self.ra, self.dec, self.radius = ra, dec, prior_radius(fov)
+        self._fut = None
+
+    async def get(self) -> tuple[list[dict], frozenset]:
+        if self._fut is None:
+            self._fut = asyncio.ensure_future(self._load())
+        return await asyncio.shield(self._fut)
+
+    async def _load(self):
+        got = await asyncio.gather(*(catalogs.prior_catalog(c, self.ra, self.dec, self.radius,
+                                                            wait=config.PRIOR_WAIT_S)
+                                     for c in config.PRIOR_CATALOGS))
+        cats = {c: rows for c, rows in zip(config.PRIOR_CATALOGS, got) if rows is not None}
+        return _prior_rows(cats), frozenset(cats)
 
 
 def _prior_rows(cats: dict) -> list[dict]:
@@ -264,15 +316,9 @@ def _unpack_model(blob: bytes, npix: int):
 
 def fit_model(img: np.ndarray, flags: np.ndarray, bits: dict, meta: dict, detector: int,
               grid: Grid, rows: list[dict], mjd: float, ckey: str):
-    """Fit sources in one resampled frame (cached on disk). Returns (model dict, bg bytes,
-    leftover bytes). Never raises for fit problems: falls back to a flat background."""
-    npix = grid.npix
-    hit = cache.get_bytes("model", ckey)
-    if hit is not None:
-        try:
-            return _unpack_model(hit, npix)
-        except (ValueError, struct.error):
-            pass
+    """Fit sources in one resampled frame and store it under `ckey` (callers check the cache
+    first). Returns (model dict, bg bytes, leftover bytes). Never raises for fit problems: falls
+    back to a flat background, which is not cached."""
     psf = _psf_fwhm_px(meta, detector, grid)
     try:
         from . import sources  # written by the source-fitting workstream
@@ -296,12 +342,30 @@ def fit_model(img: np.ndarray, flags: np.ndarray, bits: dict, meta: dict, detect
     return model, bg.astype("<f4").tobytes(), left.astype("<f4").tobytes()
 
 
+def _model_mode(s: str) -> str:
+    """model= query value -> "off", "inline" (model=1) or "progressive"."""
+    v = (s or "").strip().lower()
+    if v in ("0", "", "false", "no"):
+        return "off"
+    if v in ("1", "true", "yes"):
+        return "inline"
+    if v == "progressive":
+        return "progressive"
+    _bad("model must be 0, 1 or progressive")
+
+
 @app.get("/api/stream")
 async def stream(ra: float, dec: float, fov: float = 0.1, scale: float = config.NATIVE_SCALE_ARCSEC,
                  detectors: str = "1,2,3,4,5,6", mjd_min: float | None = None,
                  mjd_max: float | None = None, max_frames: int = config.MAX_FRAMES_DEFAULT,
                  pmra: float | None = None, pmdec: float | None = None,
-                 epoch: float | None = None, per_visit: int | None = None, model: int = 0):
+                 epoch: float | None = None, per_visit: int | None = None, model: str = "0"):
+    """Frames of the field as a stream of length-prefixed records (see docs/blink-architecture.md).
+
+    model=0: raw frames only. model=1 (inline): each frame record waits for its source model and
+    carries it. model=progressive: each frame record goes out as soon as its raw product is ready
+    (no "model" key), and one {"type": "model", "id"} record follows it with the model."""
+    mode = _model_mode(model)
     ra, dec = _check_pos(ra, dec)
     npix = _check_common(fov, scale, max_frames)
     _check_per_visit(per_visit)
@@ -310,89 +374,139 @@ async def stream(ra: float, dec: float, fov: float = 0.1, scale: float = config.
     sel, n_avail = await _select(ra, dec, dets, mjd_min, mjd_max, max_frames, per_visit)
     grid = Grid(ra, dec, scale, npix)
     size = archive.cutout_size_deg(fov)
-    want_model = bool(model)
-    prior_state = {"rows": [], "tag": "none", "status": None}  # filled in gen() before frames
+    want_model = mode != "off"
+    progressive = mode == "progressive"
+    priors = _StreamPriors(ra, dec, fov) if want_model else None
+    counts = {"cached": 0, "fitted": 0}
+    used: set[str] = set()  # catalogue names that went into fits in this stream
 
     def work(f: Frame, data: bytes, table):
+        """CPU step: the raw product, plus (model mode) the arrays the fit needs."""
         cut = processing.parse_cutout(data)
         mjd = cut.header.get("MJD-AVG", _mid_mjd(f))
         tra, tdec = _pos_at(ra, dec, motion, mjd)
         if not want_model:
-            return processing.frame_product(cut, table, grid, tra, tdec)
+            meta, payload = processing.frame_product(cut, table, grid, tra, tdec)
+            return meta, payload, None
         arrs: dict = {}
         meta, payload = processing.frame_product(cut, table, grid, tra, tdec, arrays=arrs)
-        ckey = cache.key_hash("model", config.MODEL_VERSION, f.uri, f"{ra:.7f}", f"{dec:.7f}",
-                              f"{size:g}", f"{grid.ra:.7f}", f"{grid.dec:.7f}", grid.scale,
-                              grid.npix, prior_state["tag"])
-        mdl, bg, left = fit_model(arrs["img"], arrs["flags"], cut.flag_bits, meta, f.detector,
-                                  grid, prior_state["rows"], mjd, ckey)
-        meta["model"] = mdl
-        return meta, payload + bg + left
+        fit_in = {"img": arrs["img"], "flags": arrs["flags"], "bits": cut.flag_bits,
+                  "mjd": mjd, "meta": meta}
+        return meta, payload, fit_in
+
+    async def model_for(f: Frame, fit_in: dict):
+        """(model, bg bytes, leftover bytes): a cached model if any, else a fit on the priors
+        that are cached right now. Never waits for a missing catalogue (see _StreamPriors)."""
+        full_tag = _prior_tag(config.PRIOR_CATALOGS)
+        hit = _cached_model(_model_key(f.uri, ra, dec, size, grid, full_tag), npix)
+        rows, names = [], None
+        if hit is None:
+            rows, names = await priors.get()
+            for tag in _superset_tags(names):
+                if tag == full_tag:
+                    continue
+                hit = _cached_model(_model_key(f.uri, ra, dec, size, grid, tag), npix)
+                if hit is not None:
+                    break
+        if hit is not None:
+            counts["cached"] += 1
+            return hit
+        mdl, bg, left = await _run_fit(
+            fit_model, fit_in["img"], fit_in["flags"], fit_in["bits"], fit_in["meta"], f.detector,
+            grid, rows, fit_in["mjd"],
+            _model_key(f.uri, ra, dec, size, grid, _prior_tag(names)))
+        counts["fitted"] += 1
+        used.update(names)
+        return mdl, bg, left
+
+    def frame_rec(f: Frame, meta: dict) -> dict:
+        rec = {"type": "frame", "ok": True, "id": f.id, "obsid": f.obsid,
+               "detector": f.detector, **meta, "release": f.release, "version": f.version,
+               "cutout_url": archive.cutout_url(f.uri, ra, dec, size),
+               "file_url": archive.file_url(f.uri)}
+        if rec.get("mjd") is None:
+            rec["mjd"] = _mid_mjd(f)
+        return rec
+
+    # Records from the frame tasks reach gen() through this queue. A task puts its records and
+    # then _DONE in its finally, so gen() knows when each frame has nothing more to send.
+    q: asyncio.Queue = asyncio.Queue()
+    _DONE = object()
 
     async def one(f: Frame):
         try:
             data, _ = await archive.fetch_cutout(f.uri, ra, dec, size)
             table = await archive.wave_table(f.uri, f.detector, ra, dec)
-            meta, payload = await _run_cpu(work, f, data, table)
-            rec = {"type": "frame", "ok": True, "id": f.id, "obsid": f.obsid,
-                   "detector": f.detector, **meta, "release": f.release, "version": f.version,
-                   "cutout_url": archive.cutout_url(f.uri, ra, dec, size),
-                   "file_url": archive.file_url(f.uri)}
-            if rec.get("mjd") is None:
-                rec["mjd"] = _mid_mjd(f)
-            return True, _record(rec, payload)
+            meta, payload, fit_in = await _run_cpu(work, f, data, table)
+            if fit_in is not None and not progressive:
+                mdl, bg, left = await model_for(f, fit_in)
+                meta["model"] = mdl
+                payload = payload + bg + left
+            q.put_nowait((True, _record(frame_rec(f, meta), payload)))
+            if fit_in is not None and progressive:
+                try:
+                    mdl, bg, left = await model_for(f, fit_in)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    log.warning("model for frame %s failed: %s", f.id, e)
+                else:
+                    q.put_nowait((None, _record({"type": "model", "id": f.id, "model": mdl},
+                                                bg + left)))
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
             log.warning("frame %s failed: %s", f.id, e)
-            return False, _record({"type": "frame", "ok": False, "id": f.id, "detector": f.detector,
-                            "mjd": f.mjd, "error": str(e)[:300]})
+            q.put_nowait((False, _record({"type": "frame", "ok": False, "id": f.id,
+                                          "detector": f.detector, "mjd": f.mjd,
+                                          "error": str(e)[:300]})))
+        finally:
+            q.put_nowait(_DONE)
 
     async def gen():
-        if want_model:
-            cats = await _fetch_priors(ra, dec, fov)
-            if cats is None:
-                prior_state["status"] = "unavailable"
-            else:
-                prior_state["rows"] = _prior_rows(cats)
-                prior_state["tag"] = cache.key_hash(len(cats["gaia"]), len(cats["catwise"]),
-                                                    len(prior_state["rows"]))
         t0 = time.monotonic()
         st0 = dict(getattr(archive, "STATS", {}))
         st0.setdefault("cutouts", 0)
         st0.setdefault("retries", 0)
+        model_hdr = {"model": True} if mode == "inline" else \
+            {"model": "progressive"} if progressive else {}
         yield _record({"type": "start", "ra": ra, "dec": dec, "fov": fov, "scale_arcsec": scale,
                        "npix": npix, "total_available": n_avail, "selected": len(sel),
                        "flag_bits": dict(processing.FLAG_BITS), "detectors": dets,
-                       **({"model": True} if want_model else {}),
-                       **({"priors": prior_state["status"]} if prior_state["status"] else {})})
+                       **model_hdr})
         tasks = [asyncio.ensure_future(one(f)) for f in sel]
-        sent = failed = 0
-        pending = set(tasks)
+        sent = failed = models = finished = 0
         last_beat = time.monotonic()
         try:
-            while pending:
-                done, pending = await asyncio.wait(pending, timeout=PROGRESS_INTERVAL_S,
-                                                   return_when=asyncio.FIRST_COMPLETED)
-                for fut in done:
-                    ok, rec = fut.result()
-                    if ok:
+            while finished < len(tasks):
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=PROGRESS_INTERVAL_S)
+                except TimeoutError:
+                    item = None
+                if item is _DONE:
+                    finished += 1
+                elif item is not None:
+                    ok, rec = item
+                    if ok is None:
+                        models += 1
+                    elif ok:
                         sent += 1
                     else:
                         failed += 1
                     yield rec
                 now = time.monotonic()
-                if pending and now - last_beat >= PROGRESS_INTERVAL_S:
+                if finished < len(tasks) and now - last_beat >= PROGRESS_INTERVAL_S:
                     # Heartbeat: lets the client show that the archive is slow/retrying
                     # rather than looking frozen, and keeps idle proxies from closing us.
                     last_beat = now
                     st = getattr(archive, "STATS", {})
-                    yield _record({"type": "progress", "done": sent + failed,
-                                   "total": len(sel), "elapsed_s": round(now - t0, 1),
-                                   "upstream_retries": int(st.get("retries", 0)
-                                                           - st0.get("retries", 0)),
-                                   "downloaded": int(st.get("cutouts", 0)
-                                                     - st0.get("cutouts", 0))})
+                    beat = {"type": "progress", "done": sent + failed,
+                            "total": len(sel), "elapsed_s": round(now - t0, 1),
+                            "upstream_retries": int(st.get("retries", 0) - st0.get("retries", 0)),
+                            "downloaded": int(st.get("cutouts", 0) - st0.get("cutouts", 0))}
+                    if progressive:
+                        beat["models"] = models
+                    yield _record(beat)
         finally:
             for t in tasks:
                 t.cancel()
@@ -401,7 +515,13 @@ async def stream(ra: float, dec: float, fov: float = 0.1, scale: float = config.
         log.info("stream %.5f %+.5f fov=%g: %d sent, %d failed in %.1f s (%d cutouts downloaded, "
                  "%d upstream retries)", ra, dec, fov, sent, failed, time.monotonic() - t0,
                  st["cutouts"] - st0["cutouts"], st["retries"] - st0["retries"])
-        yield _record({"type": "end", "sent": sent, "failed": failed})
+        end = {"type": "end", "sent": sent, "failed": failed}
+        if progressive:
+            end["models"] = models
+        if want_model:
+            end["model_stats"] = {"cached": counts["cached"], "fitted": counts["fitted"],
+                                  "priors": sorted(used)}
+        yield _record(end)
 
     return StreamingResponse(gen(), media_type="application/octet-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -458,7 +578,12 @@ async def catalog(cat: str, ra: float, dec: float, radius: float = 0.05):
     if not (radius > 0):
         _bad("radius must be > 0")
     radius = min(radius, config.CATALOG_RADIUS_MAX_DEG)
-    return {"cat": cat, "sources": await catalogs.catalog(cat, ra, dec, radius)}
+    # Join the shared background query for this field, if one is running (no duplicate TAP
+    # query, and the result is cached even if this client goes away). Waits as long as needed.
+    rows = await catalogs.prior_catalog(cat, ra, dec, radius, wait=None, ignore_failures=True)
+    if rows is None:
+        raise UpstreamError(f"{cat} catalogue query was cancelled")
+    return {"cat": cat, "sources": rows}
 
 
 @app.get("/api/coverage")

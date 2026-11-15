@@ -129,25 +129,32 @@ def _check_status(r: httpx.Response, body: bytes | None = None) -> None:
 
 
 async def get_text(url: str, params: dict | None = None, *, irsa: bool = False,
-                   what: str = "request") -> str:
+                   what: str = "request", timeout: float | None = None,
+                   attempts: int | None = None) -> str:
+    """GET a text body. `timeout` (read seconds) and `attempts` override the shared defaults."""
+    kw = {}
+    if timeout is not None:
+        kw["timeout"] = httpx.Timeout(timeout, connect=config.HTTP_CONNECT_TIMEOUT_S)
+
     async def once():
         if irsa:
             async with irsa_sem():
-                r = await client().get(url, params=params)
+                r = await client().get(url, params=params, **kw)
         else:
-            r = await client().get(url, params=params)
+            r = await client().get(url, params=params, **kw)
         STATS["net_bytes"] += len(r.content)
         STATS["irsa_bytes" if irsa else "other_bytes"] += len(r.content)
         _check_status(r, r.content)
         return r.text
-    return await with_retries(what, once)
+    return await with_retries(what, once, attempts=attempts)
 
 
-async def tap_csv(url: str, adql: str, *, irsa: bool, what: str) -> list[dict]:
+async def tap_csv(url: str, adql: str, *, irsa: bool, what: str,
+                  timeout: float | None = None, attempts: int | None = None) -> list[dict]:
     params = {"QUERY": adql, "FORMAT": "csv"}
     if not irsa:
         params.update({"REQUEST": "doQuery", "LANG": "ADQL"})
-    text = await get_text(url, params, irsa=irsa, what=what)
+    text = await get_text(url, params, irsa=irsa, what=what, timeout=timeout, attempts=attempts)
     if text.lstrip().startswith("<"):
         # VOTable error document
         m = re.search(r"<INFO[^>]*name=\"QUERY_STATUS\"[^>]*>(.*?)</INFO>", text, re.S)

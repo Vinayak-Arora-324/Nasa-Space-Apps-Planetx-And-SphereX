@@ -174,8 +174,13 @@
         <div class="transport">
           <button type="button" class="round play" id="btn-play" aria-label="Pause"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path id="play-icon" fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
           <div class="strip-wrap">
-            <div class="strip" id="strip" role="group" aria-label="Frames"></div>
-            <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono"></span></div>
+            <div class="taken" id="taken" aria-live="off">
+              <span class="taken-k">Taken</span>
+              <span id="taken-label" class="mono taken-v"></span>
+              <span id="ago-label" class="mono dim taken-ago"></span>
+            </div>
+            <div class="timeline" id="timeline"></div>
+            <div class="strip-meta"><span id="frame-label" class="mono"></span><span id="visit-label" class="mono dim"></span><span id="elapsed-label" class="mono dim"></span></div>
           </div>
           <button type="button" class="btn quiet more-btn" aria-expanded="false" aria-keyshortcuts="Escape"><span class="more-label">All controls</span><kbd>Esc</kbd></button>
         </div>

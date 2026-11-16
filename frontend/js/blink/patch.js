@@ -42,6 +42,7 @@ export class PatchView {
     this.mode = 'video'; this.layer = 'model'; this.speed = 1; this.playing = !reduceMotion();
     this.pos = 0; this.zoom = 1; this.cx = 0; this.cy = 0; this.base = 1;
     this.rings = false; this.selectedKey = null; this.dirty = true; this.opacity = 0;
+    this.loopVisit = null;               // a visit number: play only that visit's frames
     this.lastIdx = -1; this.drag = null; this.outAcc = 0; this.hoverPt = null; this.wcs = null;
     try { this.renderer = new SkyRenderer(canvas); } catch (e) { this.rendererError = e; }
     this._bind();
@@ -156,7 +157,7 @@ export class PatchView {
     this._setup(s);
     for (const f of s.frames) this.renderer.setFrame(f.id, { img: f.img, background: f.bg || f.img, leftover: f.left || new Float32Array(f.img.length), sources: f.sources, psfFwhmPx: f.psf, noise: f.noise });
     if (s.frames.length) this._lock(s);
-    this.pos = 0; this.lastIdx = -1; this.playing = !reduceMotion();
+    this.pos = 0; this.lastIdx = -1; this.playing = !reduceMotion(); this.loopVisit = null;
     this.zoom = 1; this._fit();
     this.cb.onFramesChanged(); this.cb.onUpdate(s); this.dirty = true;
   }
@@ -199,12 +200,33 @@ export class PatchView {
   // ---------- playback ----------
   get frames() { return this.session ? this.session.frames : []; }
   get n() { return this.frames.length; }
-  setPlaying(v) { this.playing = v && this.n > 1; this.dirty = true; }
-  seek(i) { this.pos = clamp(i, 0, Math.max(0, this.n - 1)); this.playing = false; this.dirty = true; }
+  /** [first, last] frame index that playback loops over: every frame, or one visit's. */
+  bounds() {
+    const F = this.frames, n = F.length;
+    if (this.loopVisit === null || !n) return [0, Math.max(0, n - 1)];
+    let lo = -1, hi = -1;
+    for (let i = 0; i < n; i++) if (F[i].visit === this.loopVisit) { if (lo < 0) lo = i; hi = i; }
+    return lo < 0 ? [0, n - 1] : [lo, hi];
+  }
+  /** Loop one visit (null: every visit). Jumps to the visit's first frame when the shown one is outside it. */
+  setLoopVisit(v) {
+    this.loopVisit = v;
+    const [lo, hi] = this.bounds();
+    if (this.pos < lo || this.pos > hi) this.pos = lo;
+    this.dirty = true;
+  }
+  setPlaying(v) { const [lo, hi] = this.bounds(); this.playing = v && hi > lo; this.dirty = true; }
+  /** Show play position i (fractional in video mode). Leaves a focused visit when i is outside it. */
+  seek(i) {
+    this.pos = clamp(i, 0, Math.max(0, this.n - 1)); this.playing = false; this.dirty = true;
+    const [lo, hi] = this.bounds();
+    if (this.loopVisit !== null && (this.pos < lo - 1e-9 || this.pos > hi + 1e-9)) this.loopVisit = null;
+  }
   _state() {
     const n = this.n;
     if (!n) return null;
-    const p = Math.min(this.pos, n - 1);
+    const [lo, hi] = this.bounds();
+    const p = clamp(this.pos, lo, hi);
     let a = Math.floor(p), t = p - a, b = a < n - 1 ? a + 1 : null;
     if (this.mode !== 'video') { t = 0; b = null; }
     if (b === null) t = 0;
@@ -219,10 +241,12 @@ export class PatchView {
     if (!s || !r || !s.npix) return;
     this.ensureGrid();
     const n = this.n;
-    if (this.playing && n > 1) {
+    const [lo, hi] = this.bounds();
+    if (this.playing && hi > lo) {
+      if (this.pos < lo || this.pos > hi + HOLD) this.pos = lo;
       this.pos += dt * BASE_FPS * this.speed;
-      const cycle = (n - 1) + HOLD;
-      if (this.pos >= cycle) this.pos -= cycle;
+      const cycle = (hi - lo) + HOLD;
+      if (this.pos >= lo + cycle) this.pos -= cycle;
       this.dirty = true;
     }
     const st = this._state();
@@ -237,7 +261,7 @@ export class PatchView {
       r.render({
         a: aId, b: st.b !== null ? F[st.b].id : null, t: st.t, mode: this.mode, layer: this.layer,
         lim: lim[key] || lim.model, stretch: sym ? 'linear' : 'asinh', tint: TINTS[s.target.band] || [1, 1, 1],
-        trail: F.slice(0, st.a + 1).map((f) => f.id), prev: st.a > 0 ? F[st.a - 1].id : aId,
+        trail: F.slice(lo, st.a + 1).map((f) => f.id), prev: st.a > lo ? F[st.a - 1].id : aId,
       });
       this.dirty = false;
     }

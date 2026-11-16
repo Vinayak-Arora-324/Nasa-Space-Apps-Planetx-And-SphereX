@@ -21,6 +21,7 @@ SPHEREx maps the entire sky across 102 infrared spectral channels over repeated 
   - **Blink** (hard frame-to-frame cuts)
   - **Difference** (frame minus previous frame, cancelling static stars)
   - **Trails** (running residual stack so movers draw paths across frames)
+- **When each photo was taken:** The player shows the UTC date and time of the exposure on screen (and how long ago that was). A time slider lays out every exposure on a broken time axis: one segment per SPHEREx visit with the real spacing between exposures inside it, and the months between visits cut down to a labelled gap (“+6 mo”). Drag or use the arrow keys to scrub (Page Up/Down jumps between visits). Click a visit’s date to loop only that visit.
 - **Measured Sky vs. Raw Pixels vs. Leftover:** Rather than showing noisy raw detector cutouts alone, the backend fits each frame's smooth diffuse background and point/extended sources (seeded with Gaia DR3 and CatWISE2020 priors). Frames stream pixels first and crossfade as models finish, letting you toggle between **Measured sky**, **Raw pixels**, and **Leftover** (data minus model) to isolate faint unmodeled sources.
 - **Moving-Object Tools:** Automatically overlays known solar-system objects from IMCCE SkyBoT, links unassociated per-frame detections into mover candidates, and supports an opt-in blind shift-and-stack search (`search/start`) across velocity vectors. Hovering over any source or ringed mover displays its fitted brightness (in mJy/µJy), S/N, catalogue ID, distance, and motion rate.
 

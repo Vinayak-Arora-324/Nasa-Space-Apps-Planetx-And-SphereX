@@ -171,3 +171,47 @@ export function transformPoint(m, p) {
     m[3] * x + m[7] * y + m[11] * z + m[15],
   ];
 }
+
+// ---------------------------------------------------------------- exposure, level of detail, impostor quads
+export const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+export const KM_PER_AU = 149597870.7;
+/** Equatorial radii in km of the bodies drawn as spheres in the Sun's system. */
+export const PLANET_KM = { Mercury: 2440, Venus: 6052, Earth: 6378, Moon: 1737, Mars: 3396, Jupiter: 71492, Saturn: 60268, Uranus: 25559, Neptune: 24764 };
+/** Angular radius (CSS px) below which a star is only a point, and above which it is only a sphere. */
+export const LOD_POINT_PX = 0.5, LOD_SPHERE_PX = 3;
+/** Weight of the sphere in the point-to-sphere crossfade (the point gets 1 - weight, so flux is conserved). */
+export const sphereWeight = (angPx) => smoothstep(LOD_POINT_PX, LOD_SPHERE_PX, angPx);
+/** Angular radius in radians of a sphere of radius r seen from distance d (same units). pi/2 when inside. */
+export const angRadius = (r, d) => (d <= r ? Math.PI / 2 : Math.asin(r / d));
+
+// A point sprite's pre-exposure intensity is v = 0.3 * sqrt(flux), flux = 10^(-0.4 (m - limit)): the compressive law the
+// tier 1 renderer used, so the galaxy view keeps its look. Exposure only drops once v passes V_EXPO (a star far brighter
+// than anything in the old view), so ordinary skies are untouched and a nearby star dims everything else.
+export const V_EXPO = 1000;
+export const spriteV = (m, limit) => 0.3 * Math.pow(10, -0.2 * (m - limit));
+export const exposureFor = (vBrightest) => (vBrightest > V_EXPO ? V_EXPO / vBrightest : 1);
+/** Ease log(exposure) toward its target with time constant tau seconds. */
+export const easeExposure = (cur, target, dt, tau = 0.25) => cur * Math.pow(target / cur, 1 - Math.exp(-dt / tau));
+/** Surface radiance of a star's disc (linear HDR, before tonemapping): hotter stars are brighter, within limits. */
+export const discRadiance = (teff) => clamp(Math.pow(teff / 5800, 2), 0.35, 2.2);
+
+/**
+ * The screen rectangle (NDC, [x0, y0, x1, y1]) that bounds a sphere's glow of radius ext, centred at view-space cv (the
+ * camera looks down -z), with tanX and tanY the half-field tangents. 'full' when it may cover the screen, null when off screen.
+ */
+export function quadRect(cv, ext, tanX, tanY) {
+  const dist = Math.hypot(cv[0], cv[1], cv[2]);
+  if (dist <= ext * 1.02) return 'full';
+  const theta = Math.acos(clamp(-cv[2] / dist, -1, 1)), alpha = Math.asin(ext / dist);
+  if (theta - alpha > Math.atan(Math.hypot(tanX, tanY)) + 0.02) return null;
+  if (theta + alpha > 1.45) return 'full';
+  const rho = ((Math.tan(theta + alpha) - Math.tan(Math.max(theta - alpha, -1.4))) / 2) * 1.12 + 0.002;
+  const ux = cv[0] / -cv[2], uy = cv[1] / -cv[2];
+  const r = [(ux - rho) / tanX, (uy - rho) / tanY, (ux + rho) / tanX, (uy + rho) / tanY];
+  if (r[2] < -1 || r[0] > 1 || r[3] < -1 || r[1] > 1) return null;
+  return r.map((v) => clamp(v, -1, 1));
+}
+/** Rotate v by the 3x3 part of a view matrix (column-major, as lookRotation returns it), in doubles. */
+export const rotateView = (m, v) => [
+  m[0] * v[0] + m[4] * v[1] + m[8] * v[2], m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2],
+];

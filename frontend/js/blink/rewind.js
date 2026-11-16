@@ -17,14 +17,57 @@ const TRAIL_V = 3.6, LABEL_V = 1.6, MOVER_MIN_DEG = 0.25, MOVER_MAX = 140;
 const ALWAYS_LABEL = new Set([11767, 68756, 72607, 87937]);   // Polaris, Thuban, Kochab, Barnard's Star
 const SIDEREAL = 1.00273781191135448;
 
+// Grouped by region in the place picker; `custom` (no region) goes last.
 export const PLACES = [
-  { id: 'giza', label: 'Giza, Egypt', lat: 29.9792, lon: 31.1342 },
-  { id: 'karnak', label: 'Karnak, Luxor', lat: 25.7188, lon: 32.6573 },
-  { id: 'athens', label: 'Athens', lat: 37.9715, lon: 23.7257 },
-  { id: 'stonehenge', label: 'Stonehenge', lat: 51.1789, lon: -1.8262 },
-  { id: 'chichen', label: 'Chichén Itzá', lat: 20.6843, lon: -88.5678 },
-  { id: 'maunakea', label: 'Maunakea, Hawaiʻi', lat: 19.8207, lon: -155.4681 },
-  { id: 'sydney', label: 'Sydney', lat: -33.8568, lon: 151.2153 },
+  { id: 'giza', region: 'Africa', label: 'Giza, Egypt', lat: 29.9792, lon: 31.1342 },
+  { id: 'karnak', region: 'Africa', label: 'Karnak, Luxor', lat: 25.7188, lon: 32.6573 },
+  { id: 'alexandria', region: 'Africa', label: 'Alexandria, Egypt', lat: 31.2001, lon: 29.9187 },
+
+  { id: 'gaza', region: 'Middle East', label: 'Gaza City', lat: 31.5017, lon: 34.4668 },
+  { id: 'jerusalem', region: 'Middle East', label: 'Jerusalem', lat: 31.7780, lon: 35.2354 },
+  { id: 'ramla', region: 'Middle East', label: 'Ramla', lat: 31.9275, lon: 34.8625 },
+  { id: 'ramallah', region: 'Middle East', label: 'Ramallah', lat: 31.9038, lon: 35.2034 },
+  { id: 'mecca', region: 'Middle East', label: 'Mecca', lat: 21.4225, lon: 39.8262 },
+  { id: 'tehran', region: 'Middle East', label: 'Tehran', lat: 35.6892, lon: 51.3890 },
+
+  { id: 'delhi', region: 'South Asia', label: 'Delhi', lat: 28.6139, lon: 77.2090 },
+  { id: 'lahore', region: 'South Asia', label: 'Lahore', lat: 31.5204, lon: 74.3587 },
+  { id: 'amritsar', region: 'South Asia', label: 'Amritsar', lat: 31.6200, lon: 74.8765 },
+  { id: 'hyderabad', region: 'South Asia', label: 'Hyderabad, India', lat: 17.3850, lon: 78.4867 },
+  { id: 'chennai', region: 'South Asia', label: 'Chennai', lat: 13.0827, lon: 80.2707 },
+  { id: 'dhaka', region: 'South Asia', label: 'Dhaka', lat: 23.8103, lon: 90.4125 },
+
+  { id: 'beijing', region: 'East Asia', label: 'Beijing', lat: 39.9163, lon: 116.3972 },
+  { id: 'shanghai', region: 'East Asia', label: 'Shanghai', lat: 31.2304, lon: 121.4737 },
+  { id: 'ulaanbaatar', region: 'East Asia', label: 'Ulaanbaatar', lat: 47.8864, lon: 106.9057 },
+
+  { id: 'athens', region: 'Europe', label: 'Athens', lat: 37.9715, lon: 23.7257 },
+  { id: 'sparta', region: 'Europe', label: 'Sparta', lat: 37.0755, lon: 22.4303 },
+  { id: 'rome', region: 'Europe', label: 'Rome', lat: 41.8902, lon: 12.4922 },
+  { id: 'sicily', region: 'Europe', label: 'Syracuse, Sicily', lat: 37.0755, lon: 15.2866 },
+  { id: 'istanbul', region: 'Europe', label: 'Istanbul', lat: 41.0086, lon: 28.9802 },
+  { id: 'tirana', region: 'Europe', label: 'Tirana', lat: 41.3275, lon: 19.8187 },
+  { id: 'barcelona', region: 'Europe', label: 'Barcelona', lat: 41.3874, lon: 2.1686 },
+  { id: 'london', region: 'Europe', label: 'London (Greenwich)', lat: 51.4779, lon: -0.0015 },
+  { id: 'stonehenge', region: 'Europe', label: 'Stonehenge', lat: 51.1789, lon: -1.8262 },
+  { id: 'kyiv', region: 'Europe', label: 'Kyiv', lat: 50.4501, lon: 30.5234 },
+  { id: 'moscow', region: 'Europe', label: 'Moscow', lat: 55.7539, lon: 37.6208 },
+  { id: 'stpetersburg', region: 'Europe', label: 'St Petersburg', lat: 59.9343, lon: 30.3351 },
+
+  { id: 'newyork', region: 'Americas', label: 'New York', lat: 40.7128, lon: -74.0060 },
+  { id: 'alaska', region: 'Americas', label: 'Fairbanks, Alaska', lat: 64.8378, lon: -147.7164 },
+  { id: 'havana', region: 'Americas', label: 'Havana, Cuba', lat: 23.1136, lon: -82.3666 },
+  { id: 'cancun', region: 'Americas', label: 'Cancún', lat: 21.1619, lon: -86.8515 },
+  { id: 'chichen', region: 'Americas', label: 'Chichén Itzá', lat: 20.6843, lon: -88.5678 },
+  { id: 'rio', region: 'Americas', label: 'Rio de Janeiro', lat: -22.9068, lon: -43.1729 },
+
+  { id: 'maunakea', region: 'Pacific', label: 'Maunakea, Hawaiʻi', lat: 19.8207, lon: -155.4681 },
+  { id: 'honolulu', region: 'Pacific', label: 'Honolulu, Hawaiʻi', lat: 21.3069, lon: -157.8583 },
+  { id: 'easterisland', region: 'Pacific', label: 'Easter Island (Rapa Nui)', lat: -27.1127, lon: -109.3497 },
+  { id: 'sydney', region: 'Pacific', label: 'Sydney', lat: -33.8568, lon: 151.2153 },
+
+  { id: 'mcmurdo', region: 'Antarctica', label: 'McMurdo Station, Antarctica', lat: -77.8463, lon: 166.6682 },
+
   { id: 'custom', label: 'Somewhere else…' },
 ];
 
@@ -572,7 +615,13 @@ export class RewindPanel {
       go: $('rw-go'), today: $('rw-today'), exit: $('rw-exit'), error: $('rw-error'), presets: $('rw-presets'),
     };
     const f = this.f, now = new Date(), y = now.getUTCFullYear();
-    for (const p of PLACES) f.place.append(el('option', { value: p.id, text: p.label }));
+    const groups = new Map();
+    for (const p of PLACES) {
+      const opt = el('option', { value: p.id, text: p.label });
+      if (!p.region) { f.place.append(opt); continue; }
+      if (!groups.has(p.region)) { groups.set(p.region, el('optgroup', { label: p.region })); f.place.append(groups.get(p.region)); }
+      groups.get(p.region).append(opt);
+    }
     T.MONTHS.forEach((m, i) => f.month.append(el('option', { value: String(i + 1), text: m })));
     f.place.value = 'giza';
     this.setWhen({ year: y - 2000, month: now.getMonth() + 1, day: now.getDate(), hour: 22, minute: 0 });

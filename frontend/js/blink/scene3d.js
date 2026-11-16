@@ -1,98 +1,46 @@
-// Scene3D: WebGL2 renderer and fly controls for scene3d.html. Two scenes share one camera model
-// (yaw and pitch, with world +z as celestial north):
-//   stars  - Gaia DR3 stars at their parallax distances, plus the bright XHIP stars around them (units pc)
-//   solar  - Sun, planets, Moon and small bodies at the chosen date (units AU)
-// Stars are additive gl.POINTS. Their size and alpha come from the apparent magnitude seen from the camera.
+// Scene3D: WebGL2 renderer and fly controls for scene3d.html.
+//
+// One camera model (yaw and pitch, world +z is celestial north) and two kinds of frame (scene3d-frames.js):
+//   galaxy - parsecs, origin at the Sun: Gaia stars at their parallax distances plus the bright XHIP stars
+//   system - AU, origin at a host star (the Sun included): the host is a sphere, and the Sun's planets are spheres too
+// Everything is drawn camera-relative. Stars are additive points; stars near the camera and the planets are drawn from
+// positions computed in doubles; bodies big enough to see as discs are ray-traced spheres (impostors) on screen quads.
+// Scene brightness goes into an RGBA16F target (when the browser can) and is bloomed and tonemapped at the end.
 import * as M from './scene3d-math.js';
+import * as F from './scene3d-frames.js';
+import { starModel } from './scene3d-physics.js';
+import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS } from './scene3d-nav.js';
+import { renderStarCard, renderBodyCard } from './scene3d-card.js';
+import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
+import * as S from './scene3d-shaders.js';
+import { getSystem } from '../api.js';
 
-const { D2R, LY_PER_PC: LY } = M;
-const CFG = {
-  stars: { unit: 'pc', speed: 2, min: 0.01, max: 10000, near: 1e-3, far: 1e8 },
-  solar: { unit: 'AU', speed: 0.2, min: 0.001, max: 100, near: 1e-6, far: 1e5 },
-};
+const { D2R, LY_PER_PC: LY, V_EXPO } = M;
+const { AU_PER_PC } = F;
+const RANGE = { galaxy: { min: 0.01, max: 10000, speed: 2 }, system: { min: 1e-6, max: 1e3, speed: 0.2 } };
 const CONE_DIST = 3000;          // pc, the distance at which the cone-edge ring is drawn
 const BASE_PX = 1.6;             // CSS px of a star at the magnitude limit
 const PX_PER_MAG = 1.25;         // CSS px added per magnitude brighter than the limit
 const LIMIT_DEFAULT = 12, LIMIT_MIN = 0, LIMIT_MAX = 25;
-const MAX_LABELS = 40;
-const MAX_BODY_LABELS = 12;     // small bodies crowd together inside the cone; name only the brightest
-const PICK_PX = 10;
+const MAX_LABELS = 40, MAX_BODY_LABELS = 12;
+const PICK_PX = 10, GO_DEG = 2;
+const NEAR_PC = 0.05;            // stars this close to the camera are drawn exactly and may become spheres
+const FOV_SYSTEM = 60;
+const SUN_ABS_G = 4.67, SUN_BP_RP = 0.82;
 const Z_UP = [0, 0, 1];
+const SUN_HOST = { idx: 0, key: 'sun', name: 'Sun', pc: [0, 0, 0] };
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
-const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ShiftLeft', 'ShiftRight']);
+const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
 const PLANET_RGB = {
   Mercury: [0.75, 0.72, 0.68], Venus: [0.95, 0.85, 0.6], Earth: [0.35, 0.62, 1.0], Moon: [0.8, 0.8, 0.8],
   Mars: [1.0, 0.5, 0.35], Jupiter: [0.92, 0.8, 0.66], Saturn: [0.95, 0.87, 0.6], Uranus: [0.6, 0.9, 0.95], Neptune: [0.42, 0.6, 1.0],
 };
+const POLE = { Jupiter: [268.06, 64.5], Saturn: [40.59, 83.54], Mars: [317.68, 52.89] };   // RA, Dec of the spin axes (illustrative)
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 /** Number for the readout: 3 significant figures, with thousands separators. */
 export const fmtNum = (v, sig = 3) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumSignificantDigits: sig }) : 'n/a');
-const dist3 = (p, x, y, z) => Math.hypot(x - p[0], y - p[1], z - p[2]);
-
-// ---------------------------------------------------------------- shaders (GLSL ES 3.00)
-const STAR_VS = `#version 300 es
-precision highp float;
-layout(location=0) in vec3 a_pos;
-layout(location=1) in float a_abs;
-layout(location=2) in vec3 a_col;
-uniform mat4 u_vp;
-uniform vec3 u_eye;
-uniform float u_limit, u_base, u_perMag, u_dpr, u_maxPt;
-out vec3 v_col;
-out float v_alpha;
-void main(){
-  float dist = max(length(a_pos - u_eye), 1e-6);
-  float m = a_abs + 2.1714724*log(dist) - 5.0;          // apparent magnitude: 5 log10(d) - 5 + M
-  float flux = exp(-0.9210340*(m - u_limit));           // 10^(-0.4 (m - limit)): 1 at the limit
-  gl_Position = u_vp * vec4(a_pos, 1.0);
-  // Size grows linearly with magnitude (log of flux), so a 0 mag star is a big glint, not a screen-filling disc.
-  gl_PointSize = clamp(u_base + u_perMag*max(u_limit - m, 0.0), 1.5*u_dpr, min(40.0*u_dpr, u_maxPt));
-  // Intensity keeps some dynamic range above the limit and fades below it, so stars fade in rather than pop.
-  v_alpha = clamp(0.3*sqrt(flux), 0.0, 1.0);
-  v_col = a_col;
-}`;
-const POINT_VS = `#version 300 es
-precision highp float;
-layout(location=0) in vec3 a_pos;
-layout(location=1) in vec2 a_style;                       // CSS px size, alpha
-layout(location=2) in vec3 a_col;
-uniform mat4 u_vp;
-uniform float u_dpr;
-out vec3 v_col;
-out float v_alpha;
-void main(){
-  gl_Position = u_vp * vec4(a_pos, 1.0);
-  gl_PointSize = a_style.x * u_dpr;
-  v_alpha = a_style.y;
-  v_col = a_col;
-}`;
-// Shared by stars and solar points: a gaussian core with a faint halo that reaches zero at the sprite edge.
-const SPRITE_FS = `#version 300 es
-precision highp float;
-in vec3 v_col;
-in float v_alpha;
-out vec4 o;
-void main(){
-  vec2 p = gl_PointCoord*2.0 - 1.0;
-  float r2 = dot(p, p);
-  if (r2 >= 1.0) discard;
-  float k = (exp(-4.0*r2) + 0.12*exp(-1.2*r2)) * (1.0 - r2*r2);
-  o = vec4(v_col * (k * v_alpha), 1.0);
-}`;
-const LINE_VS = `#version 300 es
-precision highp float;
-layout(location=0) in vec3 a_pos;
-layout(location=1) in vec4 a_col;
-uniform mat4 u_vp;
-out vec4 v_col;
-void main(){ gl_Position = u_vp * vec4(a_pos, 1.0); v_col = a_col; }`;
-const LINE_FS = `#version 300 es
-precision highp float;
-in vec4 v_col;
-out vec4 o;
-void main(){ o = vec4(v_col.rgb * v_col.a, 1.0); }`;
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
 // Vertex layouts (floats): stars 7 = x y z abs r g b; points 8 = x y z size alpha r g b; lines 7 = x y z r g b a.
 const STRIDE = { stars: 28, points: 32, lines: 28 };
@@ -122,55 +70,52 @@ export class Scene3D {
    * canvas: WebGL canvas. labels: 2D canvas laid over it. card: element for the picked-object card.
    * ra, dec, radius: the patch (degrees). Throws if WebGL2 is unavailable or a shader fails to build.
    */
-  constructor({ canvas, labels, card, ra, dec, radius = 3, onHud = () => {}, onScene = () => {}, onLost = () => {} }) {
+  constructor({ canvas, labels, card, ra, dec, radius = 3, onHud = () => {}, onScene = () => {}, onLost = () => {}, onEvidence = () => {} }) {
     this.canvas = canvas; this.labelsEl = labels; this.lab = labels.getContext('2d'); this.card = card;
     this.target = { ra, dec, radius };
     this.fovStars = clamp(radius * 2.5, 20, 70);
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is not available in this browser.');
     this.gl = gl;
-    this.hooks = { onHud, onScene, onLost };
-    this._initGL();
-    this.scene = 'stars'; this.limit = LIMIT_DEFAULT;
-    this.cams = { stars: null, solar: null };
-    this.cam = this.cams.stars = this._startCam('stars');
+    this.hooks = { onHud, onScene, onLost, onEvidence };
     this.cpu = {}; this.gpu = {};
-    this.meta = { stars: [], solar: [] };
+    this.limit = LIMIT_DEFAULT; this.evidence = false; this.bloomK = 1; this.bloomT = 0.45;
     this.ctx = []; this.gaia = null; this.solarData = null; this.namedIdx = [];
+    this.st = { n: 0, pos: new Float64Array(0), data: new Float32Array(0), gal: new Float32Array(0), meta: [] };
+    this.planets = []; this.bodies = []; this.sunPos = [0, 0, 0];
     this.counts = { gaia: 0, ctx: 0, planets: 0, bodies: 0 };
     this.keys = new Set(); this.touch = new Map(); this.pinch = null;
-    this.hover = null; this.pinIdx = -1; this.locked = false;
-    this.dpr = 1; this.cssW = 1; this.cssH = 1; this.vp = new Float32Array(16);
-    this.lost = false; this.running = false; this._last = 0; this._hudT = 0; this._cardT = 0; this._raf = 0;
-    this._pickSig = ''; this._pickIdx = -1;
+    this.hover = null; this.sel = null; this.locked = false;
+    this.sys = new Map(); this.models = new Map();
+    this.ap = null; this.dyn = new Map(); this.cands = [];
+    this.dpr = 1; this.cssW = 1; this.cssH = 1; this.vp = new Float32Array(16); this.R = M.lookRotation([1, 0, 0]);
+    this.expo = 1; this.expoTarget = 1; this.vScan = 0; this.scanN = 0; this.hdrBad = false;
+    this.lost = false; this.running = false; this._last = 0; this._hudT = 0; this._cardT = 0; this._cardSig = ''; this._raf = 0;
+    this._pickSig = ''; this._pickSel = null; this._frameNo = 0; this._t = 0;
     this._frame = this._frame.bind(this);
+    this.cam = this._startCam('stars');
+    this.fov = this.fovStars;
+    this._initGL();
     const cone = linesToBuf(M.coneLines(ra, dec, radius, CONE_DIST), [1, 0.82, 0.55, 0.4]);
     this._put('lineStars', cone.data, cone.n);
+    this._rebuildStars();
     this._bind();
   }
 
   // ------------------------------------------------------------------ GL setup
   _initGL() {
     const gl = this.gl;
-    const mk = (type, src) => {
-      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('shader: ' + gl.getShaderInfoLog(s));
-      return s;
-    };
-    const prog = (vs, fs, names) => {
-      const p = gl.createProgram();
-      gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(p));
-      const u = {};
-      for (const n of names) u[n] = gl.getUniformLocation(p, n);
-      return { p, u };
-    };
+    this.useHdr = !this.hdrBad && supportsHdr(gl);
+    this.hdr = this.useHdr ? new HdrChain(gl) : null;
+    const d = this.useHdr ? '' : '#define LDR\n';
     this.prog = {
-      star: prog(STAR_VS, SPRITE_FS, ['u_vp', 'u_eye', 'u_limit', 'u_base', 'u_perMag', 'u_dpr', 'u_maxPt']),
-      point: prog(POINT_VS, SPRITE_FS, ['u_vp', 'u_dpr']),
-      line: prog(LINE_VS, LINE_FS, ['u_vp']),
+      star: makeProgram(gl, S.STAR_VS, S.SPRITE_FS, S.SPRITE_UNIFORMS_STAR, d),
+      point: makeProgram(gl, S.POINT_VS, S.SPRITE_FS, ['u_vp', 'u_eye', 'u_dpr'], d),
+      line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye'], d),
+      body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
     };
+    this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
+    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
   }
@@ -235,39 +180,40 @@ export class Scene3D {
   setSolar(s) {
     if (!s || !Array.isArray(s.earth)) return;
     this.solarData = { earth: s.earth.slice(0, 3) };
-    const pts = [], meta = [], orbits = [];
-    const addPt = (p, size, alpha, rgb, m) => { pts.push(p[0], p[1], p[2], size, alpha, rgb[0], rgb[1], rgb[2]); meta.push(m); };
-    addPt([0, 0, 0], 90, 0.22, [1, 0.66, 0.3], null);                                  // Sun glow
-    addPt([0, 0, 0], 22, 1, [1, 0.93, 0.78], { kind: 'sun', name: 'Sun' });
-    let earthListed = false, planets = 0;
+    const pts = [], orbits = [], planets = [];
+    let earthListed = false;
+    const addPlanet = (name, p) => {
+      const km = M.PLANET_KM[name];
+      planets.push({ name, kind: name === 'Moon' ? 'moon' : 'planet', pos: [p[0], p[1], p[2]], rAu: km ? km / M.KM_PER_AU : 4e-5, rgb: PLANET_RGB[name] || [0.8, 0.8, 0.8] });
+    };
     for (const p of s.planets || []) {
-      const isEarth = p.name === 'Earth', isMoon = p.name === 'Moon';
-      earthListed = earthListed || isEarth; planets++;
-      addPt([p.x, p.y, p.z], isEarth ? 9 : isMoon ? 4 : 6.5, 1, PLANET_RGB[p.name] || [0.8, 0.8, 0.8],
-        { kind: isMoon ? 'moon' : 'planet', name: p.name });
-      if (!isMoon) orbits.push(M.orbitCircle(Math.hypot(p.x, p.y, p.z)));
+      earthListed = earthListed || p.name === 'Earth';
+      addPlanet(p.name, [p.x, p.y, p.z]);
+      if (p.name !== 'Moon') orbits.push(M.orbitCircle(Math.hypot(p.x, p.y, p.z)));
     }
-    if (!earthListed) { addPt(this.solarData.earth, 9, 1, PLANET_RGB.Earth, { kind: 'planet', name: 'Earth' }); orbits.push(M.orbitCircle(Math.hypot(...this.solarData.earth))); planets++; }
+    if (!earthListed) { addPlanet('Earth', this.solarData.earth); orbits.push(M.orbitCircle(Math.hypot(...this.solarData.earth))); }
+    this.planets = planets;
     const bodies = s.bodies || [];
+    this.bodies = bodies.map((b) => ({ kind: 'body', name: b.name || null, number: b.number, cls: b.class, vmag: b.vmag, dh: b.dh_au, dg: b.dg_au, pos: [b.x, b.y, b.z] }));
     for (const b of bodies) {
-      addPt([b.x, b.y, b.z], 3, 0.9, bodyRgb(b.class), { kind: 'body', name: b.name || null, number: b.number, cls: b.class, vmag: b.vmag, dh: b.dh_au, dg: b.dg_au });
+      const c = bodyRgb(b.class);
+      pts.push(b.x, b.y, b.z, 3, 0.9, c[0], c[1], c[2]);
     }
-    this.meta.solar = meta;
     this._pickSig = '';
-    this.counts.planets = planets; this.counts.bodies = bodies.length;
-    const n = pts.length / 8;
-    this._put('points', new Float32Array(pts), n);
+    this.counts.planets = planets.length; this.counts.bodies = bodies.length;
+    this._put('points', new Float32Array(pts), pts.length / 8);
     const lines = linesToBuf(orbits, [0.6, 0.7, 0.95, 0.18]);
     this._put('lineSolar', lines.data, lines.n);
     const { ra, dec, radius } = this.target, e = this.solarData.earth;
     const cone = M.coneLines(ra, dec, radius, 8).map((pl) => pl.map((q) => [q[0] + e[0], q[1] + e[1], q[2] + e[2]]));
     const cb = linesToBuf(cone, [1, 0.82, 0.55, 0.4]);
     this._put('coneSolar', cb.data, cb.n);
-    if (this.scene === 'solar') this.cam = this.cams.solar = this._startCam('solar');
+    if (this.scene === 'solar') this.cam = this._startCam('solar');
   }
   get hasSolar() { return !!this.solarData; }
-  /** Vertical field of view: matches the patch in the star scene, wide in the solar one. */
-  get fovDeg() { return this.scene === 'solar' ? 60 : this.fovStars; }
+  /** 'solar' while the camera is in the Sun's system frame, otherwise 'stars'. */
+  get scene() { return this.cam.frame === 'system' && this.cam.host.key === 'sun' ? 'solar' : 'stars'; }
+  get fovDeg() { return this.fov; }
 
   _rebuildStars() {
     const g = this.gaia, { ra, dec, radius } = this.target;
@@ -275,30 +221,78 @@ export class Scene3D {
     // is dropped only when a Gaia star of similar brightness sits within 2' of it (2' covers decades of proper motion).
     const ctx = g ? this.ctx.filter((c) => M.separationDeg(c.ra, c.dec, ra, dec) >= radius || !g.match(c)) : this.ctx;
     const rows = g ? g.rows : [];
-    const n = rows.length + ctx.length;
-    const data = new Float32Array(7 * n), meta = new Array(n), named = [];
-    let k = 0;
+    const n = 1 + rows.length + ctx.length;                      // the Sun is star 0
+    const pos = new Float64Array(3 * n), gal = new Float32Array(7 * n), meta = new Array(n), named = [0];
+    meta[0] = { kind: 'sun', name: 'Sun', id: 'sun', abs: SUN_ABS_G, bp: SUN_BP_RP, d: 0 };
+    gal[3] = SUN_ABS_G; gal.set(M.bpRpToRgb(SUN_BP_RP), 4);
+    let k = 1;
     if (g) {
       const I = g.I;
       for (const r of rows) {
-        const o = 7 * k, abs = r[I.abs_g];
-        data[o] = r[I.x]; data[o + 1] = r[I.y]; data[o + 2] = r[I.z];
-        data[o + 3] = Number.isFinite(abs) ? abs : 5;
-        data.set(M.bpRpToRgb(r[I.bp_rp]), o + 4);
-        meta[k] = { kind: 'gaia', id: String(r[I.id]), dlo: r[I.d_lo], dhi: r[I.d_hi], bp: r[I.bp_rp], abs: data[o + 3], name: null };
+        const o = 7 * k, abs = Number.isFinite(r[I.abs_g]) ? r[I.abs_g] : 5;
+        pos[3 * k] = r[I.x]; pos[3 * k + 1] = r[I.y]; pos[3 * k + 2] = r[I.z];
+        gal[o + 3] = abs; gal.set(M.bpRpToRgb(r[I.bp_rp]), o + 4);
+        meta[k] = { kind: 'gaia', id: String(r[I.id]), dlo: r[I.d_lo], dhi: r[I.d_hi], bp: r[I.bp_rp], abs, name: null };
         k++;
       }
     }
     for (const c of ctx) {
       const o = 7 * k, p = M.radecToXyz(c.ra, c.dec, c.d);
-      data.set(p, o); data[o + 3] = c.absMag; data.set(M.bpRpToRgb(c.bpRp), o + 4);
+      pos.set(p, 3 * k); gal[o + 3] = c.absMag; gal.set(M.bpRpToRgb(c.bpRp), o + 4);
       meta[k] = { kind: 'ctx', hip: c.hip, name: c.name, d: c.d, vmag: c.vmag, bp: c.bpRp, abs: c.absMag };
       if (c.name) named.push(k);
       k++;
     }
-    this.meta.stars = meta; this.namedIdx = named; this._pickSig = '';
+    for (let i = 0; i < n; i++) { gal[7 * i] = pos[3 * i]; gal[7 * i + 1] = pos[3 * i + 1]; gal[7 * i + 2] = pos[3 * i + 2]; }
+    this.st = { n, pos, gal, data: gal, meta };
+    this.namedIdx = named; this._pickSig = ''; this.models.clear(); this.dyn.clear(); this.sel = null; this.ap = null;
     this.counts.gaia = rows.length; this.counts.ctx = ctx.length;
-    this._put('stars', data, n);
+    if (this.cam.frame === 'system') this.cam.host = { ...this.cam.host };
+    this._syncStarFrame();
+  }
+  /** Fill the star buffer for the camera's frame: parsecs in the galaxy frame, AU relative to the host in a system frame. */
+  _syncStarFrame() {
+    const st = this.st;
+    if (this.cam.frame === 'galaxy') st.data = st.gal;
+    else {
+      const d = new Float32Array(st.gal), h = this.cam.host.pc;
+      for (let i = 0; i < st.n; i++) {
+        d[7 * i] = (st.pos[3 * i] - h[0]) * AU_PER_PC; d[7 * i + 1] = (st.pos[3 * i + 1] - h[1]) * AU_PER_PC; d[7 * i + 2] = (st.pos[3 * i + 2] - h[2]) * AU_PER_PC;
+      }
+      st.data = d;
+    }
+    this._put('stars', st.data, st.n);
+  }
+  _starPc(i) { const p = this.st.pos; return [p[3 * i], p[3 * i + 1], p[3 * i + 2]]; }
+  _starKey(i) { const m = this.st.meta[i]; return m.kind === 'sun' ? 'sun' : m.kind === 'gaia' ? 'g:' + m.id : 'c:' + m.hip; }
+  _starName(i) {
+    const m = this.st.meta[i], s = this.sys.get(this._starKey(i));
+    if (s && s.payload && s.payload.name) return s.payload.name;
+    return m.name || (m.kind === 'gaia' ? (/^Gaia/i.test(m.id) ? m.id : `Gaia DR3 ${m.id}`) : `HIP ${m.hip}`);
+  }
+  _modelFor(i) {
+    let md = this.models.get(i);
+    if (md) return md;
+    const m = this.st.meta[i], s = this.sys.get(this._starKey(i)), system = s && s.payload ? s.payload : undefined;
+    const distPc = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(i));
+    if (m.kind === 'sun') md = starModel({ kind: 'sun', system });
+    else if (m.kind === 'gaia') md = starModel({ system, absG: m.abs, bpRp: m.bp, distPc, kind: 'gaia' });
+    else md = starModel({ absG: m.abs, bpRp: m.bp, distPc: m.d, name: m.name, kind: 'ctx' });
+    this.models.set(i, md);
+    return md;
+  }
+  /** The system payload for a star (fetched once, cached): { state: 'loading' | 'ok' | 'error', payload, error }. */
+  _system(i) {
+    const m = this.st.meta[i];
+    if (m.kind === 'ctx') return null;
+    const key = this._starKey(i);
+    let s = this.sys.get(key);
+    if (s) return s;
+    s = { state: 'loading', payload: null, error: null };
+    this.sys.set(key, s);
+    getSystem(m.kind === 'sun' ? 'sun' : m.id).then((p) => { s.state = 'ok'; s.payload = p; }, (e) => { s.state = 'error'; s.error = e.message || String(e); })
+      .finally(() => { this.models.delete(i); this._cardSig = ''; });
+    return s;
   }
 
   // ------------------------------------------------------------------ scenes and camera
@@ -307,31 +301,28 @@ export class Scene3D {
     const { yaw, pitch: p0 } = M.yawPitchFromDir(M.radecToXyz(ra, dec, 1));
     const pitch = clamp(p0, -1.5, 1.5);                         // same limit as mouse look: up = +z must not be parallel to the view
     if (scene === 'solar' && this.solarData) {
-      // A three-quarter view from above the ecliptic that frames the Sun, Earth and the first few AU of the cone.
-      const e = this.solarData.earth, d = M.radecToXyz(ra, dec, 1), eps = M.OBLIQUITY_DEG * D2R;
-      const nep = [0, -Math.sin(eps), Math.cos(eps)];          // north ecliptic pole in ICRS
-      const far = [0, 1, 2].map((k) => e[k] + 3 * d[k]);      // a point 3 AU down the cone
-      const c = far.map((v) => v / 2);                          // midway between the Sun and that point
-      const R = Math.hypot(...far) / 2 + 1;
-      // Back off away from the cone side, then up: u is the in-plane direction from the Sun toward c.
-      const cn = M.dot(c, nep), u = M.norm(c.map((v, k) => v - cn * nep[k]));
-      const pos = [0, 1, 2].map((k) => c[k] + R * (1.3 * nep[k] - 1.2 * u[k]));
-      const look = [0, 1, 2].map((k) => c[k] - pos[k]);
-      const v = M.yawPitchFromDir(look);
-      return { pos, vel: [0, 0, 0], yaw: v.yaw, pitch: clamp(v.pitch, -1.5, 1.5), speed: CFG[scene].speed };
+      // Near Earth, a little sunward and above the ecliptic, looking at it: the Moon, the Sun's glare and the orbits in view.
+      const e = this.solarData.earth, eps = M.OBLIQUITY_DEG * D2R;
+      const nep = [0, -Math.sin(eps), Math.cos(eps)];
+      const toSun = M.norm(e.map((v) => -v)), side = M.norm(M.cross(nep, toSun));
+      const off = M.norm([0, 1, 2].map((k) => 0.5 * toSun[k] + 0.8 * side[k] + 0.3 * nep[k]));
+      const pos = [0, 1, 2].map((k) => e[k] + 0.004 * off[k]);
+      const v = M.yawPitchFromDir(sub3(e, pos));
+      return F.makeCam({ frame: 'system', host: SUN_HOST, pos, yaw: v.yaw, pitch: clamp(v.pitch, -1.5, 1.5), speed: 0.002 });
     }
-    return { pos: [0, 0, 0], vel: [0, 0, 0], yaw, pitch, speed: CFG[scene].speed };
+    return F.makeCam({ pos: [0, 0, 0], yaw, pitch, speed: RANGE.galaxy.speed, disarm: 'sun' });
   }
   setScene(name) {
-    if (name === this.scene || (name === 'solar' && !this.solarData)) return;
-    this.cams[this.scene] = this.cam;
-    this.scene = name;
-    this.cam = this.cams[name] || (this.cams[name] = this._startCam(name));
-    this.pinIdx = -1; this.hover = null; this.card.hidden = true; this._cardT = 0;
-    this.hooks.onScene(name);
+    if (name === 'solar' && !this.solarData) return;
+    this.ap = null; this.sel = null; this.hover = null; this.card.hidden = true; this._cardT = 0;
+    this.cam = this._startCam(name);
+    this._syncStarFrame();
+    this.hooks.onScene(this.scene);
   }
   toggleScene() { this.setScene(this.scene === 'stars' ? 'solar' : 'stars'); }
-  resetView() { this.cam = this.cams[this.scene] = this._startCam(this.scene); this.pinIdx = -1; }
+  resetView() { this.setScene(this.scene); }
+  setEvidence(on) { this.evidence = !!on; this._cardSig = ''; this.hooks.onEvidence(this.evidence); }
+  toggleEvidence() { this.setEvidence(!this.evidence); }
 
   // ------------------------------------------------------------------ controls
   _key(e, down) {
@@ -339,9 +330,17 @@ export class Scene3D {
     if (!down) { this.keys.delete(code); return; }
     if (e.metaKey) return;
     if (e.ctrlKey || e.altKey) return;                          // leave Ctrl+F, Ctrl+R and friends alone
-    if (MOVE_KEYS.has(code)) { this.keys.add(code); e.preventDefault(); return; }
-    if (code === 'Tab') { e.preventDefault(); if (!e.repeat) this.toggleScene(); return; }
-    if (code === 'KeyH') { if (!e.repeat) this.resetView(); return; }
+    if (MOVE_KEYS.has(code)) { this.keys.add(code); this.ap = null; e.preventDefault(); return; }
+    if (e.repeat) { if (code === 'Tab') e.preventDefault(); return; }
+    if (code === 'Tab') { e.preventDefault(); this.toggleScene(); return; }
+    if (code === 'KeyH') { this.resetView(); return; }
+    if (code === 'KeyE') { this.toggleEvidence(); return; }
+    if (code === 'KeyG') { this._goFromCrosshair(); return; }
+    if (code === 'Escape') {
+      if (this.ap) this.ap = null;
+      else if (!this.locked && this.sel) { this.sel = null; this._cardSig = ''; }
+      return;
+    }
     if (code === 'BracketLeft' || code === 'BracketRight') {
       this.limit = clamp(this.limit + (code === 'BracketRight' ? 0.5 : -0.5), LIMIT_MIN, LIMIT_MAX);
     }
@@ -356,7 +355,6 @@ export class Scene3D {
     this.locked = document.pointerLockElement === this.canvas;
     this.canvas.classList.toggle('locked', this.locked);
     this.hover = null;
-    if (this.locked) this.pinIdx = -1;
   }
   _pdown(e) {
     if (e.pointerType === 'touch') {
@@ -366,7 +364,10 @@ export class Scene3D {
       try { this.canvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
       return;
     }
-    if (e.button === 0 && !this.locked) this._lock();
+    if (e.button !== 0 || this.locked) return;
+    const p = this._rel(e), hit = this._pickAt(p.x, p.y, PICK_PX);
+    if (hit) this._select(hit);        // a click on an object selects it; the pointer stays free
+    else this._lock();                 // a click on empty sky starts flying
   }
   _pmove(e) {
     if (e.pointerType === 'touch') {
@@ -387,11 +388,11 @@ export class Scene3D {
     if (e.pointerType !== 'touch') return;
     const t = this.touch.get(e.pointerId);
     this.touch.delete(e.pointerId); this.pinch = null;
-    if (t && t.moved < 8 && this.touch.size === 0) this.pinIdx = this._pick(t.x, t.y);   // a tap pins a card; empty sky clears it
+    if (t && t.moved < 8 && this.touch.size === 0) { const hit = this._pickAt(t.x, t.y, PICK_PX); if (hit) this._select(hit); else { this.sel = null; this._cardSig = ''; } }
   }
   _look(dx, dy) {
-    const cam = this.cam; if (!cam) return;
-    const s = this.fovDeg * D2R * 0.008;                     // radians per pixel, scaled to the (per-scene) field of view
+    const cam = this.cam; if (!cam || this.ap) return;
+    const s = this.fov * D2R * 0.008;                        // radians per pixel, scaled to the field of view
     cam.yaw -= dx * s;
     cam.pitch = clamp(cam.pitch - dy * s, -1.5, 1.5);
   }
@@ -401,12 +402,12 @@ export class Scene3D {
   }
   _wheel(e) {
     e.preventDefault();
-    const cam = this.cam, cfg = CFG[this.scene];
+    const cam = this.cam, r = RANGE[cam.frame];
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-    cam.speed = clamp(cam.speed * Math.exp(-dy * 0.0015), cfg.min, cfg.max);   // logarithmic: equal steps, equal ratios
+    cam.speed = clamp(cam.speed * Math.exp(-dy * 0.0015), r.min, r.max);   // logarithmic: equal steps, equal ratios
   }
   _step(dt) {
-    const cam = this.cam; if (!cam || dt <= 0) return;
+    const cam = this.cam; if (!cam || dt <= 0 || this.ap) return;
     const k = this.keys, boost = k.has('ShiftLeft') || k.has('ShiftRight') ? 10 : 1;
     const f = M.dirFromYawPitch(cam.yaw, cam.pitch), r = M.norm(M.cross(f, Z_UP));
     const w = [0, 0, 0];
@@ -421,6 +422,80 @@ export class Scene3D {
     const target = len > 1e-9 ? w.map((v) => (v / len) * cam.speed * boost) : [0, 0, 0];
     const a = 1 - Math.exp(-dt * 8);                       // velocity eases toward the target: no hard starts or stops
     for (let i = 0; i < 3; i++) { cam.vel[i] += (target[i] - cam.vel[i]) * a; cam.pos[i] += cam.vel[i] * dt; }
+  }
+
+  // ------------------------------------------------------------------ autopilot
+  /** A selection -> what the autopilot needs: { world pc or AU position, radius in AU, name }. */
+  _resolve(sel) {
+    if (!sel) return null;
+    if (sel.t === 'star' && this.st.meta[sel.idx]) {
+      const md = this._modelFor(sel.idx);
+      return { type: 'star', idx: sel.idx, pc: this._starPc(sel.idx), rAu: md.radiusAu, name: this._starName(sel.idx) };
+    }
+    if (sel.t === 'planet') {
+      const p = this.planets.find((q) => q.name === sel.name);
+      return p ? { type: 'planet', pos: p.pos, rAu: p.rAu, name: p.name } : null;
+    }
+    if (sel.t === 'body' && this.bodies[sel.idx]) { const b = this.bodies[sel.idx]; return { type: 'body', pos: b.pos, rAu: 0, name: b.name || `(${b.number})` }; }
+    return null;
+  }
+  _inSun() { return this.cam.frame === 'system' && this.cam.host.key === 'sun'; }
+  _goFromCrosshair() {
+    const px = (GO_DEG * D2R) * this.pxPerRad;
+    this._go(this._pickAt(this.cssW / 2, this.cssH / 2, px) || this.sel);
+  }
+  _go(sel) {
+    const t = this._resolve(sel), cam = this.cam;
+    if (!t) return;
+    if (t.type !== 'star' && !this._inSun()) return;           // planets only exist in the Sun's frame
+    const dir = M.dirFromYawPitch(cam.yaw, cam.pitch), stopAu = arrivalDistance(t.rAu), obj = new Autopilot();
+    // Stars: the whole trip runs in galaxy parsecs (doubles keep the last few AU exact), so crossing into the star's
+    // system frame needs no restart. Planets and small bodies run in the Sun's AU frame.
+    if (t.type === 'star') obj.start({ from: F.worldPc(cam), fromDir: dir, to: t.pc, stopAt: stopAu / AU_PER_PC });
+    else obj.start({ from: cam.pos.slice(), fromDir: dir, to: t.pos, stopAt: stopAu });
+    this.ap = { obj, sel, type: t.type, unitsPerPc: t.type === 'star' ? 1 : AU_PER_PC };
+    cam.vel = [0, 0, 0];
+  }
+  _stepAutopilot(dt) {
+    const ap = this.ap, cam = this.cam; if (!ap) return;
+    if (ap.type !== 'star' && !this._inSun()) { this.ap = null; return; }
+    const t = this._resolve(ap.sel);
+    if (!t) { this.ap = null; return; }
+    if (ap.type !== 'star') ap.obj.retarget(t.pos);
+    const r = ap.obj.step(dt);
+    cam.pos = ap.type === 'star' ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.slice()) : r.pos.slice();
+    const v = M.yawPitchFromDir(r.dir);
+    cam.yaw = v.yaw; cam.pitch = clamp(v.pitch, -1.5, 1.5); cam.vel = [0, 0, 0];
+    if (r.done) { this.ap = null; this._arrived(t); }
+  }
+  _arrived(t) {
+    const cam = this.cam, upc = F.unitsPerPc(cam);
+    const surfAu = this._surfaceAu();
+    cam.speed = clamp(suggestSpeed(surfAu * (upc / AU_PER_PC), upc), RANGE[cam.frame].min, RANGE[cam.frame].max);
+    if (t.type === 'star' && cam.frame === 'system') this.hooks.onHud(this._hudData());
+  }
+  /** The sphere whose surface is nearest the camera: { name, au } (au = Infinity when in the galaxy frame). */
+  _nearest() {
+    const cam = this.cam;
+    if (cam.frame !== 'system') return { name: null, au: Infinity };
+    let best = { name: this._starName(cam.host.idx), au: Math.max(0, Math.hypot(...cam.pos) - this._modelFor(cam.host.idx).radiusAu) };
+    if (this._inSun()) for (const p of this.planets) {
+      const au = Math.max(0, Math.hypot(...sub3(p.pos, cam.pos)) - p.rAu);
+      if (au < best.au) best = { name: p.name, au };
+    }
+    return best;
+  }
+  /** Distance from the camera to the nearest sphere surface, in AU (Infinity when there is none). */
+  _surfaceAu() { return this._nearest().au; }
+  /** After a frame switch: the free-flight speed that suits the new surroundings, and the star buffer. */
+  _onFrameChange(kind) {
+    const cam = this.cam;
+    this._syncStarFrame(); this._pickSig = ''; this.hooks.onScene(this.scene);
+    if (kind === 'enter') {
+      cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), RANGE.system.min, RANGE.system.max);
+      if (this.sel && this.sel.t !== 'star') this.sel = null;
+    } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), RANGE.galaxy.min, RANGE.galaxy.max);
+    if (this.ap && this.ap.type !== 'star') this.ap = null;
   }
 
   // ------------------------------------------------------------------ frame loop
@@ -450,173 +525,386 @@ export class Scene3D {
       this.canvas.width = w; this.canvas.height = h;
       this.labelsEl.width = w; this.labelsEl.height = h;
     }
+    if (this.hdr && !this.hdr.resize(w, h)) { this.hdrBad = true; this._initGL(); for (const k of Object.keys(this.cpu)) this._upload(k); }
   }
-  _matrices() {
-    const cam = this.cam, cfg = CFG[this.scene];
+  _matrices(dt) {
+    const cam = this.cam;
+    const want = cam.frame === 'system' ? FOV_SYSTEM : this.fovStars;
+    this.fov += (want - this.fov) * (dt > 0 ? 1 - Math.exp(-dt * 3) : 0);
     const dir = M.dirFromYawPitch(cam.yaw, cam.pitch);
     const aspect = this.canvas.width / this.canvas.height;
-    this.vp = M.mul4(M.perspective(this.fovDeg * D2R, aspect, cfg.near, cfg.far), M.viewMatrix(cam.pos, dir, Z_UP));
+    this.R = M.lookRotation(dir, Z_UP);                          // rotation only: translation is subtracted before this
+    const [n, f] = cam.frame === 'system' ? [1e-9, 1e12] : [1e-9, 1e9];
+    this.vp = M.mul4(M.perspective(this.fov * D2R, aspect, n, f), this.R);
+    this.tanY = Math.tan(this.fov * D2R / 2); this.tanX = this.tanY * aspect;
+    this.pxPerRad = (this.cssH / 2) / this.tanY;
+  }
+  /** Stars within NEAR_PC of the camera: nearest first handled by stepFrame, all of them drawn exactly. */
+  _scan() {
+    const st = this.st, w = F.worldPc(this.cam), out = [], r2 = NEAR_PC * NEAR_PC, p = st.pos;
+    for (let i = 0; i < st.n; i++) {
+      const dx = p[3 * i] - w[0], dy = p[3 * i + 1] - w[1], dz = p[3 * i + 2] - w[2], d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < r2) out.push({ idx: i, key: this._starKey(i), name: this._starName(i), pc: [p[3 * i], p[3 * i + 1], p[3 * i + 2]], distPc: Math.sqrt(d2) });
+    }
+    return out;
+  }
+  /** Brightest sprite intensity (v) in view: the host in a system frame, otherwise the brightest of the stars ahead. */
+  _brightest(cands) {
+    const cam = this.cam, st = this.st;
+    let v = 0;
+    const vOf = (i, distPc, rAu) => {
+      if (distPc * AU_PER_PC < rAu * 1.05) return 0;              // inside the star: nothing to adapt to
+      return M.spriteV(M.apparentMag(st.gal[7 * i + 3], distPc), this.limit);
+    };
+    if (cam.frame === 'system') {
+      const i = cam.host.idx, d = Math.hypot(...cam.pos) || 1;
+      const v = vOf(i, d / AU_PER_PC, this._modelFor(i).radiusAu);
+      // Looking away from the host, its glare does not set the exposure (the eye adapts to what is in view).
+      const dir = M.dirFromYawPitch(cam.yaw, cam.pitch), ang = Math.acos(clamp(-(cam.pos[0] * dir[0] + cam.pos[1] * dir[1] + cam.pos[2] * dir[2]) / d, -1, 1));
+      const edge = Math.atan(Math.hypot(this.tanX, this.tanY)), out = (ang - edge) / 0.5;
+      return out <= 0 ? v : Math.min(v, V_EXPO) * Math.max(0, 1 - out);
+    }
+    for (const c of cands) v = Math.max(v, vOf(c.idx, c.distPc, this._modelFor(c.idx).radiusAu));
+    if (this._frameNo % 3 === 0 || !this.vScan) {                 // the full scan is the costly part: every third frame
+      const dir = M.dirFromYawPitch(cam.yaw, cam.pitch), p = st.pos, g = st.gal;
+      let best = 0;
+      for (let i = 0; i < st.n; i++) {
+        const dx = p[3 * i] - cam.pos[0], dy = p[3 * i + 1] - cam.pos[1], dz = p[3 * i + 2] - cam.pos[2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < 1e-10 || d2 < NEAR_PC * NEAR_PC) continue;       // the near ones are handled above
+        const dd = Math.sqrt(d2);
+        if ((dx * dir[0] + dy * dir[1] + dz * dir[2]) / dd < 0.35) continue;
+        const vv = M.spriteV(M.apparentMag(g[7 * i + 3], dd), this.limit);
+        if (vv > best) best = vv;
+      }
+      this.vScan = Math.max(best, 1e-9);
+    }
+    return Math.max(v, this.vScan);
   }
   _frame(t) {
     if (!this.running) return;
     this._raf = requestAnimationFrame(this._frame);
     const dt = this._last ? Math.min(0.05, (t - this._last) / 1000) : 0;
-    this._last = t;
+    this._last = t; this._t = t / 1000; this._frameNo++;
     this._resize();
     this._step(dt);
-    this._matrices();
-    const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    if (this.scene === 'stars') { this._drawLines('lineStars'); this._drawStars(); }
-    else { this._drawLines('lineSolar'); this._drawLines('coneSolar'); this._drawPoints(); }
+    this._stepAutopilot(dt);
+    let cands = this._scan();
+    const sw = F.stepFrame(this.cam, cands);
+    if (sw) { this._onFrameChange(sw); cands = this._scan(); }
+    this._matrices(dt);
+    // exposure: eased toward what the brightest thing in view needs
+    this.expoTarget = M.exposureFor(this._brightest(cands));
+    this.expo = dt > 0 ? M.easeExposure(this.expo, this.expoTarget, dt) : this.expoTarget;
+    this._draw(cands, t);
     this._overlay(t);
+  }
+
+  // ------------------------------------------------------------------ drawing
+  _draw(cands, t) {
+    const gl = this.gl, cam = this.cam, W = this.canvas.width, H = this.canvas.height;
+    const hdr = this.hdr && this.hdr.ok ? this.hdr : null;
+    if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    const sun = this._inSun();
+    const bodies = [];                                            // spheres to draw, with their crossfade weight
+    const dynStars = [], dynPts = [], skip = new Int32Array(16).fill(-1);
+    this.dyn.clear();
+    // near stars: exact camera-relative positions; the host and any star big enough on screen are spheres too
+    cands.slice(0, 16).forEach((c, k) => {
+      skip[k] = c.idx;
+      const md = this._modelFor(c.idx), rel = F.relFromCam(cam, c.pc), dist = Math.hypot(...rel);
+      const distAu = cam.frame === 'system' ? dist : dist * AU_PER_PC, rAu = md.radiusAu;
+      const angPx = M.angRadius(rAu, distAu) * this.pxPerRad, s = M.sphereWeight(angPx);
+      const inside = distAu < rAu * 1.001;
+      this.dyn.set(c.idx, angPx);
+      const wPoint = inside ? 0 : 1 - s;
+      const col = this.st.gal.subarray(7 * c.idx + 4, 7 * c.idx + 7);
+      dynStars.push(rel[0], rel[1], rel[2], this.st.gal[7 * c.idx + 3], col[0] * wPoint, col[1] * wPoint, col[2] * wPoint);
+      if (s > 0 && !inside) bodies.push({ kind: 0, rel, dist: distAu, rAu, s, md, idx: c.idx, units: cam.frame === 'system' ? 1 : AU_PER_PC });
+    });
+    if (sun) {
+      for (const p of this.planets) {
+        const relv = sub3(p.pos, cam.pos), dist = Math.hypot(...relv), angPx = M.angRadius(p.rAu, dist) * this.pxPerRad, s = M.sphereWeight(angPx);
+        this.dyn.set('p:' + p.name, angPx);
+        const size = p.name === 'Earth' ? 9 : p.name === 'Moon' ? 4 : 6.5;
+        if (dist > p.rAu) dynPts.push(relv[0], relv[1], relv[2], size, 1 - s, p.rgb[0], p.rgb[1], p.rgb[2]);
+        if (s > 0 && dist > p.rAu) bodies.push({ kind: 1, rel: relv, dist, rAu: p.rAu, s, p });
+      }
+    }
+    // lines
+    if (cam.frame === 'galaxy') this._drawLines('lineStars');
+    else if (sun) { this._drawLines('lineSolar'); this._drawLines('coneSolar'); }
+    this._drawStars('stars', skip);
+    if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
+    if (sun) { this._drawPoints(this.gpu.points, [0, 0, 0].map((_, i) => cam.pos[i])); if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts)); }
+    // spheres, far to near, premultiplied "over"
+    bodies.sort((a, b) => b.dist - a.dist);
+    if (bodies.length) {
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      for (const b of bodies) this._drawBody(b, t);
+    }
+    if (hdr) hdr.finish({ strength: this.bloomK * (0.1 + 0.2 * clamp(-Math.log10(this.expo) / 4, 0, 1)), exposure: 1, threshold: this.bloomT });
+    else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
   _drawLines(key) {
     const g = this.gpu[key]; if (!g || !g.n) return;
-    const gl = this.gl, pr = this.prog.line;
+    const gl = this.gl, pr = this.prog.line, cam = this.cam;
     gl.useProgram(pr.p);
     gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.lines, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, STRIDE.lines, 12);
     gl.uniformMatrix4fv(pr.u.u_vp, false, this.vp);
+    gl.uniform3f(pr.u.u_eye, cam.pos[0], cam.pos[1], cam.pos[2]);
     gl.drawArrays(gl.LINES, 0, g.n);
   }
-  _drawStars() {
-    const g = this.gpu.stars; if (!g || !g.n) return;
-    const gl = this.gl, pr = this.prog.star, u = pr.u;
-    gl.useProgram(pr.p);
-    gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.stars, 0);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, STRIDE.stars, 12);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, STRIDE.stars, 16);
+  _starUniforms(eye, skip) {
+    const gl = this.gl, u = this.prog.star.u, cam = this.cam;
+    gl.useProgram(this.prog.star.p);
     gl.uniformMatrix4fv(u.u_vp, false, this.vp);
-    gl.uniform3f(u.u_eye, this.cam.pos[0], this.cam.pos[1], this.cam.pos[2]);
+    gl.uniform3f(u.u_eye, eye[0], eye[1], eye[2]);
+    gl.uniform1f(u.u_toPc, cam.frame === 'system' ? 1 / AU_PER_PC : 1);
+    gl.uniform1f(u.u_expo, this.expo);
     gl.uniform1f(u.u_limit, this.limit);
     gl.uniform1f(u.u_base, BASE_PX * this.dpr);
     gl.uniform1f(u.u_perMag, PX_PER_MAG * this.dpr);
     gl.uniform1f(u.u_dpr, this.dpr);
     gl.uniform1f(u.u_maxPt, this.maxPt);
+    gl.uniform1iv(u.u_skip, skip);
+  }
+  _starAttribs() {
+    const gl = this.gl;
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.stars, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, STRIDE.stars, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, STRIDE.stars, 16);
+  }
+  _drawStars(key, skip) {
+    const g = this.gpu[key]; if (!g || !g.n) return;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
+    this._starAttribs();
+    this._starUniforms(this.cam.pos, skip);
     gl.drawArrays(gl.POINTS, 0, g.n);
   }
-  _drawPoints() {
-    const g = this.gpu.points; if (!g || !g.n) return;
-    const gl = this.gl, pr = this.prog.point, u = pr.u;
-    gl.useProgram(pr.p);
-    gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
+  _drawDynStars(data) {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.stars);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+    this._starAttribs();
+    this._starUniforms([0, 0, 0], new Int32Array(16).fill(-1));
+    gl.drawArrays(gl.POINTS, 0, data.length / 7);
+  }
+  _pointAttribs() {
+    const gl = this.gl;
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.points, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, STRIDE.points, 12);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, STRIDE.points, 20);
-    gl.uniformMatrix4fv(u.u_vp, false, this.vp);
-    gl.uniform1f(u.u_dpr, this.dpr);
+  }
+  _drawPoints(g, eye) {
+    if (!g || !g.n) return;
+    const gl = this.gl, pr = this.prog.point;
+    gl.useProgram(pr.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
+    this._pointAttribs();
+    gl.uniformMatrix4fv(pr.u.u_vp, false, this.vp);
+    gl.uniform3f(pr.u.u_eye, eye[0], eye[1], eye[2]);
+    gl.uniform1f(pr.u.u_dpr, this.dpr);
     gl.drawArrays(gl.POINTS, 0, g.n);
+  }
+  _drawDynPoints(data) {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.points);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+    this._drawPoints({ b: this.dynBuf.points, n: data.length / 8 }, [0, 0, 0]);
+  }
+  _drawBody(b, t) {
+    const gl = this.gl, pr = this.prog.body, u = pr.u;
+    const cv = M.rotateView(this.R, b.rel).map((v) => v / b.rAu);
+    const ext = b.kind === 0 ? (this.evidence ? 1.1 : 3) : b.p.name === 'Saturn' && !this.evidence ? 2.4 : 1.1;
+    const rect = M.quadRect(cv, ext, this.tanX, this.tanY);
+    if (!rect) return;
+    gl.useProgram(pr.p);
+    gl.bindVertexArray(this.vaoEmpty);
+    gl.uniform4f(u.u_rect, ...(rect === 'full' ? [-1, -1, 1, 1] : rect));
+    gl.uniform2f(u.u_tan, this.tanX, this.tanY);
+    gl.uniform3f(u.u_c, cv[0], cv[1], cv[2]);
+    gl.uniform1f(u.u_pix, (2 * this.tanY) / this.canvas.height);
+    gl.uniform1f(u.u_time, this._t);
+    gl.uniform1f(u.u_evid, this.evidence ? 1 : 0);
+    gl.uniform1f(u.u_w, b.s);
+    gl.uniform1f(u.u_ext, ext);
+    const R = this.R;
+    gl.uniformMatrix3fv(u.u_v2w, false, [R[0], R[1], R[2], R[4], R[5], R[6], R[8], R[9], R[10]]);
+    if (b.kind === 0) {
+      const md = b.md, x = M.spriteV(M.apparentMag(this.st.gal[7 * b.idx + 3], b.dist / AU_PER_PC), this.limit) * this.expo;
+      const surf = (0.45 + 0.35 * M.discRadiance(md.teff.v)) * clamp(x, 0.05, 1);   // below white, so limb darkening and colour show
+      gl.uniform1i(u.u_kind, 0);
+      gl.uniform3f(u.u_col, md.rgb[0], md.rgb[1], md.rgb[2]);
+      gl.uniform1f(u.u_u, md.limbU);
+      gl.uniform1f(u.u_surf, surf);
+      gl.uniform1f(u.u_glow, this.evidence ? 0 : 0.35 * surf);
+      gl.uniform1f(u.u_ring, 0); gl.uniform1f(u.u_band, 0); gl.uniform1f(u.u_atm, 0);
+    } else {
+      const p = b.p, L = M.norm(p.pos.map((v) => -v)), pole = POLE[p.name] ? M.radecToXyz(POLE[p.name][0], POLE[p.name][1], 1) : Z_UP;
+      const Lv = M.rotateView(R, L), Pv = M.rotateView(R, pole);
+      gl.uniform1i(u.u_kind, 1);
+      gl.uniform3f(u.u_col, p.rgb[0], p.rgb[1], p.rgb[2]);
+      gl.uniform3f(u.u_light, Lv[0], Lv[1], Lv[2]); gl.uniform3f(u.u_pole, Pv[0], Pv[1], Pv[2]);
+      gl.uniform1f(u.u_u, 0); gl.uniform1f(u.u_surf, 0.5); gl.uniform1f(u.u_glow, 0);
+      gl.uniform1f(u.u_ring, p.name === 'Saturn' ? 1 : 0);
+      gl.uniform1f(u.u_band, p.name === 'Jupiter' || p.name === 'Saturn' ? 1 : 0);
+      gl.uniform1f(u.u_atm, p.name === 'Earth' || p.name === 'Venus' ? 1 : 0);
+    }
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
   }
 
   // ------------------------------------------------------------------ picking, labels, card
-  /** Screen position in CSS px, or null when behind the camera or well off screen. */
-  _proj(x, y, z) {
-    const v = this.vp;
+  /** Screen position in CSS px of a camera-relative vector, or null when behind the camera or well off screen. */
+  _proj(rel) {
+    const v = this.vp, x = rel[0], y = rel[1], z = rel[2];
     const w = v[3] * x + v[7] * y + v[11] * z + v[15];
-    if (w <= 1e-12) return null;
+    if (w <= 1e-30) return null;
     const nx = (v[0] * x + v[4] * y + v[8] * z + v[12]) / w, ny = (v[1] * x + v[5] * y + v[9] * z + v[13]) / w;
     if (nx < -1.1 || nx > 1.1 || ny < -1.1 || ny > 1.1) return null;
     return [(nx * 0.5 + 0.5) * this.cssW, (0.5 - ny * 0.5) * this.cssH];
   }
-  /** Index of the object under (px, py) in CSS px: the brightest star, or the nearest solar-system point. -1 for none. */
-  _pick(px, py) {
-    const R2 = PICK_PX * PICK_PX, v = this.vp;
-    if (this.scene === 'stars') {
-      const g = this.cpu.stars; if (!g) return -1;
-      const d = g.data, cam = this.cam;
-      let best = -1, bestM = Infinity;
-      for (let i = 0; i < g.n; i++) {
-        const o = 7 * i, x = d[o], y = d[o + 1], z = d[o + 2];
-        const w = v[3] * x + v[7] * y + v[11] * z + v[15];
-        if (w <= 1e-12) continue;
-        const sx = ((v[0] * x + v[4] * y + v[8] * z + v[12]) / w * 0.5 + 0.5) * this.cssW - px;
-        const sy = (0.5 - (v[1] * x + v[5] * y + v[9] * z + v[13]) / w * 0.5) * this.cssH - py;
-        if (sx * sx + sy * sy > R2) continue;
-        const m = M.apparentMag(d[o + 3], dist3(cam.pos, x, y, z));
-        if (m < bestM) { bestM = m; best = i; }
+  /** Object under (px, py) in CSS px within maxPx: a planet, else the brightest star, else a small body. null for none. */
+  _pickAt(px, py, maxPx) {
+    const cam = this.cam, sun = this._inSun();
+    if (sun) {
+      let best = null, bestD = Infinity;
+      for (const p of this.planets) {
+        const q = this._proj(sub3(p.pos, cam.pos)); if (!q) continue;
+        const d = Math.hypot(q[0] - px, q[1] - py), reach = Math.max(maxPx, this.dyn.get('p:' + p.name) || 0);
+        if (d <= reach && d < bestD) { bestD = d; best = { t: 'planet', name: p.name }; }
       }
+      if (best) return best;
+    }
+    const st = this.st;
+    let bi = -1, bm = Infinity;
+    for (let i = 0; i < st.n; i++) {
+      const rel = F.relFromCam(cam, [st.pos[3 * i], st.pos[3 * i + 1], st.pos[3 * i + 2]]);
+      const q = this._proj(rel); if (!q) continue;
+      const reach = Math.max(maxPx, this.dyn.get(i) || 0);
+      if (Math.hypot(q[0] - px, q[1] - py) > reach) continue;
+      const distPc = Math.hypot(...rel) / F.unitsPerPc(cam), m = M.apparentMag(st.gal[7 * i + 3], distPc);
+      if (m < bm) { bm = m; bi = i; }
+    }
+    if (bi >= 0) return { t: 'star', idx: bi };
+    if (sun) {
+      let best = null, bestD = maxPx;
+      this.bodies.forEach((b, i) => {
+        const q = this._proj(sub3(b.pos, cam.pos)); if (!q) return;
+        const d = Math.hypot(q[0] - px, q[1] - py);
+        if (d <= bestD) { bestD = d; best = { t: 'body', idx: i }; }
+      });
       return best;
     }
-    const g = this.cpu.points; if (!g) return -1;
-    const d = g.data;
-    let best = -1, bestD = R2;
-    for (let i = 0; i < g.n; i++) {
-      if (!this.meta.solar[i]) continue;
-      const p = this._proj(d[8 * i], d[8 * i + 1], d[8 * i + 2]); if (!p) continue;
-      const dd = (p[0] - px) ** 2 + (p[1] - py) ** 2;
-      if (dd <= bestD) { bestD = dd; best = i; }
-    }
-    return best;
+    return null;
   }
-  /** Hover pick, recomputed only when the pointer or the camera has moved (the projection loop is the costly part). */
+  _select(sel) {
+    this.sel = sel; this._cardSig = ''; this._cardT = 0;
+    if (sel.t === 'star') this._system(sel.idx);
+  }
+  _selKey(sel) { return sel ? (sel.t === 'star' ? 's' + sel.idx : sel.t === 'planet' ? 'p' + sel.name : 'b' + sel.idx) : ''; }
+  _selPos(sel) {   // camera-relative position
+    const cam = this.cam;
+    if (sel.t === 'star') return F.relFromCam(cam, this._starPc(sel.idx));
+    return sub3(sel.t === 'planet' ? this.planets.find((p) => p.name === sel.name).pos : this.bodies[sel.idx].pos, cam.pos);
+  }
+  _valid(sel) {
+    if (!sel) return false;
+    if (sel.t === 'star') return !!this.st.meta[sel.idx];
+    if (!this._inSun()) return false;
+    return sel.t === 'planet' ? this.planets.some((p) => p.name === sel.name) : !!this.bodies[sel.idx];
+  }
   _hoverPick() {
     const c = this.cam, h = this.hover;
-    const sig = `${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${this.scene}|${this.cssW}x${this.cssH}`;
-    if (sig !== this._pickSig) { this._pickSig = sig; this._pickIdx = this._pick(h.x, h.y); }
-    return this._pickIdx;
+    const sig = `${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${c.frame}|${this.cssW}x${this.cssH}`;
+    if (sig !== this._pickSig) { this._pickSig = sig; this._pickSel = this._pickAt(h.x, h.y, PICK_PX); }
+    return this._pickSel;
   }
-  _posOf(idx) {
-    if (this.scene === 'stars') { const d = this.cpu.stars.data, o = 7 * idx; return [d[o], d[o + 1], d[o + 2]]; }
-    const d = this.cpu.points.data, o = 8 * idx; return [d[o], d[o + 1], d[o + 2]];
+  _fromYou(rel) {
+    const u = F.unitsPerPc(this.cam), dpc = Math.hypot(...rel) / u;
+    if (this.cam.frame === 'system' && dpc < 0.02) return `${fmtNum(dpc * AU_PER_PC)} AU`;
+    return `${fmtNum(dpc)} pc · ${fmtNum(dpc * LY)} ly`;
   }
-  _info(idx) {
-    const cam = this.cam, p = this._posOf(idx), dCam = dist3(cam.pos, ...p), dSun = Math.hypot(...p);
-    if (this.scene === 'stars') {
-      const m = this.meta.stars[idx], mCam = M.apparentMag(m.abs, dCam);
-      const bp = m.bp == null || !Number.isFinite(m.bp) ? 'n/a' : m.bp.toFixed(2) + (m.kind === 'ctx' ? ' (from B−V)' : '');
-      const rows = [];
-      if (m.kind === 'gaia') {
-        rows.push(['Distance from Sun', `${fmtNum(m.dlo)}–${fmtNum(m.dhi)} pc · ${fmtNum(m.dlo * LY)}–${fmtNum(m.dhi * LY)} ly`]);
-      } else {
-        rows.push(['Distance from Sun', `${fmtNum(m.d)} pc · ${fmtNum(m.d * LY)} ly`]);
-        rows.push(['Source', 'XHIP parallax']);
-      }
-      rows.push(['From you', `${fmtNum(dCam)} pc · ${fmtNum(dCam * LY)} ly`]);
-      rows.push(['Apparent mag here', mCam.toFixed(2)]);
-      rows.push(['Absolute mag', m.abs.toFixed(2)]);
-      rows.push(['BP−RP', bp]);
-      const title = m.kind === 'gaia' ? (/^Gaia/i.test(m.id) ? m.id : `Gaia DR3 ${m.id}`) : m.name || `HIP ${m.hip}`;
-      return { title, rows };
+  /** In the evidence view the card lists no illustrative rows. */
+  _evRows(rows) { return this.evidence ? rows.filter((r) => r[2] !== 'illustrative') : rows; }
+  _renderCard(sel, pinned) {
+    const onGo = pinned ? () => this._go(sel) : undefined, rel = this._selPos(sel);
+    if (sel.t === 'star') {
+      const m = this.st.meta[sel.idx], md = this._modelFor(sel.idx), s = this._system(sel.idx), dSun = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(sel.idx));
+      const sub = m.kind === 'sun' ? 'The Sun' : m.kind === 'gaia' ? `${fmtNum(dSun)} pc · ${fmtNum(dSun * LY)} ly from the Sun` : 'Bright star (XHIP parallax)';
+      renderStarCard(this.card, md, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo,
+        loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
+    } else if (sel.t === 'planet') {
+      const p = this.planets.find((q) => q.name === sel.name), dSun = Math.hypot(...p.pos);
+      renderBodyCard(this.card, { title: p.name, onGo, rows: this._evRows([
+        ['Radius', `${fmtNum(M.PLANET_KM[p.name] || 0)} km`, 'measured'],
+        ['Distance from Sun', `${fmtNum(dSun)} AU`, 'measured'],
+        ['From you', this._fromYou(rel), 'illustrative'],
+        ['Colour and lighting', 'illustrative', 'illustrative'],
+      ]) });
+    } else {
+      const b = this.bodies[sel.idx];
+      renderBodyCard(this.card, { title: `${b.number != null ? b.number + ' ' : ''}${b.name || 'Small body'}`, onGo, rows: this._evRows([
+        ['Distance from Sun', `${fmtNum(b.dh)} AU`, 'catalogue'], ['Distance from Earth', `${fmtNum(b.dg)} AU`, 'catalogue'],
+        ['From you', this._fromYou(rel), 'illustrative'], ['Visual mag', Number.isFinite(b.vmag) ? b.vmag.toFixed(1) : 'n/a', 'catalogue'],
+        ['Class', b.cls || 'n/a', 'catalogue'],
+      ]) });
     }
-    const m = this.meta.solar[idx];
-    if (m.kind === 'body') {
-      return {
-        title: `${m.number != null ? m.number + ' ' : ''}${m.name || 'Small body'}`,
-        rows: [['Distance from Sun', `${fmtNum(m.dh)} AU`], ['Distance from Earth', `${fmtNum(m.dg)} AU`],
-          ['From you', `${fmtNum(dCam)} AU`], ['Visual mag', Number.isFinite(m.vmag) ? m.vmag.toFixed(1) : 'n/a'], ['Class', m.cls || 'n/a']],
-      };
+  }
+  _updateCard(t) {
+    let sel = null, pinned = false;
+    if (!this.locked) {
+      if (this.sel && this._valid(this.sel)) { sel = this.sel; pinned = true; }
+      else if (this.hover) sel = this._hoverPick();
     }
-    return { title: m.name, rows: [['Distance from Sun', `${fmtNum(dSun)} AU`], ['From you', `${fmtNum(dCam)} AU`]] };
+    const hide = () => { this.card.hidden = true; this._cardT = 0; };
+    if (!sel || !this._valid(sel)) return hide();
+    const key = this._selKey(sel) + (pinned ? 'P' : 'h'), stale = key !== this._cardSig;
+    const busy = pinned && this.card.matches(':hover');           // do not rebuild the card under the pointer (it would eat a click)
+    if (stale || (!busy && t - this._cardT > (pinned ? 1000 : 250)) || this.card.hidden) {
+      this._renderCard(sel, pinned);
+      this._cardSig = key; this._cardT = t;
+    }
+    this.card.hidden = false;
+    this.card.classList.toggle('pinned', pinned);
+    if (pinned) { this.card.style.transform = ''; return; }
+    const p = this._proj(this._selPos(sel));
+    if (!p) return hide();
+    const cw = this.card.offsetWidth || 240, ch = this.card.offsetHeight || 120;
+    let x = p[0] + 16, y = p[1] + 16;
+    if (x + cw > this.cssW - 8) x = p[0] - cw - 16;
+    if (y + ch > this.cssH - 8) y = p[1] - ch - 16;
+    this.card.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, y)}px)`;
   }
   _labelCandidates() {
-    const out = [], cam = this.cam;
-    if (this.scene === 'stars') {
-      const d = this.cpu.stars ? this.cpu.stars.data : null;
-      if (!d) return out;
-      for (const i of this.namedIdx) {
-        const o = 7 * i, p = this._proj(d[o], d[o + 1], d[o + 2]); if (!p) continue;
-        const mag = M.apparentMag(d[o + 3], dist3(cam.pos, d[o], d[o + 1], d[o + 2]));
-        if (mag > 6) continue;
-        out.push({ x: p[0], y: p[1], key: mag, text: this.meta.stars[i].name });
+    const out = [], cam = this.cam, st = this.st;
+    const hostPx = cam.frame === 'system' && !this._inSun() ? this.dyn.get(cam.host.idx) || 0 : 0;   // no labels on top of a star's disc
+    const hostP = hostPx > 20 ? this._proj(F.relFromCam(cam, cam.host.pc)) : null;
+    for (const i of this.namedIdx) {
+      const rel = F.relFromCam(cam, this._starPc(i)), p = this._proj(rel); if (!p) continue;
+      if (hostP && Math.hypot(p[0] - hostP[0], p[1] - hostP[1]) < hostPx * 1.5) continue;
+      const mag = M.apparentMag(st.gal[7 * i + 3], Math.hypot(...rel) / F.unitsPerPc(cam));
+      if (mag > 6) continue;
+      out.push({ x: p[0], y: p[1], key: mag, text: st.meta[i].name });
+    }
+    if (this._inSun()) {
+      for (const pl of this.planets) {
+        const p = this._proj(sub3(pl.pos, cam.pos)); if (!p || (this.dyn.get('p:' + pl.name) || 0) > 30) continue;   // no label on a visible disc
+        out.push({ x: p[0], y: p[1], key: pl.kind === 'moon' ? 50 : 0, text: pl.name });   // Earth wins over the Moon beside it
       }
-      return out;
+      const bodies = [];
+      this.bodies.forEach((b) => {
+        const p = this._proj(sub3(b.pos, cam.pos)); if (!p) return;
+        bodies.push({ x: p[0], y: p[1], key: 100 + (Number.isFinite(b.vmag) ? b.vmag : 30), text: b.name || `(${b.number})` });
+      });
+      return out.concat(bodies.sort((a, b) => a.key - b.key).slice(0, MAX_BODY_LABELS));
     }
-    const g = this.cpu.points; if (!g) return out;
-    const d = g.data, bodies = [];
-    for (let i = 0; i < g.n; i++) {
-      const m = this.meta.solar[i]; if (!m) continue;
-      const p = this._proj(d[8 * i], d[8 * i + 1], d[8 * i + 2]); if (!p) continue;
-      if (m.kind === 'body') {
-        const text = m.name || `(${m.number})`;
-        bodies.push({ x: p[0], y: p[1], key: 100 + (Number.isFinite(m.vmag) ? m.vmag : 30), text });
-      } else out.push({ x: p[0], y: p[1], key: m.kind === 'moon' ? 50 : 0, text: m.name });   // Earth wins over the Moon beside it
-    }
-    return out.concat(bodies.sort((a, b) => a.key - b.key).slice(0, MAX_BODY_LABELS));
+    return out;
   }
   _overlay(t) {
     const lab = this.lab, W = this.cssW, H = this.cssH, dpr = this.dpr;
@@ -639,46 +927,35 @@ export class Scene3D {
       lab.fillText(L.text, L.x + 8, L.y);
     }
     lab.shadowBlur = 0;
+    if (this.sel && this._valid(this.sel)) {                      // ring around the selected object while it is still a speck
+      const p = this._proj(this._selPos(this.sel)), px = this.dyn.get(this.sel.t === 'star' ? this.sel.idx : 'p:' + this.sel.name) || 0;
+      if (p && px < 14) { lab.strokeStyle = 'rgba(242, 184, 75, 0.85)'; lab.lineWidth = 1.5; lab.beginPath(); lab.arc(p[0], p[1], 11, 0, Math.PI * 2); lab.stroke(); }
+    }
+    if (this.locked) {                                            // crosshair
+      const cx = W / 2, cy = H / 2;
+      lab.strokeStyle = 'rgba(233, 230, 223, 0.7)'; lab.lineWidth = 1;
+      lab.beginPath(); lab.moveTo(cx - 8, cy); lab.lineTo(cx - 3, cy); lab.moveTo(cx + 3, cy); lab.lineTo(cx + 8, cy);
+      lab.moveTo(cx, cy - 8); lab.lineTo(cx, cy - 3); lab.moveTo(cx, cy + 3); lab.lineTo(cx, cy + 8); lab.stroke();
+    }
     this._updateCard(t);
     this._hud(t);
   }
-  _updateCard(t) {
-    let idx = -1;
-    if (!this.locked) {
-      if (this.pinIdx >= 0) idx = this.pinIdx;
-      else if (this.hover) idx = this._hoverPick();
-    }
-    const hide = () => { this.card.hidden = true; this._cardT = 0; };
-    if (idx < 0) return hide();
-    const stale = (this.scene === 'stars' ? !this.meta.stars[idx] : !this.meta.solar[idx]);
-    if (stale) return hide();
-    const p = this._proj(...this._posOf(idx));
-    if (!p) return hide();
-    if (t - this._cardT > 250 || this.card.hidden) {
-      const info = this._info(idx);
-      const title = document.createElement('p'); title.className = 'card-title'; title.textContent = info.title;
-      const dl = document.createElement('dl'); dl.className = 'card-rows';
-      for (const [k, v] of info.rows) {
-        const dt = document.createElement('dt'), dd = document.createElement('dd');
-        dt.textContent = k; dd.textContent = v; dl.append(dt, dd);
-      }
-      this.card.replaceChildren(title, dl);
-      this._cardT = t;
-    }
-    this.card.hidden = false;
-    const cw = this.card.offsetWidth || 240, ch = this.card.offsetHeight || 120;
-    let x = p[0] + 16, y = p[1] + 16;
-    if (x + cw > this.cssW - 8) x = p[0] - cw - 16;
-    if (y + ch > this.cssH - 8) y = p[1] - ch - 16;
-    this.card.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, y)}px)`;
+  _hudData() {
+    const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest();
+    return {
+      scene: this.scene, frame: cam.frame, unit: inSys ? 'AU' : 'pc',
+      hostName: inSys ? near.name : null,
+      surfaceAu: inSys ? near.au : null,
+      sunPc: F.worldPc(cam), speed: cam.speed, ev: Math.log2(this.expo),
+      limit: this.limit, locked: this.locked, counts: { ...this.counts }, evidence: this.evidence,
+      flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
+    };
   }
   _hud(t) {
     if (t - this._hudT < 250) return;
     this._hudT = t;
-    const cam = this.cam;
-    this.hooks.onHud({
-      scene: this.scene, unit: CFG[this.scene].unit, dist: Math.hypot(...cam.pos), speed: cam.speed,
-      limit: this.limit, locked: this.locked, counts: { ...this.counts },
-    });
+    const h = this._hudData();
+    h.dist = Math.hypot(...h.sunPc);
+    this.hooks.onHud(h);
   }
 }

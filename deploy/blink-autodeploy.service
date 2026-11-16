@@ -1,0 +1,10 @@
+[Unit]
+Description=Deploy the latest SPHEREx Blink commit from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BRANCH=main
+ExecStart=/usr/local/sbin/blink-autodeploy
+TimeoutStartSec=15min

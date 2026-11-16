@@ -340,6 +340,51 @@ def scene3d_payload(ra, dec, radius, limit, mjd):
                 solar=dict(earth=[round(e, 6) for e in earth], sun=[0, 0, 0], planets=planets, bodies=bodies, bodies_error=None))
 
 
+# ---- /api/system/<id>: deterministic synthetic stellar parameters (hash of the id) ----
+def _sv(v, src, tier, lo=None, hi=None):
+    return dict(v=v, lo=lo, hi=hi, src=src, tier=tier)
+
+def system_payload(sid):
+    if sid == "sun":
+        iau = "IAU 2015 nominal"
+        vals = {k: None for k in ("dist_pc", "g_mag", "bp_rp", "teff_k", "radius_rsun", "lum_lsun", "mass_msun", "age_gyr", "logg", "spectral_type", "wd_prob")}
+        for k, v in (("teff_k", 5772.0), ("radius_rsun", 1.0), ("lum_lsun", 1.0), ("mass_msun", 1.0), ("age_gyr", 4.57), ("logg", 4.438)):
+            vals[k] = _sv(v, iau, "measured")
+        vals["spectral_type"] = dict(v="G2V", src=iau, tier="measured")
+        return dict(id="sun", name="Sun", ra=None, dec=None, values=vals, planets=[], companions=[], notes=[])
+    rng = random.Random(f"system/{sid}")
+    teff = round(math.exp(rng.uniform(math.log(2800), math.log(30000))))
+    giant = rng.random() < 0.12
+    if giant:
+        radius = round(math.exp(rng.uniform(math.log(8), math.log(200))), 3)
+    else:
+        radius = round(max(0.1, (teff / 5772.0) ** 1.6 * rng.uniform(0.8, 1.2)), 3)
+    lum = round(radius ** 2 * (teff / 5772.0) ** 4, 5)
+    mass = round(max(0.08, min(40.0, lum ** 0.25 * rng.uniform(0.9, 1.1) if not giant else rng.uniform(0.8, 5))), 3)
+    logg = round(4.438 + math.log10(mass) - 2 * math.log10(radius), 3)
+    have_flame = rng.random() >= 0.30
+    cat = "catalogue"
+    spec = "OBAFGKM"[min(6, max(0, int((8000 / max(teff, 2000)) ** 1.0 * 1.2)))] if teff > 25000 or rng.random() < 0.3 else None
+    d = round(math.exp(rng.uniform(math.log(2), math.log(4000))), 3)
+    f = rng.uniform(0.05, 0.2)
+    hs = teff > 25000
+    vals = dict(
+        dist_pc=_sv(d, "Bailer-Jones 2021 (geometric)", "measured", round(d * (1 - f), 3), round(d * (1 + f), 3)),
+        g_mag=_sv(round(rng.uniform(6, 19), 4), "Gaia DR3 photometry", "measured"),
+        bp_rp=_sv(round(rng.uniform(-0.4, 3.5), 4), "Gaia DR3 photometry", "measured"),
+        teff_k=_sv(float(teff), "Gaia DR3 ESP-HS" if hs else "Gaia DR3 GSP-Phot", cat, round(teff * 0.97, 1), round(teff * 1.03, 1)),
+        radius_rsun=_sv(radius, "Gaia DR3 FLAME" if have_flame else "Gaia DR3 GSP-Phot", cat, round(radius * 0.93, 4), round(radius * 1.07, 4)),
+        lum_lsun=_sv(lum, "Gaia DR3 FLAME", cat, round(lum * 0.85, 5), round(lum * 1.15, 5)) if have_flame else None,
+        mass_msun=_sv(mass, "Gaia DR3 FLAME", cat, round(mass * 0.95, 4), round(mass * 1.05, 4)) if have_flame else None,
+        age_gyr=_sv(round(rng.uniform(0.1, 12), 3), "Gaia DR3 FLAME", cat, None, None) if have_flame else None,
+        logg=_sv(logg, "Gaia DR3 GSP-Phot", cat, round(logg - 0.1, 3), round(logg + 0.1, 3)),
+        spectral_type=dict(v=spec, src="Gaia DR3 ESP-HS", tier=cat) if spec else None,
+        wd_prob=_sv(round(rng.random() ** 8, 6), "Gaia DR3 DSC", cat),
+    )
+    notes = [] if have_flame else ["FLAME mass not available for this star", "FLAME age not available for this star", "FLAME luminosity not available for this star"]
+    return dict(id=sid, name=None, ra=round(rng.uniform(0, 360), 5), dec=round(rng.uniform(-90, 90), 5), values=vals, planets=[], companions=[], notes=notes)
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -440,6 +485,10 @@ class H(BaseHTTPRequestHandler):
             if not (0 < radius <= 30): return self.send_json({"detail": "radius must be in (0, 30] degrees"}, 400)
             if limit < 1: return self.send_json({"detail": "limit must be at least 1"}, 400)
             return self.send_json(scene3d_payload(ra, dec, radius, limit, mjd))
+        if ep.startswith('system/'):
+            sid = ep[7:].strip('/')
+            if sid != 'sun' and not sid.isdigit(): return self.send_json({"detail": "source_id must be a Gaia source id (digits) or 'sun'"}, 400)
+            return self.send_json(system_payload(sid))
         if ep.startswith('movers/'): return self.movers(ep[7:], p)
         ra = float(p.get('ra', 0)); dec = float(p.get('dec', 0))
         if ep == 'frames':

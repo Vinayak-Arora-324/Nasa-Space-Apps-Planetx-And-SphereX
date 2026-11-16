@@ -1,0 +1,32 @@
+[Unit]
+Description=SPHEREx Blink (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=blink
+Group=blink
+WorkingDirectory=/opt/blink/app
+Environment=HOME=/opt/blink
+Environment=SPHEREX_CACHE_DIR=/var/lib/blink/cache
+Environment=SPHEREX_LOG_LEVEL=INFO
+# One worker: frame/mover state and in-memory caches live in the process.
+ExecStart=/usr/local/bin/uv run --frozen --no-dev uvicorn spherex_app.main:app \
+    --app-dir backend --host 127.0.0.1 --port 8000 \
+    --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-keep-alive 75
+Restart=always
+RestartSec=3
+# Keep the box (and SSH) alive if a job balloons: the app is killed and restarted instead.
+MemoryHigh=2800M
+MemoryMax=3200M
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/blink /opt/blink
+
+[Install]
+WantedBy=multi-user.target

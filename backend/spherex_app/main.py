@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import numpy as np
 
-from . import archive, cache, catalogs, config, processing, scene3d
+from . import archive, cache, catalogs, config, processing, scene3d, system3d
 from .archive import Frame, UpstreamError
 from .geometry import Grid, mjd_to_jyear, npix_for, propagate, std_to_sky
 
@@ -617,6 +617,16 @@ async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 2
     return _clean(await scene3d.build_scene(ra, dec, radius, limit, mjd))
 
 
+@app.get("/api/system/{source_id}")
+async def get_system(source_id: str):
+    sid = source_id.strip()
+    if sid.lower() == "sun":
+        sid = "sun"
+    elif not (sid.isascii() and sid.isdigit() and len(sid) <= 19):
+        _bad("source_id must be a Gaia source id (digits) or 'sun'")
+    return _clean(await system3d.get_system(sid))
+
+
 # --- static frontend (served at /, tolerant of a missing directory) -------------------------
 
 from . import movers_api  # noqa: E402  (router must be registered before the catch-all)
@@ -640,7 +650,9 @@ async def static(path: str):
     if target.is_dir():
         target = target / "index.html"
     if target.is_file():
-        return FileResponse(target)
+        # Revalidate every time (a cheap 304 via the ETag) so a new deploy's JS/CSS is picked up at once,
+        # instead of the browser heuristically reusing a stale module for hours.
+        return FileResponse(target, headers={"Cache-Control": "no-cache"})
     if path in ("", "index.html"):
         return JSONResponse({"detail": f"frontend not built yet ({root} has no index.html); "
                                        "the API is under /api/"}, status_code=404)

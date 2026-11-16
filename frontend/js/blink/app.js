@@ -4,9 +4,10 @@ import { PatchView, MODES } from './patch.js';
 import { FlyController, reduceMotion } from './fly.js';
 import { SearchJob, loadCoverage, dirName } from './movers.js';
 import { Rewind, RewindPanel } from './rewind.js';
+import { TimeSlider, fmtTaken, fmtAgo, fmtSpan, fmtVisit } from './timeslider.js';
 import { resolve } from '../api.js';
 import { BANDS } from '../data.js';
-import { mjdToDate, propagate } from '../wcs.js';
+import { propagate } from '../wcs.js';
 import {
   clamp, smooth, wrap360, separation, parseRA, parseDec, fmtRA, fmtDec, fmtDeg, RA_ERROR, DEC_ERROR, readUrlState, writeUrlState, el,
 } from './util.js';
@@ -299,7 +300,7 @@ async function flyTo(ra, dec, name, named = null) {
   S.pending = patch.begin(target); S.committed = false;
   if (!inPatch && patch.session) patch.deactivate();
   S.flyMix = inPatch ? 1 : 0; S.readyFade = inPatch ? S.readyFade : 0;
-  if (!inPatch) { stripKey = ''; $('strip').replaceChildren(); $('play-dock').classList.add('empty'); }
+  if (!inPatch) { stripKey = ''; slider.build(); $('play-dock').classList.add('empty'); }
   root.classList.add('flying');
   fillCoords(target.ra, target.dec, name);
   S.target = target; S.fading = false;
@@ -490,7 +491,24 @@ $('q-form').addEventListener('keydown', (e) => {
   }
 });
 
-// ---- frame strip ----
+// ---- time slider: every exposure on a broken time axis, one segment per visit ----
+const slider = new TimeSlider($('timeline'), {
+  frames: () => patch.frames,
+  pos: () => patch.pos,
+  focused: () => patch.loopVisit,
+  pause: () => { patch.setPlaying(false); syncPlay(); },
+  seek: (pos, { snap }) => {
+    const had = patch.loopVisit;
+    patch.seek(patch.mode === 'video' && !snap ? pos : Math.round(pos));
+    if (had !== patch.loopVisit) slider.build(true);
+    syncPlay(); updateTimeLabels();
+  },
+  focusVisit: (v) => {
+    patch.setLoopVisit(v); slider.build(true);
+    const [lo, hi] = patch.bounds();
+    patch.setPlaying(hi > lo && !reduceMotion()); syncPlay(); updateTimeLabels();
+  },
+});
 let stripQueued = false, stripKey = '';
 function scheduleStrip(force) {
   if (force) stripKey = '';
@@ -498,43 +516,41 @@ function scheduleStrip(force) {
   requestAnimationFrame(() => { stripQueued = false; buildStrip(); });
 }
 function buildStrip() {
-  const F = patch.frames, strip = $('strip');
+  const F = patch.frames;
   const key = F.map((f) => f.id).join('|');
   $('play-dock').classList.toggle('empty', F.length === 0);
   if (key === stripKey) return;
+  // a newly streamed frame can renumber the visits: drop a focus that no longer names the same frames
+  if (patch.loopVisit !== null && patch.session && patch.loopVisit >= patch.session.visits) patch.setLoopVisit(null);
   stripKey = key;
-  strip.replaceChildren(...F.map((f, i) => {
-    const d = mjdToDate(f.mjd);
-    return el('button', {
-      type: 'button', class: i && f.visit !== F[i - 1].visit ? 'gap' : '', 'data-i': i,
-      'aria-label': `Go to frame ${i + 1} of ${F.length}`, title: `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
-    });
-  }));
+  slider.build();
   patch.lastIdx = -1; syncPlay();
-  $('play-dock').classList.toggle('empty', F.length === 0);
   const nv = patch.session ? patch.session.visits : 0;
-  $('load-line').textContent = F.length ? `${F.length} exposure${F.length === 1 ? '' : 's'}${nv > 1 ? ` in ${nv} visits` : ''}${patch.session && patch.session.failed ? ` · ${patch.session.failed} failed to load` : ''}` : '';
+  const span = F.length > 1 ? ` · ${fmtVisit(F[0].mjd, F[F.length - 1].mjd)}` : '';
+  $('load-line').textContent = F.length ? `${F.length} exposure${F.length === 1 ? '' : 's'}${nv > 1 ? ` in ${nv} visits` : ''}${span}${patch.session && patch.session.failed ? ` · ${patch.session.failed} failed to load` : ''}` : '';
 }
-$('strip').addEventListener('click', (e) => {
-  const b = e.target.closest('button'); if (!b) return;
-  patch.seek(+b.dataset.i); syncPlay();
-});
-function onFrameIndex(i, st, f) {
-  const strip = $('strip'), kids = strip.children, n = kids.length;
-  if (n !== patch.n) buildStrip();
-  for (let k = 0; k < kids.length; k++) {
-    const c = kids[k]; c.classList.toggle('cur', k === i); c.classList.toggle('past', k < i);
-    k === i ? c.setAttribute('aria-current', 'true') : c.removeAttribute('aria-current');
-  }
-  $('frame-label').textContent = `Frame ${String(i + 1).padStart(2, '0')} / ${String(patch.n).padStart(2, '0')}`;
+function onFrameIndex() {
+  if (slider.n !== patch.n) buildStrip();
+  updateTimeLabels();
 }
+/** The shown exposure's real time, how long ago that was, and how far into the sequence it sits. */
 function updateTimeLabels() {
-  const F = patch.frames; if (!F.length) { $('elapsed-label').textContent = ''; $('visit-label').textContent = ''; return; }
+  const F = patch.frames;
+  if (!F.length) { for (const id of ['elapsed-label', 'visit-label', 'taken-label', 'ago-label']) $(id).textContent = ''; return; }
   const st = patch._state(); if (!st) return;
-  const dt = st.mjd - F[0].mjd;
-  $('elapsed-label').textContent = patch.n < 2 ? 'T + 0 d' : dt < 1 ? `T + ${(dt * 24).toFixed(1)} h` : `T + ${dt.toFixed(1)} d`;
-  const f = F[st.nearest], nv = patch.session.visits;
-  $('visit-label').textContent = `${nv > 1 ? `Visit ${f.visit + 1}/${nv} · ` : ''}${mjdToDate(f.mjd).toISOString().slice(0, 10)}`;
+  const i = st.nearest, f = F[i], nv = patch.session.visits, [lo, hi] = patch.bounds();
+  const n2 = (v) => String(v).padStart(2, '0');
+  $('frame-label').textContent = patch.loopVisit !== null ? `Frame ${n2(i - lo + 1)} / ${n2(hi - lo + 1)}` : `Frame ${n2(i + 1)} / ${n2(patch.n)}`;
+  // while frames crossfade in video mode, say so instead of naming a moment no photo was taken
+  const between = patch.mode === 'video' && st.b !== null && st.t > 0.08 && st.t < 0.92 && F[st.b].visit !== F[st.a].visit;
+  $('taken-label').textContent = between ? `between visits ${F[st.a].visit + 1} and ${F[st.b].visit + 1}` : fmtTaken(f.mjd);
+  $('ago-label').textContent = between ? '' : fmtAgo(f.mjd);
+  const dt = f.mjd - F[lo].mjd;
+  $('elapsed-label').textContent = patch.n < 2 || dt <= 0 ? 'T + 0' : `T + ${fmtSpan(dt)}`;
+  $('elapsed-label').title = patch.loopVisit !== null ? 'Time since the first exposure of this visit' : 'Time since the first exposure';
+  $('visit-label').textContent = nv > 1 ? `Visit ${f.visit + 1} / ${nv}${patch.loopVisit !== null ? ' · looping' : ''}` : '';
+  const exp = f.meta && isFinite(f.meta.exptime) ? `, ${Math.round(f.meta.exptime)} s exposure` : '';
+  slider.set(patch.pos, st.nearest, `Frame ${st.nearest + 1} of ${patch.n}, taken ${fmtTaken(f.mjd)}${nv > 1 ? `, visit ${f.visit + 1} of ${nv}` : ''}${exp}`);
 }
 
 // ---- movers list + search ----
@@ -724,6 +740,7 @@ function loop(now) {
   octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, W, H);
   if (S.uiVisible && patch.opacity < 0.5 && S.view !== 'patch' && !rewind.active) drawMarkers(octx, W, H);
   patch.frame(dt, octx, dpr, S.uiVisible);
+  if (S.view === 'patch' && patch.n) { const st = patch._state(); if (st) slider.set(patch.pos, st.nearest); }
   rewind.frame(dt, octx, W, H, dpr);
 
   if (now - tick5 > 200) { tick5 = now; updateReadouts(false); updateTimeLabels(); }

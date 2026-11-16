@@ -3,6 +3,7 @@ name = "spherex-sky-viewer"
 version = "0.1.0"
 description = "Backend for a SPHEREx time-series sky viewer (NASA Space Apps)"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi>=0.115",

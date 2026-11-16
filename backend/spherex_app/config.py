@@ -37,6 +37,42 @@ GAIA_ADQL = (
     "FROM gaiadr3.gaia_source WHERE 1=CONTAINS(POINT('ICRS',ra,dec),"
     "CIRCLE('ICRS',{ra:.7f},{dec:.7f},{r:.6f})) ORDER BY phot_g_mean_mag"
 )
+#  3D fly-through (/api/scene3d): Gaia DR3 stars with Bailer-Jones (2021) geometric distances.
+#  parallax_over_error > 5 keeps the distances meaningful. Columns: r_med_geo, r_lo_geo, r_hi_geo (pc).
+GAIA3D_ADQL = (
+    "SELECT TOP {n} g.source_id, g.ra, g.dec, g.phot_g_mean_mag, g.bp_rp, "
+    "d.r_med_geo, d.r_lo_geo, d.r_hi_geo "
+    "FROM gaiadr3.gaia_source AS g JOIN external.gaiaedr3_distance AS d ON g.source_id = d.source_id "
+    "WHERE 1=CONTAINS(POINT('ICRS',g.ra,g.dec),CIRCLE('ICRS',{ra:.7f},{dec:.7f},{r:.6f})) "
+    "AND g.parallax_over_error > 5 AND g.phot_g_mean_mag IS NOT NULL "
+    "ORDER BY g.phot_g_mean_mag"
+)
+# 3D scene star sources. "gavo" (GAVO Data Center, EDR3 lite + Bailer-Jones, one table, fast)
+# is the default; "ari" (ARI Heidelberg, EDR3 + Bailer-Jones join) is a second single-query
+# mirror; "esa" is the ESA Gaia archive, queried in tiles (its sync endpoint aborts queries
+# that run past about a minute). A failing single-query source falls back to the ESA tiles.
+GAIA3D_SOURCES = ("gavo", "ari", "esa")
+GAIA3D_SOURCE = _env("SPHEREX_GAIA3D_SOURCE", "gavo").strip().lower()
+if GAIA3D_SOURCE not in GAIA3D_SOURCES:
+    raise ValueError(f"SPHEREX_GAIA3D_SOURCE must be one of {GAIA3D_SOURCES}")
+GAVO_TAP_SYNC = _env("SPHEREX_GAVO_TAP", "https://dc.zah.uni-heidelberg.de/tap/sync")
+ARI_TAP_SYNC = _env("SPHEREX_ARI_TAP", "https://gaia.ari.uni-heidelberg.de/tap/sync")
+GAVO3D_ADQL = (
+    "SELECT TOP {n} source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, "
+    "r_med_geo, r_lo_geo, r_hi_geo FROM gedr3dist.litewithdist "
+    "WHERE 1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',{ra:.7f},{dec:.7f},{r:.6f})) "
+    "AND parallax/parallax_error > 5 AND phot_g_mean_mag IS NOT NULL "
+    "ORDER BY phot_g_mean_mag"
+)
+# ARI's ADQL parser rejects a table-qualified column in ORDER BY, hence the bare name.
+ARI3D_ADQL = (
+    "SELECT TOP {n} g.source_id, g.ra, g.dec, g.phot_g_mean_mag, g.bp_rp, "
+    "d.r_med_geo, d.r_lo_geo, d.r_hi_geo "
+    "FROM gaiaedr3.gaia_source AS g JOIN gaiaedr3_complements.distances AS d ON g.source_id = d.source_id "
+    "WHERE 1=CONTAINS(POINT('ICRS',g.ra,g.dec),CIRCLE('ICRS',{ra:.7f},{dec:.7f},{r:.6f})) "
+    "AND g.parallax_over_error > 5 AND g.phot_g_mean_mag IS NOT NULL "
+    "ORDER BY phot_g_mean_mag"
+)
 CATWISE_ADQL = (
     "SELECT TOP 2000 source_name, ra, dec, pmra, pmdec, w1mpro_pm, w2mpro_pm, meanobsmjd "
     "FROM catwise_2020 WHERE CONTAINS(POINT('ICRS',ra,dec),"
@@ -84,6 +120,11 @@ CATALOG_FAIL_TTL_S = float(_env("SPHEREX_CATALOG_FAIL_TTL", "600"))
 # Catalogue TAP queries (CatWISE can take > 400 s): their own read timeout and attempt count.
 CATALOG_READ_TIMEOUT_S = float(_env("SPHEREX_CATALOG_READ_TIMEOUT", "900"))
 CATALOG_RETRY_ATTEMPTS = int(_env("SPHEREX_CATALOG_RETRY_ATTEMPTS", "2"))
+# 3D scene star query (Gaia + Bailer-Jones join, can be slow on the ESA TAP server)
+GAIA3D_READ_TIMEOUT_S = float(_env("SPHEREX_GAIA3D_READ_TIMEOUT", "120"))
+GAIA3D_TILE_CONCURRENCY = int(_env("SPHEREX_GAIA3D_TILE_CONCURRENCY", "2"))  # ESA tiles at once
+# A tile (ESA path) that failed is skipped for this long instead of being queried again.
+GAIA3D_TILE_FAIL_TTL_S = float(_env("SPHEREX_GAIA3D_TILE_FAIL_TTL", "600"))
 RESOLVE_TTL_S = float(_env("SPHEREX_RESOLVE_TTL", "86400"))
 CUTOUT_SIZE_FACTOR = 1.45  # cutout size = fov * factor, to fill a north-up square at any roll
 CUTOUT_SIZE_QUANTUM_DEG = 0.01  # round cutout size up to this so cache keys repeat

@@ -96,3 +96,5 @@ export async function streamFrames(params, { signal, onStart, onFrame, onEnd, on
   }
   if (!ended || pos !== len) throw new Error('The frame stream ended before it was complete. Retry to load the remaining frames.');
 }
+/** 3D fly-through payload: stars (Gaia cone) and solar system. Cold cache can take 30 to 90 s. */
+export const getScene3D = (params, signal) => getJSON('/api/scene3d', params, signal);

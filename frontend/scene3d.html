@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inside the patch · 3D fly-through</title>
+<meta name="description" content="Fly through the Gaia stars and the solar system around a patch of the sky.">
+<meta name="theme-color" content="#05070B">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305070B'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23F2B84B'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/blink.css">
+<link rel="stylesheet" href="css/scene3d.css">
+</head>
+<body>
+<main class="scene3d">
+  <canvas id="gl" class="layer gl" role="img" aria-label="3D view of the sky around the patch. Click the sky to fly, then use W A S D to move."></canvas>
+  <canvas id="labels" class="layer labels" aria-hidden="true"></canvas>
+  <div id="card" class="card" hidden></div>
+
+  <header class="hud">
+    <h1 class="title">Inside the patch</h1>
+    <p id="coords" class="coords mono"></p>
+    <dl class="readout">
+      <div><dt>Scene</dt><dd id="hud-scene">Stars</dd></div>
+      <div><dt>From the Sun</dt><dd id="hud-dist" class="mono">0 pc</dd></div>
+      <div><dt>Speed</dt><dd id="hud-speed" class="mono"></dd></div>
+      <div><dt>Objects</dt><dd id="hud-count" class="mono"></dd></div>
+      <div data-only="stars"><dt>Limit</dt><dd id="hud-limit" class="mono"></dd></div>
+    </dl>
+    <p class="note" data-only="stars">Gaia data only inside a <span id="cone-r">3</span>° cone around the patch. The rest of the sky shows the bright stars from the XHIP catalogue.</p>
+    <div data-only="stars"><p id="warn" class="note warn" hidden></p></div>
+    <p id="note" class="note" hidden></p>
+  </header>
+
+  <div id="status" class="status" role="status" aria-live="polite" hidden>
+    <p id="status-text" class="status-text"></p>
+    <button type="button" id="status-retry" class="btn" hidden>Try again</button>
+  </div>
+
+  <div id="help" class="help" role="dialog" aria-modal="false" aria-labelledby="help-title" hidden>
+    <div class="help-card">
+      <h2 id="help-title" class="help-title">Fly through the patch</h2>
+      <p class="help-line">Click to fly · WASD to move · wheel to change speed · Tab switches scene</p>
+      <ul class="help-list">
+        <li>Esc releases the mouse. H returns to the start view. [ and ] change the magnitude limit.</li>
+        <li>Shift goes ten times faster. R and Space go up, F goes down.</li>
+        <li>Touch: one finger looks around, two fingers pinch to move, a tap names a star.</li>
+      </ul>
+      <button type="button" id="help-start" class="btn accent">Start</button>
+    </div>
+  </div>
+
+  <p id="hint" class="hint" aria-live="polite">Click the sky to fly</p>
+
+  <nav class="bottom" aria-label="Scene and view controls">
+    <div class="pills" role="group" aria-label="Scene">
+      <button type="button" class="pill scene-btn" id="btn-stars" data-scene="stars" aria-pressed="true">Stars</button>
+      <button type="button" class="pill scene-btn" id="btn-solar" data-scene="solar" aria-pressed="false" disabled>Solar system</button>
+    </div>
+    <button type="button" class="btn quiet" id="btn-reset">Reset view</button>
+    <a class="btn quiet" id="btn-back" href="./">Back to Blink</a>
+  </nav>
+</main>
+<noscript><p class="noscript">The 3D view needs JavaScript.</p></noscript>
+<script type="module" src="js/blink/scene3d-main.js"></script>
+</body>
+</html>

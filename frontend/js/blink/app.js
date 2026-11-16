@@ -449,6 +449,10 @@ $('btn-rings').addEventListener('click', () => {
   const b = $('btn-rings'); b.setAttribute('aria-pressed', String(patch.rings)); b.textContent = patch.rings ? 'Movers ringed' : 'Ring the movers';
 });
 $('btn-back').addEventListener('click', leaveToSphere);
+$('btn-3d').addEventListener('click', () => {
+  const t = S.target; if (!t || S.view !== 'patch') return;
+  location.href = `scene3d.html?ra=${fmtDeg(t.ra)}&dec=${fmtDeg(t.dec)}`;
+});
 $('btn-zoom-in').addEventListener('click', () => zoomButton(0.55));
 $('btn-zoom-out').addEventListener('click', () => zoomButton(1.8));
 $('btn-open-centre').addEventListener('click', () => { if (fly.active || rewind.active) return; const c = sphere.readCamera(); S.drifting = false; flyTo(c.ra, c.dec); });

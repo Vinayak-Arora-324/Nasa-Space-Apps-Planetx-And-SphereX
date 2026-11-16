@@ -105,3 +105,9 @@ node --test frontend/tests/skygl.test.mjs frontend/tests/skytime.test.mjs fronte
 - [Technical Reference](docs/technical-reference.md) — Environment variables, cache layout, IRSA/S3 cutout details, API endpoint contracts, benchmarks, and known limitations.
 - [Blink Architecture](docs/blink-architecture.md) — Streaming record format, source fitting contract, and renderer pipeline.
 - [Blink UI Spec](docs/blink-ui-spec.md) — Interaction design and visual specification.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).

@@ -82,3 +82,12 @@ test('fmtValue and tier tables', () => {
   assert.equal(P.fmtValue(1.234, 'R☉', 2), '1.23 R☉');
   assert.deepEqual(Object.keys(P.TIER_INFO), P.TIERS);
 });
+
+test('distance keeps its measured provenance', () => {
+  const system = { values: { dist_pc: { v: 149.16, lo: 140, hi: 158, src: 'Bailer-Jones 2021 (geometric)', tier: 'measured' } } };
+  const a = P.starModel({ system, distPc: 149.1607, absG: 4, bpRp: 0.8, kind: 'gaia' });
+  assert.equal(a.distPc.tier, 'measured'); assert.equal(a.distPc.v, 149.16);
+  const b = P.starModel({ distPc: 25, absG: 1, bpRp: 0.5, kind: 'ctx' });
+  assert.equal(b.distPc.tier, 'measured'); assert.match(b.distPc.src, /Hipparcos/);
+  assert.equal(b.bpRp.tier, 'inferred');
+});

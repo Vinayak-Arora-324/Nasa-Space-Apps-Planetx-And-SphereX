@@ -23,10 +23,15 @@ export const PLACES = [
   { id: 'karnak', region: 'Africa', label: 'Karnak, Luxor', lat: 25.7188, lon: 32.6573 },
   { id: 'alexandria', region: 'Africa', label: 'Alexandria, Egypt', lat: 31.2001, lon: 29.9187 },
 
-  { id: 'gaza', region: 'Middle East', label: 'Gaza City', lat: 31.5017, lon: 34.4668 },
-  { id: 'jerusalem', region: 'Middle East', label: 'Jerusalem', lat: 31.7780, lon: 35.2354 },
-  { id: 'ramla', region: 'Middle East', label: 'Ramla', lat: 31.9275, lon: 34.8625 },
-  { id: 'ramallah', region: 'Middle East', label: 'Ramallah', lat: 31.9038, lon: 35.2034 },
+  { id: 'gaza', region: 'Levant', label: 'Gaza City', lat: 31.5017, lon: 34.4668 },
+  { id: 'jerusalem', region: 'Levant', label: 'Jerusalem', lat: 31.7780, lon: 35.2354 },
+  { id: 'ramla', region: 'Levant', label: 'Ramla', lat: 31.9275, lon: 34.8625 },
+  { id: 'ramallah', region: 'Levant', label: 'Ramallah', lat: 31.9038, lon: 35.2034 },
+  { id: 'beirut', region: 'Levant', label: 'Beirut', lat: 33.8938, lon: 35.5018 },
+  { id: 'damascus', region: 'Levant', label: 'Damascus', lat: 33.5116, lon: 36.3066 },
+  { id: 'aleppo', region: 'Levant', label: 'Aleppo', lat: 36.1993, lon: 37.1625 },
+  { id: 'istanbul', region: 'Levant', label: 'Istanbul', lat: 41.0086, lon: 28.9802 },
+
   { id: 'mecca', region: 'Middle East', label: 'Mecca', lat: 21.4225, lon: 39.8262 },
   { id: 'tehran', region: 'Middle East', label: 'Tehran', lat: 35.6892, lon: 51.3890 },
 
@@ -45,7 +50,6 @@ export const PLACES = [
   { id: 'sparta', region: 'Europe', label: 'Sparta', lat: 37.0755, lon: 22.4303 },
   { id: 'rome', region: 'Europe', label: 'Rome', lat: 41.8902, lon: 12.4922 },
   { id: 'sicily', region: 'Europe', label: 'Syracuse, Sicily', lat: 37.0755, lon: 15.2866 },
-  { id: 'istanbul', region: 'Europe', label: 'Istanbul', lat: 41.0086, lon: 28.9802 },
   { id: 'tirana', region: 'Europe', label: 'Tirana', lat: 41.3275, lon: 19.8187 },
   { id: 'barcelona', region: 'Europe', label: 'Barcelona', lat: 41.3874, lon: 2.1686 },
   { id: 'london', region: 'Europe', label: 'London (Greenwich)', lat: 51.4779, lon: -0.0015 },

@@ -133,7 +133,8 @@ export function starModel(input = {}) {
   const bpRp = fin(input.bpRp) ? input.bpRp : bpRpV ? bpRpV.v : null;
   const gV = pick(vals.g_mag);
   const distV = pick(vals.dist_pc);
-  const distPc = fin(input.distPc) ? input.distPc : distV ? distV.v : null;
+  // The system payload's value keeps its provenance; the renderer's own copy is only a fallback.
+  const distPc = distV ? distV.v : fin(input.distPc) ? input.distPc : null;
   let absG = fin(input.absG) ? input.absG : null;
   if (absG === null && gV && distPc > 0) absG = gV.v - 5 * Math.log10(distPc) + 5;
 
@@ -181,9 +182,18 @@ export function starModel(input = {}) {
   const age = pick(vals.age_gyr); if (age) out.ageGyr = age;
   const st = vals.spectral_type;
   if (st && typeof st.v === 'string') out.spectralType = { v: st.v, src: st.src, tier: st.tier || 'catalogue' };
-  if (distPc !== null) out.distPc = distV && distPc === distV.v ? distV : inferred(distPc, 'as given');
+  if (distPc !== null) {
+    out.distPc = distV ? distV
+      : input.kind === 'ctx' ? { v: distPc, src: 'Hipparcos parallax (XHIP)', tier: 'measured' }
+      : input.kind === 'gaia' ? { v: distPc, src: 'Bailer-Jones 2021 (geometric)', tier: 'measured' }
+      : inferred(distPc, 'as given');
+  }
   if (gV) out.gMag = gV;
-  if (bpRp !== null) out.bpRp = bpRpV && bpRp === bpRpV.v ? bpRpV : { v: bpRp, src: 'Gaia', tier: 'measured' };
+  if (bpRp !== null) {
+    out.bpRp = bpRpV && bpRp === bpRpV.v ? bpRpV
+      : input.kind === 'ctx' ? inferred(bpRp, 'from Johnson B−V (XHIP)')
+      : { v: bpRp, src: 'Gaia DR3 photometry', tier: 'measured' };
+  }
   out.rgb = teffToRgb(T);
   out.limbU = limbDarkeningU(T);
   out.radiusAu = radius.v * RSUN_AU;

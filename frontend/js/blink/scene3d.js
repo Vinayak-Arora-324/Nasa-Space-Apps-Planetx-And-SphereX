@@ -8,7 +8,7 @@
 // Scene brightness goes into an RGBA16F target (when the browser can) and is bloomed and tonemapped at the end.
 import * as M from './scene3d-math.js';
 import * as F from './scene3d-frames.js';
-import { starModel } from './scene3d-physics.js';
+import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
@@ -21,14 +21,16 @@ const RANGE = { galaxy: { min: 0.01, max: 10000, speed: 2 }, system: { min: 1e-6
 const AUTO_MIN_PC = 1e-12, AUTO_MAX_PC = 100;   // auto-throttle speed bounds, parsecs per second (scaled to the frame's units)
 const XHAIR_DEG = 2, XHAIR_MS = 100;            // crosshair target readout: pick radius and refresh interval
 const CONE_DIST = 3000;          // pc, the distance at which the cone-edge ring is drawn
-const BASE_PX = 1.6;             // CSS px of a star at the magnitude limit
-const PX_PER_MAG = 1.25;         // CSS px added per magnitude brighter than the limit
 const CORE_SIGMA_PX = 0.42;      // CSS px: gaussian sigma of a faint star's core (it is integrated over each pixel)
 const LIMIT_DEFAULT = 12, LIMIT_MIN = 0, LIMIT_MAX = 25;
 const MAX_LABELS = 40, MAX_BODY_LABELS = 12;
 const PICK_PX = 10, GO_DEG = 2;
 const NEAR_PC = 0.05;            // stars this close to the camera are drawn exactly and may become spheres
 const FOV_SYSTEM = 60;
+// Milky Way glow (frontend/data/milkyway.webp, see backend/scripts/build_milkyway.py). MW_K sets its brightness against
+// the stars at the default limit and exposure; it brightens with the limit by the same sqrt-of-flux law as the stars.
+// The map is the sky seen from the Sun, so it fades out once the camera is a few hundred parsecs away.
+const MW_URL = './data/milkyway.webp', MW_K = 0.11, MW_FADE_PC = 800;
 // Arriving from and leaving for a flat picture (the sphere or the frames), see intro() and flatten().
 const INTRO_S = 3.2, FLATTEN_S = 1.3;
 const REVEAL_REF = 0.3;          // the dolly zoom keeps stars at this fraction of the median Gaia distance in place
@@ -117,6 +119,12 @@ export class Scene3D {
     this.cam = this._startCam('stars');
     this.fov = this.fovStars;
     this._initGL();
+    this.mwImg = null;                                           // the glow is optional: without it the sky is black
+    const loadSky = (tries) => fetch(MW_URL).then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.blob(); })
+      .then((bl) => createImageBitmap(bl))
+      .then((bm) => { this.mwImg = bm; if (!this.lost) this._uploadSky(); })
+      .catch(() => { if (tries > 0) setTimeout(() => loadSky(tries - 1), 3000); });
+    loadSky(2);
     const cone = linesToBuf(M.coneLines(ra, dec, radius, CONE_DIST), [1, 0.82, 0.55, 0.4]);
     this._put('lineStars', cone.data, cone.n);
     this._rebuildStars();
@@ -134,11 +142,24 @@ export class Scene3D {
       point: makeProgram(gl, S.POINT_VS, S.SPRITE_FS, ['u_vp', 'u_eye', 'u_dpr'], d),
       line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye'], d),
       body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
+      sky: makeProgram(gl, S.SKY_VS, S.SKY_FS, ['u_tan', 'u_sky', 'u_v2w', 'u_k'], d),
     };
+    this.skyTex = null;
+    if (this.mwImg) this._uploadSky();
     this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
     this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
+  }
+  _uploadSky() {
+    const gl = this.gl, tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, this.mwImg);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.skyTex = tex;
   }
   /** Store CPU data under key and upload it (skipped while the context is lost; restore uploads it again). */
   _put(key, data, n) { this.cpu[key] = { data, n }; this._upload(key); }
@@ -860,6 +881,7 @@ export class Scene3D {
     const hdr = this.hdr && this.hdr.ok ? this.hdr : null;
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    this._drawSky();
     const sun = this._inSun();
     const bodies = [];                                            // spheres to draw, with their crossfade weight
     const dynStars = [], dynPts = [], skip = new Int32Array(16).fill(-1);
@@ -901,6 +923,22 @@ export class Scene3D {
     if (hdr) hdr.finish({ strength: this.bloomK * (0.1 + 0.2 * clamp(-Math.log10(this.expo) / 4, 0, 1)), exposure: 1, threshold: this.bloomT });
     else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
+  _drawSky() {
+    if (!this.skyTex) return;
+    const gl = this.gl, pr = this.prog.sky, u = pr.u, R = this.R;
+    const dSun = Math.hypot(...F.worldPc(this.cam));
+    const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) / (1 + (dSun / MW_FADE_PC) ** 2);
+    if (k < 1e-5) return;
+    gl.useProgram(pr.p);
+    gl.bindVertexArray(this.vaoEmpty);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.skyTex);
+    gl.uniform1i(u.u_sky, 0);
+    gl.uniform2f(u.u_tan, this.tanX, this.tanY);
+    gl.uniformMatrix3fv(u.u_v2w, false, M.viewToWorld3(R));
+    gl.uniform1f(u.u_k, k);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
   _drawLines(key) {
     const g = this.gpu[key]; if (!g || !g.n) return;
     const gl = this.gl, pr = this.prog.line, cam = this.cam;
@@ -920,8 +958,6 @@ export class Scene3D {
     gl.uniform1f(u.u_toPc, cam.frame === 'system' ? 1 / AU_PER_PC : 1);
     gl.uniform1f(u.u_expo, this.expo);
     gl.uniform1f(u.u_limit, this.limit);
-    gl.uniform1f(u.u_base, BASE_PX * this.dpr);
-    gl.uniform1f(u.u_perMag, PX_PER_MAG * this.dpr);
     gl.uniform1f(u.u_dpr, this.dpr);
     gl.uniform1f(u.u_maxPt, this.maxPt);
     gl.uniform1f(u.u_sig, Math.max(CORE_SIGMA_PX * this.dpr, 0.5));
@@ -989,12 +1025,17 @@ export class Scene3D {
     gl.uniform1f(u.u_w, b.s);
     gl.uniform1f(u.u_ext, ext);
     const R = this.R;
-    gl.uniformMatrix3fv(u.u_v2w, false, [R[0], R[1], R[2], R[4], R[5], R[6], R[8], R[9], R[10]]);
+    gl.uniformMatrix3fv(u.u_v2w, false, M.viewToWorld3(R));
     if (b.kind === 0) {
       const md = b.md, x = M.spriteV(M.apparentMag(this.st.gal[7 * b.idx + 3], b.dist / AU_PER_PC), this.limit) * this.expo;
-      const surf = (0.45 + 0.35 * M.discRadiance(md.teff.v)) * clamp(x, 0.05, 1);   // below white, so limb darkening and colour show
+      const surf = (0.3 + 0.25 * M.discRadiance(md.teff.v)) * clamp(x, 0.05, 1);    // well below white, so limb darkening and colour show
+      const gr = granulation(md);
+      gl.uniform1f(u.u_gran, gr.size); gl.uniform1f(u.u_gamp, gr.contrast); gl.uniform1f(u.u_spots, gr.spots ? 1 : 0);
+      gl.uniform1f(u.u_seed, (b.idx * 2654435761) % 65536);
       gl.uniform1i(u.u_kind, 0);
-      gl.uniform3f(u.u_col, md.rgb[0], md.rgb[1], md.rgb[2]);
+      // md.rgb is a display (sRGB) colour; the sphere shader works in linear light, so linearise it first. Used as is,
+      // the tonemapper's sRGB encoding desaturated it a second time and an orange M star came out beige.
+      gl.uniform3f(u.u_col, ...md.rgb.map((c) => Math.pow(c, 2.2)));
       gl.uniform1f(u.u_u, md.limbU);
       gl.uniform1f(u.u_surf, surf);
       gl.uniform1f(u.u_glow, this.evidence ? 0 : 0.35 * surf);
@@ -1006,6 +1047,7 @@ export class Scene3D {
       gl.uniform3f(u.u_col, p.rgb[0], p.rgb[1], p.rgb[2]);
       gl.uniform3f(u.u_light, Lv[0], Lv[1], Lv[2]); gl.uniform3f(u.u_pole, Pv[0], Pv[1], Pv[2]);
       gl.uniform1f(u.u_u, 0); gl.uniform1f(u.u_surf, 0.5); gl.uniform1f(u.u_glow, 0);
+      gl.uniform1f(u.u_gran, 1); gl.uniform1f(u.u_gamp, 0); gl.uniform1f(u.u_spots, 0); gl.uniform1f(u.u_seed, 0);
       gl.uniform1f(u.u_ring, p.name === 'Saturn' ? 1 : 0);
       gl.uniform1f(u.u_band, p.name === 'Jupiter' || p.name === 'Saturn' ? 1 : 0);
       gl.uniform1f(u.u_atm, p.name === 'Earth' || p.name === 'Venus' ? 1 : 0);

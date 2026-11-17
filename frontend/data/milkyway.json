@@ -1,0 +1,11 @@
+{
+  "image": "milkyway.webp",
+  "width": 2048,
+  "height": 1024,
+  "projection": "plate carree, ICRS; u = 0.5 - RA/360 (mod 1), v = 0.5 - Dec/180",
+  "encoding": "sRGB 8-bit; linear = srgb_decode(texel) * scale (in the source map's linear units)",
+  "scale": 0.3896321952342987,
+  "median": 0.006776568479835987,
+  "credit": "NASA/Goddard Space Flight Center Scientific Visualization Studio, Deep Star Maps 2020 (Hipparcos-2, Tycho-2, Gaia DR2); resolved stars removed",
+  "source": "https://svs.gsfc.nasa.gov/4851"
+}

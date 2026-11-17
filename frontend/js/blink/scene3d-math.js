@@ -215,3 +215,9 @@ export function quadRect(cv, ext, tanX, tanY) {
 export const rotateView = (m, v) => [
   m[0] * v[0] + m[4] * v[1] + m[8] * v[2], m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2],
 ];
+
+/**
+ * The view-to-world rotation as a column-major mat3 for a shader, from R (column-major 4x4, world to view, rotation only).
+ * It is R's upper 3x3 transposed: R's rows become the mat3's columns.
+ */
+export const viewToWorld3 = (R) => [R[0], R[4], R[8], R[1], R[5], R[9], R[2], R[6], R[10]];

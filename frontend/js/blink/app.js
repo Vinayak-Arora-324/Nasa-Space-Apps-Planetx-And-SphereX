@@ -224,9 +224,6 @@ function markerAt(x, y) {
   }
   return best;
 }
-// TEMP: highlight every cached field on the sphere. Turn off with ?cache=0, or delete this
-// flag and the HIGHLIGHT_CACHE branch in drawMarkers to go back to the small amber rings.
-const HIGHLIGHT_CACHE = new URLSearchParams(location.search).get('cache') !== '0';
 function drawMarkers(ctx, W, H) {
   if (!sphere.ok) return;
   ctx.save();
@@ -235,19 +232,6 @@ function drawMarkers(ctx, W, H) {
   for (const m of allMarkers()) {
     const q = sphere.world2screen(m.ra, m.dec);
     if (!q || q.x < -50 || q.y < -50 || q.x > W + 50 || q.y > H + 50) continue;
-    if (m.kind === 'ready' && HIGHLIGHT_CACHE) {
-      // TEMP: make cached fields impossible to miss (pulsing halo + coordinates at any zoom)
-      const t = (performance.now() / 1000) % 1.6 / 1.6;
-      ctx.strokeStyle = `rgba(80,220,255,${(1 - t) * 0.9})`; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.arc(q.x, q.y, 8 + t * 22, 0, 7); ctx.stroke();
-      ctx.strokeStyle = '#50DCFF'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, 7); ctx.stroke();
-      ctx.fillStyle = '#50DCFF'; ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, 7); ctx.fill();
-      ctx.shadowColor = 'rgba(5,7,11,.95)'; ctx.shadowBlur = 6;
-      ctx.fillStyle = '#50DCFF'; ctx.fillText(`CACHED · ${m.n} frames`, q.x + 15, q.y - 7);
-      ctx.fillStyle = 'rgba(233,230,223,.9)'; ctx.fillText(`${m.ra.toFixed(4)}°, ${m.dec >= 0 ? '+' : ''}${m.dec.toFixed(4)}°`, q.x + 15, q.y + 8);
-      ctx.shadowBlur = 0;
-      continue;
-    }
     if (m.kind === 'ready') {
       ctx.strokeStyle = 'rgba(242,184,75,.85)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, 7); ctx.stroke();
       ctx.fillStyle = 'rgba(242,184,75,.95)'; ctx.beginPath(); ctx.arc(q.x, q.y, 2, 0, 7); ctx.fill();

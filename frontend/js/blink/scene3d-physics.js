@@ -113,6 +113,25 @@ export function limbDarkeningU(teffK) {
   return a[1] + (b[1] - a[1]) * s;
 }
 
+/**
+ * Surface convection, for the close-up of a star. Granule size grows with the pressure scale height, H/R ~ T R / M (in
+ * solar units), a little faster than linearly: about 1/600 of the radius on the Sun, while on red giants and supergiants
+ * simulations (Freytag et al. 2002, Chiavassa et al. 2009) show a few cells spanning a good part of the disc.
+ * The mass is the catalogue value when there is one, else a main-sequence guess from L (with a giant's halved).
+ * Contrast is ~15% on cool stars and fades out above ~7000 K, where the convective envelope is too thin to show.
+ * Returns { size (stellar radii), contrast, spots (whether starspots make sense: convective envelopes only) }.
+ */
+export function granulation(md) {
+  const T = md && md.teff && fin(md.teff.v) ? md.teff.v : TEFF_SUN;
+  const R = md && md.radiusRsun && fin(md.radiusRsun.v) ? md.radiusRsun.v : 1;
+  const L = md && md.lumLsun && fin(md.lumLsun.v) ? md.lumLsun.v : 1;
+  let M = md && md.massMsun && fin(md.massMsun.v) ? md.massMsun.v : Math.pow(Math.max(L, 1e-4), 1 / 3.5) * (md && md.isGiant ? 0.5 : 1);
+  M = clamp(M, 0.08, 60);
+  const size = clamp(1.7e-3 * Math.pow((T / TEFF_SUN) * R / M, 1.5), 2e-4, 0.3);
+  const t = clamp((7400 - T) / 1400, 0, 1);
+  return { size, contrast: 0.02 + 0.14 * t * t * (3 - 2 * t), spots: !(md && md.isWhiteDwarf) && T < 6600 };
+}
+
 // ---------------------------------------------------------------- the model
 const WD_RADIUS = 0.012;
 function pick(V) {

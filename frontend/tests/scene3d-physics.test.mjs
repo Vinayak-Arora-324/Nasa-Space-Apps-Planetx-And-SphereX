@@ -99,3 +99,13 @@ test('hot star with catalogue R and Teff gets Stefan–Boltzmann luminosity', ()
   assert.ok(Math.abs(m.lumLsun.v - 7.52 ** 2 * (26322 / 5772) ** 4) / m.lumLsun.v < 1e-9);
   assert.ok(!m.notes.some((n) => /bolometric/.test(n)));
 });
+
+test('granulation: tiny on the Sun, large on a red supergiant, faint on hot stars', () => {
+  const sun = P.granulation(P.starModel({ kind: 'sun' }));
+  assert.ok(Math.abs(sun.size - 1.7e-3) < 1e-4, `sun ${sun.size}`);
+  assert.ok(sun.contrast > 0.1 && sun.spots);
+  const bet = P.granulation(P.starModel({ absG: -6, bpRp: 2.3, distPc: 200, kind: 'ctx' }));
+  assert.ok(bet.size > 0.05, `supergiant ${bet.size}`);
+  const hot = P.granulation(P.starModel({ absG: 1.7, bpRp: 0.19, distPc: 7.7, kind: 'ctx' }));
+  assert.ok(hot.contrast < 0.05 && !hot.spots);
+});

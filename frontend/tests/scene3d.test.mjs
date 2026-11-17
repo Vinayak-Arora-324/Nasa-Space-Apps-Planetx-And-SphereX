@@ -150,3 +150,10 @@ test('mul4 matches the usual column-major product', () => {
   const combined = M.transformPoint(ab, p);
   for (let i = 0; i < 4; i++) close(combined[i], direct[i], 1e-4, `component ${i}`);
 });
+
+test('viewToWorld3 maps the view axis (0,0,-1) back to the look direction', async () => {
+  const M = await import('../js/blink/scene3d-math.js');
+  const dir = M.dirFromYawPitch(1.1, 0.4), R = M.lookRotation(dir, [0, 0, 1]), m = M.viewToWorld3(R);
+  const w = [-m[6], -m[7], -m[8]];                                   // column-major: m * (0,0,-1) = -(third column)
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(w[i] - dir[i]) < 1e-6, `${w} vs ${dir}`);   // R is a Float32Array
+});

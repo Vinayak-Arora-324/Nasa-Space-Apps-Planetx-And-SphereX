@@ -1,6 +1,6 @@
-# Blink rebuild — architecture and interface contract
+# Space Maps rebuild — architecture and interface contract
 
-Approved plan: turn the pixel viewer into the full-window "Blink" sky viewer described in
+Approved plan: turn the pixel viewer into the full-window "Space Maps" sky viewer described in
 `docs/blink-ui-spec.md`. The sky is drawn from **measurements of the real data** (fitted sources +
 smooth background), with the raw pixels and the leftover (data − model) one switch away.
 Nothing is drawn that does not come from SPHEREx data; catalogues only label and seed fits.
@@ -11,7 +11,7 @@ backward compatible and say so in your final report.
 ## Decisions (already agreed — do not re-open)
 
 - Old UI is preserved as `frontend/analysis.html` (uses `frontend/js/main.js`, unchanged). The new
-  Blink UI becomes `frontend/index.html`. A patch in Blink links to the analysis view for the same
+  Space Maps UI becomes `frontend/index.html`. A patch in Space Maps links to the analysis view for the same
   position (`analysis.html?ra=..&dec=..&fov=..`).
 - No 3D. Sphere view = directions on the celestial sphere only. Distance appears only as text in
   hover cards when Gaia has a parallax.
@@ -173,7 +173,7 @@ export class SkyRenderer {
 - `mode:'diff'`: current − previous on the `#171A20` ground, symmetric limits.
   `mode:'trail'`: running stack up to the current frame.
 
-## Frontend: Blink shell (owner: shell workstream)
+## Frontend: Space Maps shell (owner: shell workstream)
 
 `frontend/index.html`, `frontend/css/blink.css`, `frontend/js/blink/*.js` (except `skygl.js`),
 `frontend/dev/mock_server.py` (extend it for `model=1`, `per_visit`, large fov and the movers/coverage

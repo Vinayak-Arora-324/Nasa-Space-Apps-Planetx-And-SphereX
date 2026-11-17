@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot server setup for SPHEREx Blink on Ubuntu 24.04 (run as root: sudo bash setup.sh).
+# One-shot server setup for SPHEREx Space Maps on Ubuntu 24.04 (run as root: sudo bash setup.sh).
 # Idempotent: safe to re-run. Installs security updates, swap, uv, Caddy (auto HTTPS),
 # clones the app, and runs it as an unprivileged systemd service behind Caddy.
 set -euo pipefail

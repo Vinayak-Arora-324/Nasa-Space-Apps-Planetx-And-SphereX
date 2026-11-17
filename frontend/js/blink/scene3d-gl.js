@@ -56,9 +56,22 @@ void main(){
      + texture(u_src, v_uv + u_px*vec2(1,-1)).rgb + texture(u_src, v_uv + u_px*vec2(-1,1)).rgb;
   o = vec4(s*(u_w/16.0), 1.0);
 }`;
-/** ACES filmic fit (Narkowicz), then the sRGB transfer function. Shared with the LDR fallback of the impostor shader. */
+/**
+ * ACES filmic fit (Narkowicz), then the sRGB transfer function. Shared with the LDR fallback of the impostor shader.
+ * tonemap() applies the curve to luminance and keeps the hue, so a 3000 K surface stays orange instead of bleaching
+ * to tan (per-channel ACES desaturates bright colours); only the very brightest values blend toward per-channel ACES,
+ * which lets blinding stars still burn out to white.
+ */
 export const TONE_GLSL = `
 vec3 aces(vec3 x){ return clamp((x*(2.51*x + 0.03))/(x*(2.43*x + 0.59) + 0.14), 0.0, 1.0); }
+float acesL(float x){ return clamp((x*(2.51*x + 0.03))/(x*(2.43*x + 0.59) + 0.14), 0.0, 1.0); }
+vec3 tonemap(vec3 x){
+  float L = dot(x, vec3(0.2126, 0.7152, 0.0722)), Lt = acesL(L);
+  vec3 hp = x*(Lt/max(L, 1e-6));
+  float m = max(max(hp.r, hp.g), hp.b);
+  if (m > 1.0) hp /= m;
+  return mix(hp, aces(x), smoothstep(0.8, 1.0, Lt));
+}
 vec3 srgb(vec3 c){ return mix(c*12.92, 1.055*pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
 `;
 const TONE_FS = `#version 300 es
@@ -68,7 +81,7 @@ uniform sampler2D u_scene, u_bloom; uniform float u_strength, u_exposure;
 ${TONE_GLSL}
 void main(){
   vec3 c = texture(u_scene, v_uv).rgb + texture(u_bloom, v_uv).rgb*u_strength;
-  o = vec4(srgb(aces(c*u_exposure)), 1.0);
+  o = vec4(srgb(tonemap(c*u_exposure)), 1.0);
 }`;
 
 const LEVELS = 5;

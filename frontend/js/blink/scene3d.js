@@ -9,7 +9,7 @@
 import * as M from './scene3d-math.js';
 import * as F from './scene3d-frames.js';
 import { starModel } from './scene3d-physics.js';
-import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS } from './scene3d-nav.js';
+import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
@@ -18,14 +18,22 @@ import { getSystem } from '../api.js';
 const { D2R, LY_PER_PC: LY, V_EXPO } = M;
 const { AU_PER_PC } = F;
 const RANGE = { galaxy: { min: 0.01, max: 10000, speed: 2 }, system: { min: 1e-6, max: 1e3, speed: 0.2 } };
+const AUTO_MIN_PC = 1e-12, AUTO_MAX_PC = 100;   // auto-throttle speed bounds, parsecs per second (scaled to the frame's units)
+const XHAIR_DEG = 2, XHAIR_MS = 100;            // crosshair target readout: pick radius and refresh interval
 const CONE_DIST = 3000;          // pc, the distance at which the cone-edge ring is drawn
 const BASE_PX = 1.6;             // CSS px of a star at the magnitude limit
 const PX_PER_MAG = 1.25;         // CSS px added per magnitude brighter than the limit
+const CORE_SIGMA_PX = 0.42;      // CSS px: gaussian sigma of a faint star's core (it is integrated over each pixel)
 const LIMIT_DEFAULT = 12, LIMIT_MIN = 0, LIMIT_MAX = 25;
 const MAX_LABELS = 40, MAX_BODY_LABELS = 12;
 const PICK_PX = 10, GO_DEG = 2;
 const NEAR_PC = 0.05;            // stars this close to the camera are drawn exactly and may become spheres
 const FOV_SYSTEM = 60;
+// Arriving from and leaving for a flat picture (the sphere or the frames), see intro() and flatten().
+const INTRO_S = 3.2, FLATTEN_S = 1.3;
+const REVEAL_REF = 0.3;          // the dolly zoom keeps stars at this fraction of the median Gaia distance in place
+// the sky page's picture over the canvas fades over SNAP_FADE_S once the camera moves, SNAP_DROP_S when the controls are taken
+const SNAP_FADE_S = 1.2, SNAP_DROP_S = 0.25;
 const SUN_ABS_G = 4.67, SUN_BP_RP = 0.82;
 const Z_UP = [0, 0, 1];
 const SUN_HOST = { idx: 0, key: 'sun', name: 'Sun', pc: [0, 0, 0] };
@@ -38,6 +46,15 @@ const PLANET_RGB = {
 const POLE = { Jupiter: [268.06, 64.5], Saturn: [40.59, 83.54], Mars: [317.68, 52.89] };   // RA, Dec of the spin axes (illustrative)
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const lerpLog = (a, b, t) => Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * t);
+/** Unit vectors a to b along the great circle, t in 0..1. */
+function slerp(a, b, t) {
+  const w = Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1));
+  if (w < 1e-6) return b.slice();
+  const s = Math.sin(w), ka = Math.sin((1 - t) * w) / s, kb = Math.sin(t * w) / s;
+  return [a[0] * ka + b[0] * kb, a[1] * ka + b[1] * kb, a[2] * ka + b[2] * kb];
+}
 /** Number for the readout: 3 significant figures, with thousands separators. */
 export const fmtNum = (v, sig = 3) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumSignificantDigits: sig }) : 'n/a');
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -92,6 +109,10 @@ export class Scene3D {
     this.expo = 1; this.expoTarget = 1; this.vScan = 0; this.scanN = 0; this.hdrBad = false;
     this.lost = false; this.running = false; this._last = 0; this._hudT = 0; this._cardT = 0; this._cardSig = ''; this._raf = 0;
     this._pickSig = ''; this._pickSel = null; this._frameNo = 0; this._t = 0;
+    this.autoSpeed = true; this.throttle = THROTTLE.def;       // auto-throttle: speed = throttle x distance to the nearest surface
+    this._near = null; this._nearNo = -1; this._xh = null; this._xhT = -1e9; this._lastWorld = null; this.speedPc = 0;
+    this._intro = null; this._outro = null; this._arrival = null;   // camera animations to and from a flat picture
+    this._snap = null;                                               // the flat picture laid over the canvas (showSnap)
     this._frame = this._frame.bind(this);
     this.cam = this._startCam('stars');
     this.fov = this.fovStars;
@@ -109,7 +130,7 @@ export class Scene3D {
     this.hdr = this.useHdr ? new HdrChain(gl) : null;
     const d = this.useHdr ? '' : '#define LDR\n';
     this.prog = {
-      star: makeProgram(gl, S.STAR_VS, S.SPRITE_FS, S.SPRITE_UNIFORMS_STAR, d),
+      star: makeProgram(gl, S.STAR_VS, S.STAR_FS, S.SPRITE_UNIFORMS_STAR, d),
       point: makeProgram(gl, S.POINT_VS, S.SPRITE_FS, ['u_vp', 'u_eye', 'u_dpr'], d),
       line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye'], d),
       body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
@@ -314,6 +335,8 @@ export class Scene3D {
   }
   setScene(name) {
     if (name === 'solar' && !this.solarData) return;
+    if (this._outro) return;                                    // leaving the page: the camera is on its way out
+    this._takeOver();
     this.ap = null; this.sel = null; this.hover = null; this.card.hidden = true; this._cardT = 0;
     this.cam = this._startCam(name);
     this._syncStarFrame();
@@ -323,6 +346,12 @@ export class Scene3D {
   resetView() { this.setScene(this.scene); }
   setEvidence(on) { this.evidence = !!on; this._cardSig = ''; this.hooks.onEvidence(this.evidence); }
   toggleEvidence() { this.setEvidence(!this.evidence); }
+  /** T: auto-throttle (speed follows the distance to the nearest surface) or the old fixed speed. */
+  toggleAutoSpeed() {
+    if (this.autoSpeed) { const r = RANGE[this.cam.frame]; this.cam.speed = clamp(this._cruise(), r.min, r.max); }   // carry the current speed over
+    this.autoSpeed = !this.autoSpeed;
+    this._hudT = 0;
+  }
 
   // ------------------------------------------------------------------ controls
   _key(e, down) {
@@ -330,12 +359,15 @@ export class Scene3D {
     if (!down) { this.keys.delete(code); return; }
     if (e.metaKey) return;
     if (e.ctrlKey || e.altKey) return;                          // leave Ctrl+F, Ctrl+R and friends alone
+    if (this._outro) return;                                    // leaving the page: no more steering
+    this._takeOver();
     if (MOVE_KEYS.has(code)) { this.keys.add(code); this.ap = null; e.preventDefault(); return; }
     if (e.repeat) { if (code === 'Tab') e.preventDefault(); return; }
     if (code === 'Tab') { e.preventDefault(); this.toggleScene(); return; }
     if (code === 'KeyH') { this.resetView(); return; }
     if (code === 'KeyE') { this.toggleEvidence(); return; }
     if (code === 'KeyG') { this._goFromCrosshair(); return; }
+    if (code === 'KeyT') { this.toggleAutoSpeed(); return; }
     if (code === 'Escape') {
       if (this.ap) this.ap = null;
       else if (!this.locked && this.sel) { this.sel = null; this._cardSig = ''; }
@@ -357,6 +389,8 @@ export class Scene3D {
     this.hover = null;
   }
   _pdown(e) {
+    if (this._outro) return;
+    this._takeOver();
     if (e.pointerType === 'touch') {
       const p = this._rel(e);
       this.touch.set(e.pointerId, { x: p.x, y: p.y, moved: 0 });
@@ -398,13 +432,16 @@ export class Scene3D {
   }
   _dolly(amount) {
     const cam = this.cam, f = M.dirFromYawPitch(cam.yaw, cam.pitch);
-    for (let i = 0; i < 3; i++) cam.pos[i] += f[i] * amount * cam.speed;
+    for (let i = 0; i < 3; i++) cam.pos[i] += f[i] * amount * this._cruise();
   }
   _wheel(e) {
     e.preventDefault();
     const cam = this.cam, r = RANGE[cam.frame];
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-    cam.speed = clamp(cam.speed * Math.exp(-dy * 0.0015), r.min, r.max);   // logarithmic: equal steps, equal ratios
+    const k = Math.exp(-dy * 0.0015);                         // logarithmic: equal steps, equal ratios
+    if (this.autoSpeed) this.throttle = clamp(this.throttle * k, THROTTLE.min, THROTTLE.max);
+    else cam.speed = clamp(cam.speed * k, r.min, r.max);
+    this._hudT = 0;
   }
   _step(dt) {
     const cam = this.cam; if (!cam || dt <= 0 || this.ap) return;
@@ -419,9 +456,97 @@ export class Scene3D {
     if (k.has('KeyR') || k.has('Space')) add(Z_UP, 1);
     if (k.has('KeyF')) add(Z_UP, -1);
     const len = Math.hypot(w[0], w[1], w[2]);
-    const target = len > 1e-9 ? w.map((v) => (v / len) * cam.speed * boost) : [0, 0, 0];
+    const target = len > 1e-9 ? w.map((v) => (v / len) * this._cruise() * boost) : [0, 0, 0];
     const a = 1 - Math.exp(-dt * 8);                       // velocity eases toward the target: no hard starts or stops
     for (let i = 0; i < 3; i++) { cam.vel[i] += (target[i] - cam.vel[i]) * a; cam.pos[i] += cam.vel[i] * dt; }
+    if (cam.frame === 'system') {                           // never inside a body: stop at its shell, keep the sliding part
+      const sp = this._nearBody().spheres;
+      if (sp.length) cam.pos = keepOutside(cam.pos, sp);
+    }
+  }
+  /** Free-flight cruise speed in frame units per second (before Shift): fixed, or throttle x distance to the nearest surface. */
+  _cruise() {
+    const cam = this.cam;
+    if (!this.autoSpeed) return cam.speed;
+    const u = F.unitsPerPc(cam);
+    return autoThrottleSpeed(this._nearBody().dAhead, this.throttle, { min: AUTO_MIN_PC * u, max: AUTO_MAX_PC * u });
+  }
+  /**
+   * The nearest surface to the camera, in frame units, cached per frame: { name, d, dAhead, spheres }. Galaxy frame: stars.
+   * System frame: the host, the Sun's planets and any other star. d is the plain nearest surface (the HUD shows it).
+   * dAhead is what the auto-throttle uses: each surface's distance divided by headingWeight(angle from where you look),
+   * so a star beside or behind you counts as farther, and you do not crawl past every star on the way to a faraway one
+   * (stars farther than NEAR_PC count only when your path runs close to them, see corridorDistance).
+   * Both frames use the same measure, so the speed is continuous across a frame switch. spheres (system frame only):
+   * bodies to keep out of, { c, r } in frame units. The star the camera started in (disarmed) counts as at least
+   * LEAVE_PC away for dAhead, so starting at the Sun is not a standstill.
+   */
+  _nearBody() {
+    if (this._near && this._nearNo === this._frameNo) return this._near;
+    const cam = this.cam, st = this.st, sys = cam.frame === 'system', u = F.unitsPerPc(cam), p = st.pos, spheres = [];
+    const w = F.worldPc(cam), host = sys ? cam.host.idx : -1, r2 = NEAR_PC * NEAR_PC, f = M.dirFromYawPitch(cam.yaw, cam.pitch);
+    if (cam.disarm && (!this._disarmIdx || this._disarmIdx.key !== cam.disarm)) {
+      let idx = -1; for (let i = 0; i < st.n && idx < 0; i++) if (this._starKey(i) === cam.disarm) idx = i;
+      this._disarmIdx = { key: cam.disarm, idx };
+    }
+    const dis = cam.disarm && this._disarmIdx ? this._disarmIdx.idx : -1;
+    let raw = { name: null, d: Infinity }, ahead = Infinity;
+    const eat = (name, d, dx, dy, dz, dist, floorD) => {       // d: surface distance, (dx,dy,dz): vector to the centre, dist: its length
+      if (name !== undefined && d < raw.d) raw = { name, d };   // name undefined: counts for dAhead only
+      const c = dist > 0 ? (dx * f[0] + dy * f[1] + dz * f[2]) / dist : 1;
+      const e = Math.max(d, floorD || 0) / headingWeight(c);
+      if (e < ahead) ahead = e;
+    };
+    let bi = -1, b2 = Infinity, ei = -1, e2 = Infinity;
+    for (let i = 0; i < st.n; i++) {
+      if (i === host) continue;
+      const dx = p[3 * i] - w[0], dy = p[3 * i + 1] - w[1], dz = p[3 * i + 2] - w[2], d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < b2) { b2 = d2; bi = i; }
+      if (i === dis && !sys) continue;                         // handled below, with its floor
+      // Stars beyond NEAR_PC brake you only if your path runs close to them (corridorDistance: interstellar cruising);
+      // nearer ones use the gentle heading weight, the same one the host and planets use in the system frame, so the
+      // speed stays continuous across the frame switch. (All in pc here: these are galaxy-frame star positions.)
+      const dd = Math.sqrt(d2), along = dx * f[0] + dy * f[1] + dz * f[2];
+      const e = d2 >= r2 ? corridorDistance(along, dd) : dd / headingWeight(dd > 0 ? along / dd : 1);
+      if (e < e2) { e2 = e; ei = i; }
+      if (sys && d2 < r2) {                                   // other stars close by, to keep out of
+        const rAu = this._modelFor(i).radiusAu;
+        spheres.push({ c: F.toSystemPos(this._starPc(i), cam.host.pc), r: rAu, idx: i });
+      }
+    }
+    const rPcOf = (i, d2) => (d2 < r2 ? this._modelFor(i).radiusAu / AU_PER_PC : 0);
+    if (sys) {
+      for (const sp of spheres) {                             // the nearby stars, in AU
+        const dx = sp.c[0] - cam.pos[0], dy = sp.c[1] - cam.pos[1], dz = sp.c[2] - cam.pos[2], dist = Math.hypot(dx, dy, dz);
+        eat(this._starName(sp.idx), Math.max(0, dist - sp.r), dx, dy, dz, dist);
+      }
+      const rAu = this._modelFor(host).radiusAu, dist = Math.hypot(...cam.pos);
+      spheres.push({ c: [0, 0, 0], r: rAu });
+      eat(this._starName(host), Math.max(0, dist - rAu), -cam.pos[0], -cam.pos[1], -cam.pos[2], dist);
+      if (this._inSun()) for (const q of this.planets) {
+        spheres.push({ c: q.pos, r: q.rAu });
+        const dx = q.pos[0] - cam.pos[0], dy = q.pos[1] - cam.pos[1], dz = q.pos[2] - cam.pos[2], dist2 = Math.hypot(dx, dy, dz);
+        eat(q.name, Math.max(0, dist2 - q.rAu), dx, dy, dz, dist2);
+      }
+    } else {
+      if (bi >= 0) {
+        // Fetch the nearest star's Gaia parameters well before you arrive (within 0.5 pc), so a star you fly to yourself
+        // gets its catalogue radius and Teff, not the colour-based guess. Cached; a no-op after the first call.
+        if (b2 < 0.25) this._system(bi);
+        const dx = p[3 * bi] - w[0], dy = p[3 * bi + 1] - w[1], dz = p[3 * bi + 2] - w[2], dist = Math.sqrt(b2);
+        raw = { name: this._starName(bi), d: Math.max(0, dist - rPcOf(bi, b2)) };
+      }
+      if (ei >= 0) {
+        const dx = p[3 * ei] - w[0], dy = p[3 * ei + 1] - w[1], dz = p[3 * ei + 2] - w[2], dist = Math.hypot(dx, dy, dz);
+        eat(undefined, Math.max(0, dist - rPcOf(ei, dist * dist)), dx, dy, dz, dist);
+      }
+      if (dis >= 0) {
+        const dx = p[3 * dis] - w[0], dy = p[3 * dis + 1] - w[1], dz = p[3 * dis + 2] - w[2], dist = Math.hypot(dx, dy, dz);
+        eat(undefined, Math.max(0, dist - rPcOf(dis, dist * dist)), dx, dy, dz, dist, F.LEAVE_PC);
+      }
+    }
+    this._near = { name: raw.name, d: raw.d, dAhead: ahead, u, spheres }; this._nearNo = this._frameNo;
+    return this._near;
   }
 
   // ------------------------------------------------------------------ autopilot
@@ -490,12 +615,129 @@ export class Scene3D {
   /** After a frame switch: the free-flight speed that suits the new surroundings, and the star buffer. */
   _onFrameChange(kind) {
     const cam = this.cam;
-    this._syncStarFrame(); this._pickSig = ''; this.hooks.onScene(this.scene);
+    this._syncStarFrame(); this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
     if (kind === 'enter') {
+      this._system(cam.host.idx);
       cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), RANGE.system.min, RANGE.system.max);
       if (this.sel && this.sel.t !== 'star') this.sel = null;
     } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), RANGE.galaxy.min, RANGE.galaxy.max);
     if (this.ap && this.ap.type !== 'star') this.ap = null;
+  }
+
+  // ------------------------------------------------------------------ arriving from and leaving for a flat picture
+  // The sphere and the frames view are flat pictures of the sky. Seen from the Sun, the 3D scene looks the same, so the
+  // page opens on that picture (intro) and pulls into the patch (reveal), and before it goes it glides back to it (flatten).
+  /** Vertical field of view (degrees) that shows longDeg across the canvas's longer side, the way the sphere measures it. */
+  _flatFov(longDeg) {
+    const a = (this.canvas.clientWidth || 1) / (this.canvas.clientHeight || 1);
+    return a >= 1 ? 2 * Math.atan(Math.tan(longDeg * D2R / 2) / a) / D2R : longDeg;
+  }
+  /**
+   * Opened from a flat picture that showed longDeg across its longer side: the camera holds at the Sun with that field,
+   * so every star sits where the picture had it, until reveal() or endIntro(). Taking the controls ends it where it is.
+   */
+  intro(longDeg) {
+    const c = this.cam;
+    if (!(longDeg > 0) || c.frame !== 'galaxy') return;
+    this._arrival = { long: longDeg, dir: M.dirFromYawPitch(c.yaw, c.pitch) };
+    this._intro = { ...this._arrival, s: 0, end: 0, zref: 0, dur: INTRO_S, playing: false, glide: false };
+    this.fov = this._flatFov(longDeg);
+  }
+  /** Taking the controls ends the arrival where it is, and a late reveal() no longer moves the camera. */
+  _takeOver() { this._intro = null; this._arrival = null; if (this._snap) this._snap.fade = SNAP_DROP_S; }
+  /** The camera is still holding on the flat picture, waiting for reveal(). */
+  get introWaiting() { return !!this._intro && !this._intro.playing; }
+  /**
+   * The depth reveal, a dolly zoom: the field widens to the normal one while the camera moves along the view axis, so
+   * stars at the reference distance keep their place on screen; nearer ones spread outward and farther ones draw in.
+   * Needs the Gaia stars (their distances set the reference); without them the arrival just ends. When they come after
+   * the opening picture has already widened (endIntro) and the controls are untouched, the camera glides from the Sun
+   * to the same place instead.
+   */
+  reveal() {
+    const a = this._arrival, c = this.cam;
+    if (!a || c.frame !== 'galaxy' || (this._intro && this._intro.playing)) return;
+    const st = this.st, d = [], f0 = this._flatFov(a.long);
+    for (let i = 0; i < st.n; i++) if (st.meta[i].kind === 'gaia') d.push(Math.hypot(st.pos[3 * i], st.pos[3 * i + 1], st.pos[3 * i + 2]));
+    if (!d.length || f0 >= this.fovStars) { this._intro = null; this._arrival = null; return; }
+    d.sort((x, y) => x - y);
+    const zref = REVEAL_REF * d[d.length >> 1], end = zref * (1 - Math.tan(f0 * D2R / 2) / Math.tan(this.fovStars * D2R / 2));
+    if (this._intro) Object.assign(this._intro, { zref, end, playing: true });
+    else if (Math.hypot(...c.pos) < 1e-9) this._intro = { ...a, s: 0, zref, end, dur: INTRO_S, playing: true, glide: true, f0: this.fov };
+    this._arrival = null;
+  }
+  /**
+   * The picture the page was opened from (an <img> over the canvas, showing longDeg across its longer side), so the page
+   * opens on what the sky showed rather than on the stars alone. It holds while the camera waits on the opening picture,
+   * then follows the camera's field (the dolly zoom keeps it in place, widening at the Sun shrinks it) as it fades.
+   */
+  showSnap(el, longDeg) {
+    if (!this._intro) { el.remove(); return; }
+    this._snap = { el, long: longDeg, dir: this._intro.dir, a: 1, fade: SNAP_FADE_S };
+  }
+  /** The opening picture (or its overlay) is still on screen. */
+  get introActive() { return !!(this._intro || this._snap); }
+  _stepSnap(dt) {
+    const sn = this._snap; if (!sn) return;
+    const it = this._intro;
+    if (!it || it.playing) sn.a -= dt / sn.fade;
+    if (sn.a <= 0 || this.cam.frame !== 'galaxy') { sn.el.remove(); this._snap = null; return; }
+    // the picture is the plane at the reference distance (at infinity before the Gaia stars set one)
+    const p = this.cam.pos, cz = p[0] * sn.dir[0] + p[1] * sn.dir[1] + p[2] * sn.dir[2];
+    const zref = sn.zref = (it && it.zref) || sn.zref || 0;
+    const k = Math.tan(this._flatFov(sn.long) * D2R / 2) / Math.tan(this.fov * D2R / 2) * (zref > cz ? zref / (zref - cz) : 1);
+    sn.el.style.transform = `scale(${k.toFixed(5)})`;
+    sn.el.style.opacity = (sn.a * sn.a * (3 - 2 * sn.a)).toFixed(3);
+  }
+  /** Ends the opening picture without the reveal: the field eases out to the normal one from where the camera is. */
+  endIntro() { this._intro = null; }
+  _stepIntro(dt) {
+    const it = this._intro; if (!it) return;
+    if (this.cam.frame !== 'galaxy') { this._intro = null; return; }
+    const f0 = this._flatFov(it.long);
+    if (!it.playing) { this.fov = f0; return; }
+    it.s = Math.min(1, it.s + dt / it.dur);
+    const e = ease(it.s);
+    // a glide starts from the widened view: straight along the axis to where the dolly zoom would have ended
+    const fov = it.glide ? lerpLog(it.f0, this.fovStars, e) : lerpLog(f0, this.fovStars, e);
+    const cz = it.glide ? it.end * e : it.zref * (1 - Math.tan(f0 * D2R / 2) / Math.tan(fov * D2R / 2));
+    this.cam.pos = it.dir.map((v) => v * cz); this.cam.vel = [0, 0, 0];
+    this.fov = fov;
+    if (it.s >= 1) this._intro = null;
+  }
+  /**
+   * Leaving for a flat picture: back to the Sun, looking at the patch, while the field narrows to show longDeg across the
+   * longer side, so the next page opens on the same picture. Resolves once there, and the camera holds until endFlatten().
+   * Resolves at once in a star system, where there is no such picture to match.
+   */
+  flatten(longDeg, dur = FLATTEN_S) {
+    this._intro = null; this._arrival = null; this._outro = null; this.ap = null; this.keys.clear(); this.hover = null;
+    if (this._snap) { this._snap.el.remove(); this._snap = null; }
+    if (this.locked && document.exitPointerLock) document.exitPointerLock();
+    const c = this.cam;
+    if (c.frame !== 'galaxy' || !this.running || !(longDeg > 0)) return Promise.resolve();
+    const { ra, dec } = this.target, v = M.yawPitchFromDir(M.radecToXyz(ra, dec, 1));
+    const d1 = M.dirFromYawPitch(v.yaw, clamp(v.pitch, -1.5, 1.5));
+    return new Promise((done) => {
+      this._outro = { p0: c.pos.slice(), d0: M.dirFromYawPitch(c.yaw, c.pitch), d1, f0: this.fov, long: longDeg, s: 0, dur, done };
+    });
+  }
+  /** Back from the page this one handed over to (the browser kept it): the controls are free again. */
+  endFlatten() { this._outro = null; }
+  _stepOutro(dt) {
+    const o = this._outro; if (!o) return;
+    const c = this.cam, f1 = this._flatFov(o.long);
+    o.s = Math.min(1, o.s + dt / o.dur);
+    const e = ease(o.s), fov = lerpLog(o.f0, f1, e);
+    // the reverse dolly: the distance follows the field so stars at the reference distance stay put (a plain glide when
+    // the field is not narrowing)
+    const t0 = Math.tan(o.f0 * D2R / 2), t1 = Math.tan(f1 * D2R / 2), tf = Math.tan(fov * D2R / 2);
+    const g = o.f0 > f1 * 1.01 ? clamp((1 - t1 / tf) / (1 - t1 / t0), 0, 1) : 1 - e;
+    c.pos = o.p0.map((v) => v * g); c.vel = [0, 0, 0];
+    const v = M.yawPitchFromDir(slerp(o.d0, o.d1, e));
+    c.yaw = v.yaw; c.pitch = clamp(v.pitch, -1.5, 1.5);
+    this.fov = fov;
+    if (o.s >= 1 && o.done) { const done = o.done; o.done = null; done(); }
   }
 
   // ------------------------------------------------------------------ frame loop
@@ -530,7 +772,7 @@ export class Scene3D {
   _matrices(dt) {
     const cam = this.cam;
     const want = cam.frame === 'system' ? FOV_SYSTEM : this.fovStars;
-    this.fov += (want - this.fov) * (dt > 0 ? 1 - Math.exp(-dt * 3) : 0);
+    if (!this._intro && !this._outro) this.fov += (want - this.fov) * (dt > 0 ? 1 - Math.exp(-dt * 3) : 0);
     const dir = M.dirFromYawPitch(cam.yaw, cam.pitch);
     const aspect = this.canvas.width / this.canvas.height;
     this.R = M.lookRotation(dir, Z_UP);                          // rotation only: translation is subtracted before this
@@ -538,6 +780,15 @@ export class Scene3D {
     this.vp = M.mul4(M.perspective(this.fov * D2R, aspect, n, f), this.R);
     this.tanY = Math.tan(this.fov * D2R / 2); this.tanX = this.tanY * aspect;
     this.pxPerRad = (this.cssH / 2) / this.tanY;
+  }
+  /** Measured world-space speed (pc/s, smoothed) from the camera's movement; frame switches do not disturb it. */
+  _trackSpeed(dt) {
+    const w = F.worldPc(this.cam);
+    if (this._lastWorld && dt > 0) {
+      const v = Math.hypot(w[0] - this._lastWorld[0], w[1] - this._lastWorld[1], w[2] - this._lastWorld[2]) / dt;
+      this.speedPc += (v - this.speedPc) * (1 - Math.exp(-dt * 10));
+    }
+    this._lastWorld = w;
   }
   /** Stars within NEAR_PC of the camera: nearest first handled by stepFrame, all of them drawn exactly. */
   _scan() {
@@ -589,6 +840,9 @@ export class Scene3D {
     this._resize();
     this._step(dt);
     this._stepAutopilot(dt);
+    this._stepIntro(dt); this._stepSnap(dt);
+    this._stepOutro(dt);
+    this._trackSpeed(dt);
     let cands = this._scan();
     const sw = F.stepFrame(this.cam, cands);
     if (sw) { this._onFrameChange(sw); cands = this._scan(); }
@@ -670,6 +924,7 @@ export class Scene3D {
     gl.uniform1f(u.u_perMag, PX_PER_MAG * this.dpr);
     gl.uniform1f(u.u_dpr, this.dpr);
     gl.uniform1f(u.u_maxPt, this.maxPt);
+    gl.uniform1f(u.u_sig, Math.max(CORE_SIGMA_PX * this.dpr, 0.5));
     gl.uniform1iv(u.u_skip, skip);
   }
   _starAttribs() {
@@ -936,17 +1191,40 @@ export class Scene3D {
       lab.strokeStyle = 'rgba(233, 230, 223, 0.7)'; lab.lineWidth = 1;
       lab.beginPath(); lab.moveTo(cx - 8, cy); lab.lineTo(cx - 3, cy); lab.moveTo(cx + 3, cy); lab.lineTo(cx + 8, cy);
       lab.moveTo(cx, cy - 8); lab.lineTo(cx, cy - 3); lab.moveTo(cx, cy + 3); lab.lineTo(cx, cy + 8); lab.stroke();
+      const xh = this._crosshairTarget(t);
+      if (xh) {
+        lab.textAlign = 'center'; lab.lineJoin = 'round'; lab.lineWidth = 3.5; lab.strokeStyle = 'rgba(5, 7, 11, 0.9)';   // outlined: stays readable on a bright disc
+        const line = (text, y, fill) => { lab.strokeText(text, cx, y); lab.fillStyle = fill; lab.fillText(text, cx, y); };
+        line(xh.name, cy + 24, 'rgb(240, 237, 230)'); line(xh.dist, cy + 40, 'rgb(225, 222, 214)'); line('G to autopilot', cy + 56, 'rgb(250, 200, 100)');
+        lab.textAlign = 'start'; lab.lineWidth = 1;
+      }
     }
     this._updateCard(t);
     this._hud(t);
   }
+  /** The object nearest the screen centre within XHAIR_DEG, refreshed at ~10 Hz: { name, dist } or null. */
+  _crosshairTarget(t) {
+    if (t - this._xhT < XHAIR_MS) return this._xh;
+    this._xhT = t;
+    const sel = this._pickAt(this.cssW / 2, this.cssH / 2, XHAIR_DEG * D2R * this.pxPerRad);
+    if (!sel || !this._valid(sel)) return (this._xh = null);
+    if (sel.t === 'star') this._system(sel.idx);                // prefetch: you may be about to fly there
+    const rel = this._selPos(sel), d = Math.hypot(...rel), u = F.unitsPerPc(this.cam);
+    // Distance to the surface, like the HUD's Nearest row (radius in frame units).
+    const rad = sel.t === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : sel.t === 'planet' ? (this.planets.find((q) => q.name === sel.name) || {}).rAu || 0 : 0;
+    const surf = d > 0 ? rel.map((v) => v * Math.max(0, d - rad) / d) : rel;
+    const name = sel.t === 'star' ? this._starName(sel.idx) : sel.t === 'planet' ? sel.name : (this.bodies[sel.idx].name || `(${this.bodies[sel.idx].number})`);
+    const short = name.length > 28 && /^Gaia/i.test(name) ? 'Gaia …' + name.slice(-8) : name;
+    return (this._xh = { name: short, dist: this._fromYou(surf), sel });
+  }
   _hudData() {
-    const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest();
+    const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody();
     return {
       scene: this.scene, frame: cam.frame, unit: inSys ? 'AU' : 'pc',
       hostName: inSys ? near.name : null,
       surfaceAu: inSys ? near.au : null,
-      sunPc: F.worldPc(cam), speed: cam.speed, ev: Math.log2(this.expo),
+      sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), auto: this.autoSpeed, throttle: this.throttle,
+      nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, evidence: this.evidence,
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };

@@ -1,5 +1,5 @@
 [Unit]
-Description=SPHEREx Blink (FastAPI)
+Description=SPHEREx Space Maps (FastAPI)
 After=network-online.target
 Wants=network-online.target
 

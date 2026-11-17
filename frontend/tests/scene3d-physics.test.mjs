@@ -91,3 +91,11 @@ test('distance keeps its measured provenance', () => {
   assert.equal(b.distPc.tier, 'measured'); assert.match(b.distPc.src, /Hipparcos/);
   assert.equal(b.bpRp.tier, 'inferred');
 });
+
+test('hot star with catalogue R and Teff gets Stefan–Boltzmann luminosity', () => {
+  const v = (x, tier = 'catalogue') => ({ v: x, lo: null, hi: null, src: 'Gaia DR3', tier });
+  const m = P.starModel({ system: { values: { teff_k: v(26322), radius_rsun: v(7.52), dist_pc: v(406.8, 'measured') } }, absG: -3.5, bpRp: -0.39, kind: 'gaia' });
+  assert.match(m.lumLsun.src, /Stefan/);
+  assert.ok(Math.abs(m.lumLsun.v - 7.52 ** 2 * (26322 / 5772) ** 4) / m.lumLsun.v < 1e-9);
+  assert.ok(!m.notes.some((n) => /bolometric/.test(n)));
+});

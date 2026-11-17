@@ -4,8 +4,12 @@
 // The map itself is moved only by frame rotations, which are exact for it: the camera centre and view rotation
 // are set each frame so that Aladin shows the horizon view of the place, for precession (Vondrak 2011) and Earth
 // rotation. Stars that move against the others are drawn from the XHIP catalogue on the overlay, because the map
-// is a snapshot of where they were in 2025. Astronomy is in skytime.js.
+// is a snapshot of where they were in 2025. On top go the 88 constellations (figures tied to their stars, names,
+// IAU boundaries), named galaxies and nebulae, the Sun, Moon and planets, and the colour of the sky for the
+// Sun's altitude. Astronomy is in skytime.js and ephem.js; sky brightness and labels in rewind-sky.js.
 import * as T from './skytime.js';
+import * as E from './ephem.js';
+import * as S from './rewind-sky.js';
 import { clamp, smooth, lerp, lerpLog, wrap360, el } from './util.js';
 import { reduceMotion } from './fly.js';
 
@@ -22,20 +26,43 @@ export const PLACES = [
   { id: 'giza', region: 'Africa', label: 'Giza, Egypt', lat: 29.9792, lon: 31.1342 },
   { id: 'karnak', region: 'Africa', label: 'Karnak, Luxor', lat: 25.7188, lon: 32.6573 },
   { id: 'alexandria', region: 'Africa', label: 'Alexandria, Egypt', lat: 31.2001, lon: 29.9187 },
+  { id: 'carthage', region: 'Africa', label: 'Carthage, Tunisia', lat: 36.8528, lon: 10.3233 },
+  { id: 'aksum', region: 'Africa', label: 'Aksum, Ethiopia', lat: 14.1306, lon: 38.7189 },
 
   { id: 'gaza', region: 'Levant', label: 'Gaza City', lat: 31.5017, lon: 34.4668 },
   { id: 'jerusalem', region: 'Levant', label: 'Jerusalem', lat: 31.7780, lon: 35.2354 },
+  { id: 'bethlehem', region: 'Levant', label: 'Bethlehem', lat: 31.7043, lon: 35.2077 },
+  { id: 'nazareth', region: 'Levant', label: 'Nazareth', lat: 32.7022, lon: 35.2978 },
+  { id: 'jericho', region: 'Levant', label: 'Jericho', lat: 31.8710, lon: 35.4440 },
   { id: 'ramla', region: 'Levant', label: 'Ramla', lat: 31.9275, lon: 34.8625 },
   { id: 'ramallah', region: 'Levant', label: 'Ramallah', lat: 31.9038, lon: 35.2034 },
   { id: 'beirut', region: 'Levant', label: 'Beirut', lat: 33.8938, lon: 35.5018 },
+  { id: 'tyre', region: 'Levant', label: 'Tyre', lat: 33.2705, lon: 35.2038 },
   { id: 'damascus', region: 'Levant', label: 'Damascus', lat: 33.5116, lon: 36.3066 },
   { id: 'aleppo', region: 'Levant', label: 'Aleppo', lat: 36.1993, lon: 37.1625 },
-  { id: 'istanbul', region: 'Levant', label: 'Istanbul', lat: 41.0086, lon: 28.9802 },
+  { id: 'palmyra', region: 'Levant', label: 'Palmyra', lat: 34.5510, lon: 38.2690 },
+  { id: 'antioch', region: 'Levant', label: 'Antioch (Antakya)', lat: 36.2025, lon: 36.1606 },
+  { id: 'petra', region: 'Levant', label: 'Petra, Jordan', lat: 30.3285, lon: 35.4444 },
+
+  { id: 'istanbul', region: 'Anatolia', label: 'Istanbul (Constantinople)', lat: 41.0086, lon: 28.9802 },
+  { id: 'nicaea', region: 'Anatolia', label: 'Nicaea (İznik)', lat: 40.4292, lon: 29.7211 },
+  { id: 'troy', region: 'Anatolia', label: 'Troy', lat: 39.9575, lon: 26.2389 },
+  { id: 'ephesus', region: 'Anatolia', label: 'Ephesus', lat: 37.9411, lon: 27.3419 },
+  { id: 'tarsus', region: 'Anatolia', label: 'Tarsus', lat: 36.9177, lon: 34.8928 },
+  { id: 'gobeklitepe', region: 'Anatolia', label: 'Göbekli Tepe', lat: 37.2231, lon: 38.9225 },
 
   { id: 'mecca', region: 'Middle East', label: 'Mecca', lat: 21.4225, lon: 39.8262 },
+  { id: 'babylon', region: 'Middle East', label: 'Babylon', lat: 32.5422, lon: 44.4209 },
+  { id: 'ur', region: 'Middle East', label: 'Ur', lat: 30.9626, lon: 46.1031 },
+  { id: 'nineveh', region: 'Middle East', label: 'Nineveh (Mosul)', lat: 36.3594, lon: 43.1528 },
+  { id: 'baghdad', region: 'Middle East', label: 'Baghdad', lat: 33.3152, lon: 44.3661 },
+  { id: 'persepolis', region: 'Middle East', label: 'Persepolis', lat: 29.9355, lon: 52.8916 },
   { id: 'tehran', region: 'Middle East', label: 'Tehran', lat: 35.6892, lon: 51.3890 },
+  { id: 'samarkand', region: 'Middle East', label: 'Samarkand (Ulugh Beg Observatory)', lat: 39.6747, lon: 67.0057 },
 
   { id: 'delhi', region: 'South Asia', label: 'Delhi', lat: 28.6139, lon: 77.2090 },
+  { id: 'ujjain', region: 'South Asia', label: 'Ujjain', lat: 23.1765, lon: 75.7885 },
+  { id: 'varanasi', region: 'South Asia', label: 'Varanasi', lat: 25.3176, lon: 82.9739 },
   { id: 'lahore', region: 'South Asia', label: 'Lahore', lat: 31.5204, lon: 74.3587 },
   { id: 'amritsar', region: 'South Asia', label: 'Amritsar', lat: 31.6200, lon: 74.8765 },
   { id: 'hyderabad', region: 'South Asia', label: 'Hyderabad, India', lat: 17.3850, lon: 78.4867 },
@@ -43,12 +70,17 @@ export const PLACES = [
   { id: 'dhaka', region: 'South Asia', label: 'Dhaka', lat: 23.8103, lon: 90.4125 },
 
   { id: 'beijing', region: 'East Asia', label: 'Beijing', lat: 39.9163, lon: 116.3972 },
+  { id: 'xian', region: 'East Asia', label: "Xi'an (Chang'an)", lat: 34.3416, lon: 108.9398 },
   { id: 'shanghai', region: 'East Asia', label: 'Shanghai', lat: 31.2304, lon: 121.4737 },
   { id: 'ulaanbaatar', region: 'East Asia', label: 'Ulaanbaatar', lat: 47.8864, lon: 106.9057 },
 
   { id: 'athens', region: 'Europe', label: 'Athens', lat: 37.9715, lon: 23.7257 },
   { id: 'sparta', region: 'Europe', label: 'Sparta', lat: 37.0755, lon: 22.4303 },
+  { id: 'corinth', region: 'Europe', label: 'Corinth', lat: 37.9058, lon: 22.8786 },
+  { id: 'delphi', region: 'Europe', label: 'Delphi', lat: 38.4824, lon: 22.5010 },
+  { id: 'knossos', region: 'Europe', label: 'Knossos, Crete', lat: 35.2981, lon: 25.1631 },
   { id: 'rome', region: 'Europe', label: 'Rome', lat: 41.8902, lon: 12.4922 },
+  { id: 'pompeii', region: 'Europe', label: 'Pompeii', lat: 40.7489, lon: 14.4848 },
   { id: 'sicily', region: 'Europe', label: 'Syracuse, Sicily', lat: 37.0755, lon: 15.2866 },
   { id: 'tirana', region: 'Europe', label: 'Tirana', lat: 41.3275, lon: 19.8187 },
   { id: 'barcelona', region: 'Europe', label: 'Barcelona', lat: 41.3874, lon: 2.1686 },
@@ -63,6 +95,8 @@ export const PLACES = [
   { id: 'havana', region: 'Americas', label: 'Havana, Cuba', lat: 23.1136, lon: -82.3666 },
   { id: 'cancun', region: 'Americas', label: 'Cancún', lat: 21.1619, lon: -86.8515 },
   { id: 'chichen', region: 'Americas', label: 'Chichén Itzá', lat: 20.6843, lon: -88.5678 },
+  { id: 'teotihuacan', region: 'Americas', label: 'Teotihuacan', lat: 19.6925, lon: -98.8438 },
+  { id: 'cusco', region: 'Americas', label: 'Cusco', lat: -13.5320, lon: -71.9675 },
   { id: 'rio', region: 'Americas', label: 'Rio de Janeiro', lat: -22.9068, lon: -43.1729 },
 
   { id: 'maunakea', region: 'Pacific', label: 'Maunakea, Hawaiʻi', lat: 19.8207, lon: -155.4681 },
@@ -75,7 +109,7 @@ export const PLACES = [
   { id: 'custom', label: 'Somewhere else…' },
 ];
 
-// Asterisms as polylines of Hipparcos numbers.
+// Asterisms as polylines of Hipparcos numbers: drawn only if the constellation file (rewind-sky.json) fails to load.
 const ASTERISMS = [
   [[67301, 65378, 62956, 59774, 58001, 53910, 54061, 59774]],                          // Big Dipper
   [[11767, 85822, 82080, 77055, 72607, 75097, 79822, 77055]],                          // Little Dipper
@@ -91,11 +125,6 @@ const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 /
 const easeInOutCubicD = (t) => (t < 0.5 ? 12 * t * t : 3 * (-2 * t + 2) ** 2);
 const pad2 = (n) => String(n).padStart(2, '0');
 const dirName = (az) => CARDINALS[Math.round(wrap360(az) / 45) % 8];
-/** Label to the right of a point, or to its left when it would run off the right edge. */
-function label(ctx, text, x, y, W, gap = 8) {
-  if (x + gap + ctx.measureText(text).width > W - 6) { ctx.textAlign = 'right'; ctx.fillText(text, x - gap, y); ctx.textAlign = 'left'; }
-  else ctx.fillText(text, x + gap, y);
-}
 function slerp(a, b, t) {
   const w = T.angleBetween(a, b) * D2R;
   if (w < 1e-9) return b;
@@ -113,9 +142,44 @@ function bvColor(bv) {
   return BV_STOPS[BV_STOPS.length - 1][1];
 }
 
-/** UT Julian Day of a local mean solar time at longitude lon (degrees east). */
+/**
+ * UT Julian Day of a local mean solar time at longitude lon (degrees east). The mean Sun moves along the
+ * equator with TT, so with Delta T hours long it would no longer cross the meridian at UT noon; the small
+ * shift (0.0027379 Delta T, 41 minutes by 15,000 BCE) keeps clock noon the mean Sun's noon in every era.
+ */
 export function jdFromLocal({ year, month, day, hour, minute }, lon) {
-  return T.jdFromCalendar(year, month, day + (hour + minute / 60 - lon / 15) / 24);
+  const jd = T.jdFromCalendar(year, month, day + (hour + minute / 60 - lon / 15) / 24);
+  return jd + (SIDEREAL - 1) * T.deltaT(year + (month - 0.5) / 12) / 86400;
+}
+
+const SEASONS = ['March equinox', 'June solstice', 'September equinox', 'December solstice'];
+/** Where the Sun is in its year, from its ecliptic longitude of date: "12 days after the June solstice". */
+export function seasonText(lon) {
+  const k = Math.floor(wrap360(lon) / 90), after = (wrap360(lon) - 90 * k) / 0.9856, before = (90 * (k + 1) - wrap360(lon)) / 0.9856;
+  const n = (d) => `${Math.round(d)} day${Math.round(d) === 1 ? '' : 's'}`;
+  if (after < 0.5) return `the day of the ${SEASONS[k]}`;
+  if (before < 0.5) return `the day of the ${SEASONS[(k + 1) % 4]}`;
+  return after <= before ? `${n(after)} after the ${SEASONS[k]}` : `${n(before)} before the ${SEASONS[(k + 1) % 4]}`;
+}
+/** Words for the HUD and screen readers: daylight, the Moon, the season, visible planets, and how sure we are. */
+export function skyLines(b) {
+  const h = b.sun.alt, tw = S.twilight(h), when = b.sun.az < 180 ? 'morning' : 'evening';
+  const light = tw === 'day' ? `Daytime, the Sun ${Math.max(0, Math.round(h))}° up in the ${dirName(b.sun.az)}`
+    : tw === 'night' ? 'Night' : `${when[0].toUpperCase()}${when.slice(1)} ${tw}`;
+  const m = b.moon, pct = Math.round(m.k * 100);
+  const moon = pct < 2 ? (m.alt > 0 ? 'New Moon up' : 'New Moon')
+    : m.alt > 0 ? `Moon ${pct}% lit, ${m.waxing ? 'waxing' : 'waning'}, ${Math.round(m.alt)}° up in the ${dirName(m.az)}`
+      : `Moon ${pct}% lit, below the horizon`;
+  const L = b.light, up = b.planets.filter((p) => p.alt > 2 && p.mag < L.mlim + 0.5 && p.mag < 6).map((p) => p.name);
+  const season = seasonText(b.sun.lon);
+  const parts = [light, moon, `Sun ${season}`];
+  if (b.sun.eclipse && h > -0.83) {
+    const what = { total: 'A total eclipse of the Sun', annular: 'An annular eclipse of the Sun', partial: 'A partial eclipse of the Sun' }[b.sun.eclipse];
+    parts.splice(1, 0, m.sig > 0.25 ? `${what}, if the Moon is where it is drawn` : what);
+  }
+  if (up.length) parts.push(`${up.join(', ')} up`);
+  const caveat = m.sig > 1 ? `The Moon could be about ${m.sig < 10 ? m.sig.toFixed(0) : Math.round(m.sig)}° either side of where it is drawn (dotted): how fast Earth spun that long ago is not known precisely.` : '';
+  return { text: parts.join(' · '), spoken: `${parts.join('. ')}.`, caveat };
 }
 
 /** Checks a requested date; returns an error message or ''. */
@@ -138,8 +202,12 @@ export class Rewind {
     this.groundA = 0; this.overlayA = 0; this.trailA = 0; this.speed = 0; this.cursor = null;
     this.trail = document.createElement('canvas'); this.tctx = this.trail.getContext('2d');
     this.circle = null; this._hudText = '';
+    this.layers = S.loadLayers(); this.sky = null; this.b0 = null; this.b1 = null; this.light = null;
+    this._pos = { epj: NaN, map: new Map() };
     this._bindInput();
   }
+  /** Switches a sky layer (see LAYERS in rewind-sky.js) and remembers the choice. */
+  setLayer(id, on) { this.layers[id] = !!on; S.saveLayers(this.layers); }
   get active() { return this.mode !== 'off'; }
   get landed() { return this.mode === 'landed'; }
   get busy() { return this.mode === 'enter' || this.mode === 'spin' || this.mode === 'leave'; }
@@ -147,24 +215,101 @@ export class Rewind {
   // ------------------------------------------------------------------ data
   loadStars() {
     if (!this.loading) {
-      this.loading = fetch('data/rewind-stars.json')
-        .then((r) => { if (!r.ok) throw new Error(`star list: HTTP ${r.status}`); return r.json(); })
-        .then((d) => this._ingest(d))
+      const get = (url, what) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${what}: HTTP ${r.status}`); return r.json(); });
+      // the constellations are optional: without them the sky still turns, with a few asterisms
+      const sky = get('data/rewind-sky.json', 'constellations').catch((e) => { this.skyErr = e; return null; });
+      this.loading = Promise.all([get('data/rewind-stars.json', 'star list'), sky])
+        .then(([d, k]) => this._ingest(d, k))
         .catch((e) => { this.loading = null; throw e; });
     }
     return this.loading;
   }
-  _ingest(d) {
+  _ingest(d, sky) {
     const list = [], byHip = new Map();
-    for (const [hip, ra, dec, pmra, pmdec, plx, rv, v, bv] of d.stars) {
-      const s = { hip, v, bv, rgb: bvColor(bv), name: d.names[hip] || null, st: T.makeStar(ra, dec, pmra, pmdec, plx, rv, d.epoch) };
-      list.push(s); byHip.set(hip, s);
+    const add = (rows, epoch, names) => {
+      for (const [hip, ra, dec, pmra, pmdec, plx, rv, v, bv] of rows) {
+        if (byHip.has(hip)) continue;
+        const s = { hip, v, bv, rgb: bvColor(bv), name: names[hip] || null, st: T.makeStar(ra, dec, pmra, pmdec, plx, rv, epoch) };
+        list.push(s); byHip.set(hip, s);
+      }
+    };
+    add(d.stars, d.epoch, d.names);
+    if (sky) {
+      add(sky.extraStars, sky.starEpoch, sky.starNames);
+      for (const [hip, name] of Object.entries(sky.starNames)) { const s = byHip.get(+hip); if (s && !s.name) s.name = name; }
     }
     this.stars = list;
     this.trailStars = list.filter((s) => s.v < TRAIL_V);
-    this.named = list.filter((s) => s.name && (s.v < LABEL_V || ALWAYS_LABEL.has(s.hip)));
+    this.named = list.filter((s) => s.name).sort((a, b) => a.v - b.v);
     this.asterisms = ASTERISMS.map((g) => g.map((line) => line.map((h) => byHip.get(h)).filter(Boolean)));
+    if (sky) this._ingestSky(sky, byHip);
     T.cioLocator(2000);   // builds the CIO-locator table now (~0.1 s), not in the first animation frame
+  }
+  _ingestSky(sky, byHip) {
+    const figures = new Map();
+    for (const [id, lines] of Object.entries(sky.figures)) figures.set(id, lines.map((l) => l.map((h) => byHip.get(h)).filter(Boolean)));
+    // a label rides with its constellation: it moves by the mean motion of the figure's stars
+    const cons = sky.constellations.map((c) => {
+      const stars = [...new Set((figures.get(c.abbr) || []).flat())];
+      return { ...c, v: T.vecFromRaDec(c.ra, c.dec), stars, ref: null };
+    });
+    const dsos = sky.dsos.map((o) => ({ ...o, v: T.vecFromRaDec(o.ra, o.dec), stars: o.hip && byHip.get(o.hip) ? [byHip.get(o.hip)] : [], ref: null }));
+    const borders = sky.boundaries.map((b) => { const pts = []; for (let i = 0; i < b.length; i += 2) pts.push(T.vecFromRaDec(b[i], b[i + 1])); return pts; });
+    this.sky = { figures: [...figures.values()], cons, dsos, borders };
+  }
+  /** Where a star is at the shown epoch, cached while the epoch holds still. */
+  _at(s) {
+    const c = this._pos;
+    if (c.epj !== this.epj) { c.epj = this.epj; c.map.clear(); }
+    let v = c.map.get(s);
+    if (!v) { v = T.starAt(s.st, this.epj).v; c.map.set(s, v); }
+    return v;
+  }
+  /** A label point carried along by the mean motion of its stars since J2000. */
+  _drift(o) {
+    if (!o.stars.length) return o.v;
+    if (!o.ref) { o.ref = [0, 0, 0]; for (const s of o.stars) { const v = T.starAt(s.st, 2000).v; o.ref = o.ref.map((x, i) => x + v[i] / o.stars.length); } }
+    if (o.at !== this.epj) {
+      const m = [0, 0, 0];
+      for (const s of o.stars) { const v = this._at(s); for (let i = 0; i < 3; i++) m[i] += v[i] / o.stars.length; }
+      const u = [o.v[0] + m[0] - o.ref[0], o.v[1] + m[1] - o.ref[1], o.v[2] + m[2] - o.ref[2]], n = Math.hypot(...u);
+      o.cur = [u[0] / n, u[1] / n, u[2] / n]; o.at = this.epj;
+    }
+    return o.cur;
+  }
+
+  /**
+   * Sun, Moon and planets for a sky state, seen from the place: ICRS unit vectors, altitudes, the Moon's phase
+   * and, far from today, the stretch of its orbit it could be on given how uncertain Delta T is.
+   */
+  _bodies(s) {
+    const lat = this.place.lat, M = T.horizonMatrix(s.prec, s.theta, lat), zen = T.mtxv(M, [0, 0, 1]);
+    const ss = E.solarSystem(s.jdTt), alt = (v) => Math.asin(clamp(T.mxv(M, v)[2], -1, 1)) / D2R;
+    const moon = E.moonTopocentric(ss.moon.p, ss.sun.p, zen);
+    const basis = E.eclipticBasis(s.epj), elong = wrap360(E.eclipticLongitude(moon.v, basis) - ss.sun.lon);
+    const y = s.epj, sigH = T.deltaTSigma(y) / 3600, sig = Math.hypot(0.55 * sigH, 2 * (Math.abs(y - 2000) / 12000) ** 3);
+    let arc = null;
+    if (sig > 1) {   // positions the Moon would have if Earth's clock were off by up to one sigma of Delta T, plus model error
+      const span = sig / 0.55 / 24, off = moon.v.map((x, i) => x - ss.moon.v[i]);   // topocentric shift
+      arc = [];
+      for (let k = -6; k <= 6; k++) {
+        const g = E.moonGeocentric(s.jdTt + span * k / 6, basis), n = Math.hypot(...g);
+        arc.push([g[0] / n + off[0], g[1] / n + off[1], g[2] / n + off[2]]);
+      }
+    }
+    const sunAlt = alt(ss.sun.v), moonAlt = alt(moon.v);
+    // the Sun's apparent radius (959.6" at 1 au) and, when the Moon's disc reaches it, what kind of eclipse
+    const sunR = 959.63 / 3600 / Math.hypot(...ss.sun.p), sep = T.angleBetween(moon.v, ss.sun.v);
+    let eclipse = null;
+    if (sep < sunR + moon.radius && sunAlt > -1) {
+      eclipse = sep < moon.radius - sunR ? 'total' : sep < sunR - moon.radius ? 'annular' : 'partial';
+    }
+    return {
+      sun: { v: ss.sun.v, alt: sunAlt, az: T.altAzFromVec(T.mxv(M, ss.sun.v)).az, lon: ss.sun.lon, radius: sunR, eclipse },
+      moon: { ...moon, alt: moonAlt, az: T.altAzFromVec(T.mxv(M, moon.v)).az, waxing: elong < 180, sig, arc },
+      planets: ss.planets.map((p) => ({ ...p, alt: alt(p.v) })),
+      light: S.skyLight(sunAlt, moonAlt, moon.k),
+    };
   }
 
   // ------------------------------------------------------------------ camera
@@ -237,6 +382,7 @@ export class Rewind {
     this.place = { ...place }; this.when = { ...when }; this.opts = opts;
     this.jd0 = jd0; this.jd1 = jd1;
     this.s0 = T.skyState(jd0, place.lon); this.s1 = T.skyState(jd1, place.lon);
+    this.b0 = this._bodies(this.s0); this.b1 = this._bodies(this.s1);
     // The whirl: the exact change in sidereal angle, plus K whole turns standing for the nights in between.
     const days = jd1 - jd0, raw = this.s1.theta - this.s0.theta;
     const K = Math.abs(days) < 3 ? 0 : clamp(Math.round(2 + Math.log10(Math.abs(days)) / 2), 2, 5);
@@ -280,7 +426,9 @@ export class Rewind {
     if (instant) { this.overlayA = 1; this.trailA = 0; this._clearTrails(); }
     const w = this.when, cal = T.calendarFromJd(this.jd1);
     const date = `${w.day} ${T.MONTHS[w.month - 1]} ${T.fmtYear(w.year)}`;
-    this.hud.live.textContent = `The sky over ${this.place.label} on ${date} at ${pad2(w.hour)}:${pad2(w.minute)} local solar time${cal.julian ? ' (Julian calendar)' : ''}.`;
+    const sky = this.b1 ? skyLines(this.b1) : null;
+    this.skyLine = sky;
+    this.hud.live.textContent = `The sky over ${this.place.label} on ${date} at ${pad2(w.hour)}:${pad2(w.minute)} local solar time${cal.julian ? ' (Julian calendar)' : ''}.${sky ? ` ${sky.spoken}` : ''}`;
     this.hud.box.classList.add('landed');
     this.onChange();
   }
@@ -363,6 +511,7 @@ export class Rewind {
       const M = T.horizonMatrix(st.prec, st.theta, this.place.lat), to = this._horizonView(M, this.cam), fr = this.fromView;
       view = { c: slerp(fr.c, to.c, e), rot: fr.rot + wrap180(to.rot - fr.rot) * e, fov: lerpLog(fr.fov, to.fov, e) };
       this.groundA = e; this.speed = 0;
+      this.bodies = this.b0; this.bodyA = e; this.washL = this.b0.light; this.washA = e;
       if (p >= 1) this._phase('spin');
     } else if (this.mode === 'spin') {
       const p = clamp(this.t / this.spinDur, 0, 1), e = easeInOutCubic(p);
@@ -371,16 +520,22 @@ export class Rewind {
       st = { epj: s.epj, prec: s.prec, theta: this.s0.theta + this.dTheta * e };
       this.speed = Math.abs(this.dTheta * easeInOutCubicD(p) / this.spinDur) / TAU;   // turns per second
       this.trailA = 1; this.groundA = 1; this.overlayA = Math.max(0, this.overlayA - dt * 3);   // labels belong to the landing
+      // the Sun and Moon mean nothing while the days race by; the sky colour hands over from tonight to the date
+      this.bodyA = 0; this.washL = p < 0.5 ? this.b0.light : this.b1.light;
+      this.washA = p < 0.5 ? 1 - smooth(p / 0.15) : smooth((p - 0.85) / 0.15);
       if (p >= 1) { st = this.s1; this._land(false); }
     } else if (this.mode === 'land') {
       const p = clamp(this.t / LAND_S, 0, 1);
       st = this.s1; this.overlayA = Math.max(this.overlayA, smooth(p)); this.trailA = 1 - smooth(p); this.speed = 0;
+      this.bodies = this.b1; this.bodyA = smooth(p); this.washL = this.b1.light; this.washA = 1;
       if (p >= 1) { this.mode = 'landed'; this.trailA = 0; this._clearTrails(); }
     } else if (this.mode === 'landed') {
       st = this.s1;
+      this.bodies = this.b1; this.bodyA = 1; this.washL = this.b1.light; this.washA = 1;
     } else if (this.mode === 'leave') {
       const p = clamp(this.t / LEAVE_S, 0, 1), e = smooth(p), fr = this.leaveFrom;
       st = this.s1;
+      this.bodies = this.b1; this.bodyA = Math.min(this.bodyA, 1 - e); this.washL = this.b1.light; this.washA = 1 - e;
       view = { c: fr.c, rot: fr.rot - fr.rot * e, fov: lerpLog(fr.fov, 85, e) };
       this.groundA = 1 - e; this.overlayA = Math.min(this.overlayA, 1 - e);
       if (p >= 1) { this._apply(view); this.exitNow(); return; }
@@ -393,6 +548,7 @@ export class Rewind {
       view = this._horizonView(M, cam);
     }
     this._apply(view); this.lastView = view;
+    this.viewC = view.c; this.cosView = Math.cos(Math.min(100, view.fov * 0.72 + 8) * D2R); this.pxDeg = W / Math.max(1, view.fov);
     this._draw(ctx, M, W, H, dpr);
     this._hud(jd);
   }
@@ -403,67 +559,179 @@ export class Rewind {
   }
   _clearTrails() { this.tctx.setTransform(1, 0, 0, 1, 0, 0); this.tctx.clearRect(0, 0, this.trail.width, this.trail.height); this.prevTrail = null; }
 
+  /** Screen point of an ICRS unit vector if it is above altitude lim (degrees) and near the view; else null. */
+  _pv(v, lim = -3) {
+    if (T.mxv(this.M, v)[2] < Math.sin(lim * D2R) || T.dot(v, this.viewC) < this.cosView) return null;
+    return this._proj(v);
+  }
+  /** Draws polylines of ICRS vectors (or stars), lifting the pen where a point is hidden. */
+  _polylines(ctx, lines, toV, lim) {
+    ctx.beginPath();
+    for (const line of lines) {
+      let pen = false, prev = null;
+      for (const p of line) {
+        const q = this._pv(toV(p), lim);
+        // a jump across the screen means the projection wrapped: break the line there
+        if (!q || (prev && Math.abs(q.x - prev.x) + Math.abs(q.y - prev.y) > 0.8 * (this._W + this._H))) { pen = false; prev = q; if (!q) continue; }
+        pen ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); pen = true; prev = q;
+      }
+    }
+    ctx.stroke();
+  }
+
   _draw(ctx, M, W, H, dpr) {
-    const epj = this.epj, above = (v, lim = 0) => T.mxv(M, v)[2] > Math.sin(lim * D2R);
+    const above = (v, lim = 0) => T.mxv(M, v)[2] > Math.sin(lim * D2R), lay = this.layers, oa = this.overlayA;
+    this._W = W; this._H = H;
+    const day = lay.daylight && this.washL, L = day ? this.washL : S.NIGHT, wa = day ? this.washA : 0;
+    // how much of the night sky shows through the daylight (1 at night)
+    const night = 1 - wa * (1 - L.lineA), mlim = lerp(6, L.mlim, wa), dsoA = 1 - wa * (1 - L.dsoA);
+    const seen = (mag) => clamp(mlim - mag + 0.5, 0, 1);
+    const fov = this.lastView ? this.lastView.fov : 100;
+    const lab = new S.Labeler(ctx, W, H);
+    this.L = lab;
     ctx.save();
     // 1. darken the map while it whirls, so the trails carry the motion
     if (this.speed > 0.02) { ctx.fillStyle = `rgba(5,7,11,${0.55 * clamp(this.speed / 0.7, 0, 1)})`; ctx.fillRect(0, 0, W, H); }
-    // 2. star trails
-    if (this.trailA > 0.003 && this.trailStars) this._trails(ctx, M, W, H, dpr);
-    const oa = this.overlayA;
-    // 3. asterisms
-    if (this.asterisms) {
-      ctx.lineWidth = 1; ctx.strokeStyle = `rgba(233,230,223,${0.16 + 0.22 * oa})`;
-      for (const g of this.asterisms) for (const line of g) {
-        ctx.beginPath(); let pen = false;
-        for (const s of line) {
-          const v = T.starAt(s.st, epj).v, q = above(v, -3) ? this._proj(v) : null;
-          if (!q) { pen = false; continue; }
-          pen ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); pen = true;
-        }
-        ctx.stroke();
-      }
+    // 2. the colour of the sky: twilight and day cover the map
+    if (day && wa > 0.003) {
+      const hz = this._proj(T.mtxv(M, T.vecFromAltAz(this.cam.az, 0))), top = this._proj(T.mtxv(M, T.vecFromAltAz(this.cam.az, Math.min(85, this.cam.alt + fov * 0.3))));
+      const b = this.bodies, g = b && b.sun.alt < 6 ? this._proj(T.mtxv(M, T.vecFromAltAz(b.sun.az, 0))) : null;
+      S.drawWash(ctx, W, H, L, wa, hz ? hz.y : H, top ? top.y : 0, g, this.pxDeg);
     }
-    // 4. the pole's path among the stars (precession circle), today's stretch highlighted
-    this._precession(ctx, M, epj, oa, W);
-    // 5. fast stars: where the map shows them (ring, 2025) and where they really are at this epoch (gold)
-    ctx.font = '500 12px Inter, system-ui, sans-serif'; ctx.textBaseline = 'middle';
-    const ma = this.mode === 'spin' ? 0.9 : Math.max(oa, this.mode === 'enter' ? 0 : 0.9);
+    // 3. star trails
+    if (this.trailA > 0.003 && this.trailStars) this._trails(ctx, M, W, H, dpr);
+    // 4. constellation boundaries and figures
+    if (this.sky && lay.borders) {
+      ctx.lineWidth = 1; ctx.setLineDash([3, 4]); ctx.strokeStyle = `rgba(150,176,230,${(0.1 + 0.16 * oa) * night})`;
+      this._polylines(ctx, this.sky.borders, (v) => v, -2);
+      ctx.setLineDash([]);
+    }
+    if (lay.lines && (this.sky || this.asterisms)) {
+      ctx.lineWidth = 1; ctx.strokeStyle = `rgba(150,184,240,${(0.13 + 0.27 * oa) * night})`;
+      this._polylines(ctx, this.sky ? this.sky.figures.flat() : this.asterisms.flat(), (s) => this._at(s), -3);
+    }
+    // 5. the pole's path among the stars (precession circle), today's stretch highlighted
+    this._precession(ctx, M, this.epj, oa, night);
+    // 6. galaxies, clusters and nebulae
+    if (this.sky && lay.deepsky && oa > 0.02) this._deepSky(ctx, fov, oa * dsoA);
+    // 7. fast stars: where the map shows them (ring, 2025) and where they really are at this epoch (gold)
+    const ma = (this.mode === 'spin' ? 0.9 : Math.max(oa, this.mode === 'enter' ? 0 : 0.9));
     for (const m of this.movers) {
-      const v = T.starAt(m.s.st, epj).v;
-      if (!above(v, -2) && !above(m.v0, -2)) continue;
+      const v = this._at(m.s), vis = seen(m.s.v);
+      if ((!above(v, -2) && !above(m.v0, -2)) || vis < 0.02) continue;
       const a = this._proj(m.v0), b = this._proj(v);
       if (!a || !b) continue;
-      const bright = clamp((6.5 - m.s.v) / 6, 0.25, 1);
+      const bright = clamp((6.5 - m.s.v) / 6, 0.25, 1), k = ma * vis;
       if (Math.hypot(b.x - a.x, b.y - a.y) > 3) {
-        ctx.strokeStyle = `rgba(242,184,75,${0.45 * ma * bright})`; ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(242,184,75,${0.45 * k * bright})`; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.strokeStyle = `rgba(233,230,223,${0.5 * ma * bright})`;
+        ctx.strokeStyle = `rgba(233,230,223,${0.5 * k * bright})`;
         ctx.beginPath(); ctx.arc(a.x, a.y, 3.5 + 2 * bright, 0, TAU); ctx.stroke();
       }
-      ctx.fillStyle = `rgba(242,184,75,${ma * (0.55 + 0.45 * bright)})`;
+      ctx.fillStyle = `rgba(242,184,75,${k * (0.55 + 0.45 * bright)})`;
       ctx.beginPath(); ctx.arc(b.x, b.y, 1.6 + 2.2 * bright, 0, TAU); ctx.fill();
-      if (m.s.name && oa > 0.02 && above(v)) {
-        ctx.fillStyle = `rgba(242,184,75,${oa})`; ctx.shadowColor = 'rgba(5,7,11,.95)'; ctx.shadowBlur = 5;
-        label(ctx, m.s.name, b.x, b.y - 1, W); ctx.shadowBlur = 0;
-      }
+      if (m.s.name && above(v)) lab.add({ text: m.s.name, x: b.x, y: b.y - 1, prio: 2 + m.s.v / 10, font: '500 12px Inter, system-ui, sans-serif', size: 12, color: 'rgba(242,184,75,$a)', alpha: oa * vis });
     }
-    // 6. names of bright stars
-    if (this.named && oa > 0.02) {
-      const moving = new Set(this.movers.map((m) => m.s));
-      ctx.fillStyle = `rgba(233,230,223,${0.82 * oa})`; ctx.shadowColor = 'rgba(5,7,11,.95)'; ctx.shadowBlur = 5;
+    // 8. Sun, Moon and planets
+    if (lay.bodies && this.bodies && this.bodyA > 0.003) this._bodiesDraw(ctx, this.bodies, this.bodyA, mlim, lab);
+    // 9. names of stars and constellations
+    if (lay.snames && this.named && oa > 0.02) {
+      const moving = new Set(this.movers.map((m) => m.s)), vmax = fov > 95 ? LABEL_V : fov > 60 ? 2.6 : 3.6;
       for (const s of this.named) {
-        if (moving.has(s)) continue;
-        const v = T.starAt(s.st, epj).v;
-        if (!above(v, 1)) continue;
-        const q = this._proj(v); if (!q) continue;
-        label(ctx, s.name, q.x, q.y - 1, W);
+        if (moving.has(s) || (s.v >= vmax && !ALWAYS_LABEL.has(s.hip))) continue;
+        const vis = seen(s.v); if (vis < 0.02) continue;
+        const q = this._pv(this._at(s), 1); if (!q) continue;
+        lab.add({ text: s.name, x: q.x, y: q.y - 1, prio: 3 + s.v / 10, font: '500 12px Inter, system-ui, sans-serif', size: 12, color: 'rgba(233,230,223,$a)', alpha: 0.82 * oa * vis });
       }
-      ctx.shadowBlur = 0;
     }
-    // 7. ground, horizon and compass points
-    if (this.groundA > 0.003) this._ground(ctx, M, W, H);
+    if (this.sky && lay.cnames && oa > 0.02) {
+      const rmax = fov > 120 ? 1 : fov > 85 ? 2 : 3;
+      for (const c of this.sky.cons) {
+        if (c.rank > rmax) continue;
+        const q = this._pv(this._drift(c), 4); if (!q) continue;
+        lab.add({ text: c.name.toUpperCase(), x: q.x, y: q.y, prio: 5 + c.rank, mode: 'centre', font: '600 10px Inter, system-ui, sans-serif', size: 10, spacing: 1.6, color: 'rgba(150,184,240,$a)', alpha: 0.75 * oa * night });
+      }
+    }
+    lab.flush();
+    // 10. ground, horizon and compass points
+    if (this.groundA > 0.003) this._ground(ctx, M, W, H, wa * clamp((L.h + 8) / 14, 0, 1));
     ctx.restore();
+  }
+
+  _deepSky(ctx, fov, a) {
+    const pmax = fov > 110 ? 1 : fov > 70 ? 2 : 3, lab = this.L;
+    ctx.lineWidth = 1;
+    for (const o of this.sky.dsos) {
+      if (o.prio > pmax) continue;
+      const q = this._pv(this._drift(o), 2); if (!q) continue;
+      const big = o.id === 'lmc' || o.id === 'smc' ? Math.max(6, 4 * this.pxDeg) : 4.5;
+      const col = o.type === 'gc0' ? '255,200,140' : /^(g|s|e|i)$/.test(o.type) ? '246,196,160' : /^(oc|gc)$/.test(o.type) ? '200,214,255' : '160,236,210';
+      ctx.strokeStyle = `rgba(${col},${0.55 * a})`;
+      ctx.beginPath();
+      if (o.type === 'gc0') { ctx.moveTo(q.x - 6, q.y); ctx.lineTo(q.x + 6, q.y); ctx.moveTo(q.x, q.y - 6); ctx.lineTo(q.x, q.y + 6); }
+      else if (/^(g|s|e|i)$/.test(o.type)) ctx.ellipse(q.x, q.y, big * 1.5, big * 0.75, -0.5, 0, TAU);
+      else ctx.arc(q.x, q.y, big, 0, TAU);
+      ctx.stroke();
+      lab.block(q.x, q.y, 2 * big + 2, 2 * big + 2);
+      lab.add({ text: o.name, x: q.x, y: q.y, gap: big + 5, prio: 6 + o.prio, font: 'italic 400 11.5px Inter, system-ui, sans-serif', size: 11.5, color: `rgba(${col},$a)`, alpha: 0.85 * a });
+    }
+  }
+
+  _bodiesDraw(ctx, b, a, mlim, lab) {
+    const fontB = '600 12px Inter, system-ui, sans-serif';
+    // planets: dots sized by brightness, named when they can be seen
+    for (const p of b.planets) {
+      if (p.alt < -1) continue;
+      const vis = clamp(mlim - p.mag + 1, 0, 1); if (vis < 0.02) continue;
+      const q = this._pv(p.v, -1); if (!q) continue;
+      const r = clamp(2.6 - 0.45 * p.mag, 1.6, 4.6), [cr, cg, cb] = p.rgb;
+      const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r * 3.2);
+      g.addColorStop(0, `rgba(${cr},${cg},${cb},${0.5 * a * vis})`); g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, r * 3.2, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(${cr},${cg},${cb},${a * vis})`; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, TAU); ctx.fill();
+      lab.block(q.x, q.y, 2 * r + 4, 2 * r + 4);
+      lab.add({ text: p.name, x: q.x, y: q.y, gap: r + 6, prio: 1 + p.mag / 100, font: fontB, size: 12, color: `rgba(${cr},${cg},${cb},$a)`, alpha: a * vis });
+    }
+    // the Moon, with the stretch of sky it could be on when Delta T is uncertain
+    const m = b.moon;
+    if (m.alt > -1.5) {
+      const q = this._pv(m.v, -1.5);
+      if (q) {
+        if (m.arc) {
+          ctx.save(); ctx.setLineDash([2, 5]); ctx.lineWidth = 2; ctx.lineCap = 'round';
+          ctx.strokeStyle = `rgba(240,236,222,${0.45 * a})`;
+          this._polylines(ctx, [m.arc], (v) => v, -6);
+          ctx.restore();
+        }
+        const r = Math.max(7, m.radius * this.pxDeg), toward = this._towards(m.v, b.sun.v), phi = toward ? Math.atan2(toward.y - q.y, toward.x - q.x) : 0;
+        S.drawMoon(ctx, q, r, m.k, phi, a);
+        lab.block(q.x, q.y, 2 * r + 6, 2 * r + 6);
+        lab.add({ text: 'Moon', x: q.x, y: q.y, gap: r + 6, prio: 0.5, font: fontB, size: 12, color: 'rgba(240,236,222,$a)', alpha: a });
+      }
+    }
+    // the Sun, last: in an eclipse the Moon's disc is drawn on the Sun's glow, then the Sun's core is cut by it
+    if (b.sun.alt > -1.5) {
+      const q = this._pv(b.sun.v, -1.5);
+      if (q) {
+        const r = Math.max(9, b.sun.radius * this.pxDeg);
+        S.drawSun(ctx, q, r, b.sun.alt, a);
+        const mq = b.sun.eclipse ? this._pv(m.v, -1.5) : null;
+        if (mq) {   // the Moon in front of the Sun, enlarged by as much as the Sun's disc so the overlap stays true
+          const k = r / (b.sun.radius * this.pxDeg);
+          ctx.fillStyle = `rgba(8,9,12,${a})`; ctx.beginPath();
+          ctx.arc(q.x + (mq.x - q.x) * k, q.y + (mq.y - q.y) * k, m.radius * this.pxDeg * k, 0, TAU); ctx.fill();
+        }
+        lab.block(q.x, q.y, 2 * r + 8, 2 * r + 8);
+        lab.add({ text: 'Sun', x: q.x, y: q.y, gap: r + 8, prio: 0, font: fontB, size: 12, color: 'rgba(255,226,170,$a)', alpha: a });
+      }
+    }
+  }
+  /** Screen point one degree from ICRS point a towards ICRS point b (for orienting the Moon's lit side). */
+  _towards(a, b) {
+    const d = T.dot(a, b), p = [b[0] - d * a[0], b[1] - d * a[1], b[2] - d * a[2]], n = Math.hypot(...p);
+    if (n < 1e-9) return null;
+    const k = Math.tan(D2R);
+    return this._proj([a[0] + k * p[0] / n, a[1] + k * p[1] / n, a[2] + k * p[2] / n].map((x, i, u) => x / Math.hypot(...u)));
   }
 
   _trails(ctx, M, W, H, dpr) {
@@ -494,7 +762,8 @@ export class Rewind {
     ctx.globalAlpha = this.trailA; ctx.drawImage(this.trail, 0, 0, W, H); ctx.globalAlpha = 1;
   }
 
-  _precession(ctx, M, epj, oa, W) {
+  /** night: how much of the night sky the daylight leaves (1 at night). */
+  _precession(ctx, M, epj, oa, night) {
     if (!this.circle) {
       this.circle = [];
       for (let y = -13000; y <= 13000; y += 200) this.circle.push(T.poleOfDate(y));
@@ -511,12 +780,11 @@ export class Rewind {
       }
       ctx.stroke(); ctx.setLineDash([]);
     };
-    draw(this.circle, `rgba(233,230,223,${0.1 + 0.12 * oa})`, 1, [2, 5]);
+    const k = night, lab = this.L, mono = '400 11px "IBM Plex Mono", ui-monospace, monospace';
+    draw(this.circle, `rgba(233,230,223,${(0.1 + 0.12 * oa) * Math.max(k, 0.25)})`, 1, [2, 5]);
     const n = 90, seg = [];
     for (let i = 0; i <= n; i++) seg.push(T.poleOfDate(lerp(MAP_EPOCH, epj, i / n)));
-    draw(seg, 'rgba(242,184,75,0.85)', 1.6, []);
-    ctx.font = '400 11px "IBM Plex Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(5,7,11,.95)'; ctx.shadowBlur = 4;
+    draw(seg, `rgba(242,184,75,${0.85 * Math.max(k, 0.35)})`, 1.6, []);
     if (oa > 0.02) {
       ctx.fillStyle = `rgba(233,230,223,${0.6 * oa})`;
       for (const c of this.ticks) {
@@ -524,35 +792,34 @@ export class Rewind {
         if (Math.abs(c.y - epj) < 700 || Math.abs(c.y - MAP_EPOCH) < 700 || T.mxv(M, c.v)[2] < 0) continue;
         const q = this._proj(c.v); if (!q) continue;
         ctx.beginPath(); ctx.arc(q.x, q.y, 1.6, 0, TAU); ctx.fill();
-        label(ctx, c.label, q.x, q.y, W, 6);
+        lab.add({ text: c.label, x: q.x, y: q.y, gap: 6, prio: 4, font: mono, size: 11, color: 'rgba(233,230,223,$a)', alpha: 0.6 * oa * k });
       }
     }
     // today's pole and the pole of the shown date (the sky turns about it)
     const today = T.poleOfDate(MAP_EPOCH), qt = T.mxv(M, today)[2] > 0 ? this._proj(today) : null;
     if (qt && Math.abs(epj - MAP_EPOCH) > 30) {
-      ctx.strokeStyle = 'rgba(233,230,223,.7)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(qt.x, qt.y, 4, 0, TAU); ctx.stroke();
-      if (oa > 0.02) {   // left of the ring: Polaris, a degree away, is labelled on the right
-        ctx.fillStyle = `rgba(233,230,223,${0.75 * oa})`; ctx.textAlign = 'right'; ctx.fillText('pole today', qt.x - 9, qt.y + 1); ctx.textAlign = 'left';
-      }
+      ctx.strokeStyle = `rgba(233,230,223,${0.7 * Math.max(k, 0.35)})`; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(qt.x, qt.y, 4, 0, TAU); ctx.stroke();
+      // after Polaris's name, so that takes the right of it and this the left
+      lab.block(qt.x, qt.y, 10, 10);
+      lab.add({ text: 'pole today', x: qt.x, y: qt.y + 1, gap: 9, prio: 3.5, font: mono, size: 11, color: 'rgba(233,230,223,$a)', alpha: 0.75 * oa * k });
     }
     const pole = this.place.lat >= 0 ? T.poleOfDate(epj) : T.poleOfDate(epj).map((x) => -x);
     if (T.mxv(M, pole)[2] > 0) {
       const q = this._proj(pole);
       if (q) {
-        ctx.strokeStyle = 'rgba(242,184,75,.95)'; ctx.lineWidth = 1.4;
+        ctx.strokeStyle = `rgba(242,184,75,${0.95 * Math.max(k, 0.4)})`; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(q.x, q.y, 7, 0, TAU);
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(q.x + dx * 10, q.y + dy * 10); ctx.lineTo(q.x + dx * 16, q.y + dy * 16); }
         ctx.stroke();
-        if (oa > 0.02) {
-          ctx.fillStyle = `rgba(242,184,75,${oa})`;
-          label(ctx, `${this.place.lat >= 0 ? 'north' : 'south'} celestial pole, ${T.fmtYear(this.when.year)}`, q.x, q.y - 12, W, 20);
-        }
+        lab.block(q.x, q.y, 34, 34);
+        lab.add({ text: `${this.place.lat >= 0 ? 'north' : 'south'} celestial pole, ${T.fmtYear(this.when.year)}`, x: q.x, y: q.y - 12, gap: 20, prio: 1.5,
+          font: '500 12px Inter, system-ui, sans-serif', size: 12, color: 'rgba(242,184,75,$a)', alpha: oa * Math.max(k, 0.4) });
       }
     }
-    ctx.shadowBlur = 0;
   }
 
-  _ground(ctx, M, W, H) {
+  /** dayK: 0 at night, 1 in full daylight (the land is lit). */
+  _ground(ctx, M, W, H, dayK = 0) {
     const ga = this.groundA, az0 = this.cam.az, pts = [];
     for (let k = -89; k <= 89; k += 1.5) {
       const q = this._proj(T.mtxv(M, T.vecFromAltAz(az0 + k, 0)));
@@ -567,7 +834,8 @@ export class Rewind {
     for (const p of pts) ctx.lineTo(p.x, p.y);
     ctx.lineTo(l.x + big, l.y); ctx.lineTo(l.x + big, H + big); ctx.lineTo(f.x - big, H + big); ctx.closePath();
     const g = ctx.createLinearGradient(0, Math.max(0, topY), 0, H);
-    g.addColorStop(0, 'rgba(22,17,12,0.97)'); g.addColorStop(1, 'rgba(5,7,11,1)');
+    const top = [lerp(22, 74, dayK), lerp(17, 70, dayK), lerp(12, 56, dayK)], bot = [lerp(5, 34, dayK), lerp(7, 32, dayK), lerp(11, 26, dayK)];
+    g.addColorStop(0, `rgba(${top.map(Math.round)},0.97)`); g.addColorStop(1, `rgba(${bot.map(Math.round)},1)`);
     ctx.fillStyle = g; ctx.fill();
     // horizon line with a faint glow above it
     ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -587,20 +855,26 @@ export class Rewind {
 
   _hud(jd) {
     const h = this.hud, cal = T.calendarFromJd(jd);
-    let year, sub, legend = '';
+    let year, sub, legend = '', skyText = '';
     if (this.mode === 'landed' || this.mode === 'land' || this.mode === 'leave') {
       const w = this.when;
       year = T.fmtYear(w.year);
       sub = `${w.day} ${T.MONTHS[w.month - 1]} · ${pad2(w.hour)}:${pad2(w.minute)} local solar time · ${this.place.label}${cal.julian ? ' · Julian calendar' : ''}`;
-      if (this.movers.length) legend = 'Gold: where fast-moving stars really were. Ring: where the SPHEREx map (2025) shows them.';
-      if (this.starsErr) legend = 'The star list could not be loaded, so star motions, names and trails are not shown.';
+      const notes = [];
+      if (this.movers.length) notes.push('Gold: where fast-moving stars really were. Ring: where the SPHEREx map (2025) shows them.');
+      if (this.skyLine && this.skyLine.caveat && this.layers.bodies) notes.push(this.skyLine.caveat);
+      if (this.starsErr) notes.splice(0, notes.length, 'The star list could not be loaded, so star motions, names and trails are not shown.');
+      else if (this.skyErr) notes.push('The constellations could not be loaded, so only a few star patterns are drawn.');
+      legend = notes.join(' ');
+      skyText = this.skyLine && this.layers.bodies ? this.skyLine.text : '';
     } else {
       year = T.fmtYear(cal.year);
       sub = this.mode === 'enter' ? `The sky over ${this.place.label}, ${T.MONTHS[this.when.month - 1]} ${this.when.day}` : this.jd1 < this.jd0 ? 'Turning back the sky…' : 'Turning the sky forward…';
     }
-    const text = `${year}|${sub}|${legend}`;
+    const text = `${year}|${sub}|${legend}|${skyText}`;
     if (text !== this._hudText) {
       this._hudText = text; h.year.textContent = year; h.sub.textContent = sub; h.legend.textContent = legend; h.legend.hidden = !legend;
+      if (h.sky) { h.sky.textContent = skyText; h.sky.hidden = !skyText; }
     }
     h.box.classList.toggle('on', this.mode !== 'leave' || this.t < LEAVE_S * 0.4);
   }
@@ -617,6 +891,7 @@ export class RewindPanel {
       place: $('rw-place'), lat: $('rw-lat'), lon: $('rw-lon'), custom: $('rw-custom'), locate: $('rw-locate'),
       year: $('rw-year'), era: $('rw-era'), month: $('rw-month'), day: $('rw-day'), time: $('rw-time'),
       go: $('rw-go'), today: $('rw-today'), exit: $('rw-exit'), error: $('rw-error'), presets: $('rw-presets'),
+      layers: $('rw-layers'),
     };
     const f = this.f, now = new Date(), y = now.getUTCFullYear();
     const groups = new Map();
@@ -639,6 +914,16 @@ export class RewindPanel {
         type: 'button', class: 'pill', text: label,
         onclick: () => { const p = fn(); if (p.place) { f.place.value = p.place; this._syncPlace(); } this.setWhen({ ...this.readWhen(true), year: p.year }); this.go(); },
       }));
+    }
+    if (f.layers) {
+      for (const l of S.LAYERS) {
+        const b = el('button', { type: 'button', class: 'pill', text: l.label, 'aria-pressed': String(!!this.r.layers[l.id]) });
+        b.addEventListener('click', () => {
+          const on = !this.r.layers[l.id];
+          this.r.setLayer(l.id, on); b.setAttribute('aria-pressed', String(on));
+        });
+        f.layers.append(b);
+      }
     }
     f.place.addEventListener('change', () => this._syncPlace());
     for (const n of [f.year, f.era]) n.addEventListener('input', () => this._syncLabel());

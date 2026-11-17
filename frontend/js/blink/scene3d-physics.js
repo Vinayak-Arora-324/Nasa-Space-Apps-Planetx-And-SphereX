@@ -163,8 +163,12 @@ export function starModel(input = {}) {
   let radius = pick(vals.radius_rsun);
   let lum = pick(vals.lum_lsun);
   if (!lum) {
-    if (absG !== null) lum = inferred(lumFromAbsG(absG, T), 'from absolute G + bolometric correction');
-    else if (radius) lum = inferred(radius.v * radius.v * Math.pow(T / TEFF_SUN, 4), 'from R and Teff (Stefan–Boltzmann)');
+    // With a catalogue radius and Teff, Stefan–Boltzmann beats the bolometric-correction route, whose BC_G fit only covers
+    // 4000–8000 K (a 26,000 K B star came out 12x too faint that way).
+    const sb = () => inferred(radius.v * radius.v * Math.pow(T / TEFF_SUN, 4), 'from R and Teff (Stefan–Boltzmann)');
+    if (radius && teff.tier !== 'inferred') lum = sb();
+    else if (absG !== null) lum = inferred(lumFromAbsG(absG, T), 'from absolute G + bolometric correction');
+    else if (radius) lum = sb();
   }
   if (!radius) {
     if (isWhiteDwarf) radius = inferred(WD_RADIUS, 'typical white-dwarf radius');
@@ -173,7 +177,7 @@ export function starModel(input = {}) {
   }
   if (!lum) lum = inferred(radius.v * radius.v * Math.pow(T / TEFF_SUN, 4), 'from R and Teff (Stefan–Boltzmann)');
   if (isWhiteDwarf && radius.tier === 'inferred') notes.push('Flagged as a white dwarf; radius is a typical value.');
-  if (absG !== null && (T < 4000 || T > 8000) && lum.tier === 'inferred') {
+  if (absG !== null && (T < 4000 || T > 8000) && lum.tier === 'inferred' && /bolometric/.test(lum.src)) {
     notes.push('Luminosity uses a bolometric correction outside its calibrated 4000–8000 K range; treat as rough.');
   }
 

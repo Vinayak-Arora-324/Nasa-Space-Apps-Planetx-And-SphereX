@@ -12,11 +12,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/blink.css">
 <link rel="stylesheet" href="css/scene3d.css">
+<!-- Opened from the sphere or the frames (?enter=): start under the veil so the hand-off is one continuous picture. -->
+<script>if (/[?&]enter=/.test(location.search) && !(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) document.documentElement.classList.add('entering');</script>
 </head>
 <body>
 <main class="scene3d">
   <canvas id="gl" class="layer gl" role="img" aria-label="3D view of the sky around the patch. Click a star to select it or empty sky to fly, then use W A S D to move."></canvas>
   <canvas id="labels" class="layer labels" aria-hidden="true"></canvas>
+  <!-- the sky page's picture of the view it handed over from: the page opens on it and it dissolves into the stars -->
+  <img id="enter-snap" class="layer enter-snap" alt="" aria-hidden="true" hidden>
   <div id="card" class="card" hidden></div>
 
   <header class="hud">
@@ -26,6 +30,8 @@
       <div><dt>Where</dt><dd id="hud-where">Interstellar</dd></div>
       <div><dt>From the Sun</dt><dd id="hud-dist" class="mono">0 pc</dd></div>
       <div><dt>Speed</dt><dd id="hud-speed" class="mono"></dd></div>
+      <div class="dim"><dt>Mode</dt><dd id="hud-mode" class="mono"></dd></div>
+      <div><dt>Nearest</dt><dd id="hud-near" class="mono">n/a</dd></div>
       <div class="dim"><dt>Exposure</dt><dd id="hud-ev" class="mono"></dd></div>
       <div><dt>Objects</dt><dd id="hud-count" class="mono"></dd></div>
       <div data-only="stars"><dt>Limit</dt><dd id="hud-limit" class="mono"></dd></div>
@@ -45,11 +51,11 @@
   <div id="help" class="help" role="dialog" aria-modal="false" aria-labelledby="help-title" hidden>
     <div class="help-card">
       <h2 id="help-title" class="help-title">Fly through the patch</h2>
-      <p class="help-line">Click a star to select it · click empty sky to fly · WASD to move · wheel changes speed</p>
+      <p class="help-line">Click empty sky to fly · WASD move · mouse look · wheel throttle · T auto/manual speed · Shift boost · G autopilot to the target · Esc release</p>
       <ul class="help-list">
         <li>G flies to the selected star, or the one under the crosshair. Esc cancels the autopilot or releases the mouse.</li>
         <li>Tab jumps to the Sun's system. E switches the evidence view, which hides everything illustrative. H returns to the start view. [ and ] change the magnitude limit.</li>
-        <li>Shift goes ten times faster. R and Space go up, F goes down.</li>
+        <li>Auto speed (on by default) makes your speed a fraction of the distance to the nearest star or planet, so you slow down as you arrive and cannot fly into one. The wheel sets that fraction; T switches to a fixed speed. Shift goes ten times faster. R and Space go up, F goes down.</li>
         <li>Touch: one finger looks around, two fingers pinch to move, a tap names a star.</li>
       </ul>
       <button type="button" id="help-start" class="btn accent">Start</button>
@@ -65,8 +71,13 @@
     </div>
     <button type="button" class="btn quiet" id="btn-evidence" aria-pressed="false" title="Hide everything illustrative (E)">Evidence view</button>
     <button type="button" class="btn quiet" id="btn-reset">Reset view</button>
-    <a class="btn quiet" id="btn-back" href="./">Back to Blink</a>
+    <span class="frames-go">
+      <a class="btn accent" id="btn-frames" href="./" aria-describedby="frames-note">Watch this patch change</a>
+      <span id="frames-note" class="frames-note mono dim"></span>
+    </span>
+    <a class="btn quiet" id="btn-back" href="./">Back to the whole sky</a>
   </nav>
+  <div id="veil" class="veil" aria-hidden="true"></div>
 </main>
 <noscript><p class="noscript">The 3D view needs JavaScript.</p></noscript>
 <script type="module" src="js/blink/scene3d-main.js"></script>

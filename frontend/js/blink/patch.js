@@ -196,6 +196,12 @@ export class PatchView {
     this.dirty = true;
   }
   toScreen(x, y) { return this.renderer.toScreen(x, y); }
+  /** Degrees of sky shown across the longer side of the view, or null before the frames have a size. */
+  fieldDeg() {
+    const s = this.session; if (!s || !s.npix || !this.base) return null;
+    const w = this.canvas.clientWidth || 1, h = this.canvas.clientHeight || 1;
+    return Math.max(w, h) / (this.base * this.zoom) * (s.scale / 3600);
+  }
 
   // ---------- playback ----------
   get frames() { return this.session ? this.session.frames : []; }

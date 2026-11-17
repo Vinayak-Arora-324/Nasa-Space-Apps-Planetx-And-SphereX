@@ -1,4 +1,4 @@
-// Blink shell: owns view state, UI visibility, flights, and wires the sphere, patch and DOM controls.
+// Space Maps shell: owns view state, UI visibility, flights, and wires the sphere, patch and DOM controls.
 import { Sphere, SPHEREX_HIPS } from './sphere.js';
 import { PatchView, MODES } from './patch.js';
 import { FlyController, reduceMotion } from './fly.js';
@@ -16,7 +16,17 @@ const $ = (id) => document.getElementById(id);
 const DEFAULTS = { width: 0.5, band: 2, layer: 'model', mode: 'video' };
 // The field of view is measured across the longer side in portrait too; keep the sphere's edge off screen on phones.
 const START = { ra: 285, dec: -8, fov: window.innerHeight > window.innerWidth * 1.2 ? 55 : 85 };
-const IGNORE_MS = 1500, DRIFT_DEG_S = 1.1, AUTO_FLY_FOV = 4.5, DRAG_PX = 6;
+// MIN_FOV: the closest the sphere zooms (the all-sky map is pixelated below about 4 degrees), and the field the 3D page
+// hands back at. LOOK_FOV: the view for a ?look link that does not come from the 3D page, wide enough to see the spot.
+// VEIL_OUT_MS: the dip to black before the 3D page (matches .veil.out in blink.css).
+const IGNORE_MS = 1500, DRIFT_DEG_S = 1.1, MIN_FOV = 4, LOOK_FOV = 12, DRAG_PX = 6, VEIL_OUT_MS = 350;
+// the picture of the sky handed to the 3D page (scene3d-main.js reads it once)
+const SNAP_KEY = 'scene3d-enter-snap';
+// The all-sky tiles for a close view take a moment to arrive. Hand-offs to and from the 3D page wait up to SKY_WAIT_MS
+// for SKY_SHOWN of the view to show the sky (sphere.loaded), so the shared picture is the sky and not the blank ground.
+const SKY_WAIT_MS = 3000, SKY_SHOWN = 0.85;
+const HINT = 'Drag to look around · scroll to zoom · click a spot to fly into it in 3D';
+const HINT_MIN = 'As close as the all-sky map goes · click a spot to fly into it in 3D';
 const PRESETS = [
   { label: 'North Ecliptic Pole', ra: 270.0, dec: 66.56, pole: true },
   { label: 'South Ecliptic Pole', ra: 90.0, dec: -66.56, pole: true },
@@ -65,10 +75,10 @@ const S = {
   view: 'sphere', width: DEFAULTS.width, band: DEFAULTS.band, layer: DEFAULTS.layer, mode: DEFAULTS.mode,
   target: null, pending: null, uiVisible: false, uiReady: false, full: false, panelAtDown: false, drifting: !reduceMotion(),
   flyMix: 0, fading: false, readyFade: 0, readyTarget: 0, readyDur: 0.8, committed: true, cursor: null, hoverUi: false, dragging: false,
-  hips: 'none', coverage: [], job: null, loadedAt: 0,
+  hips: 'none', coverage: [], job: null, loadedAt: 0, to3d: false,
 };
 
-const root = $('root'), ui = $('ui'), stage = $('stage'), overlay = $('overlay'), patchCanvas = $('patch');
+const root = $('root'), hintEl = $('hint'), ui = $('ui'), stage = $('stage'), overlay = $('overlay'), patchCanvas = $('patch');
 const sphere = new Sphere($('aladin'));
 const patch = new PatchView(patchCanvas, $('hover'), {
   onUpdate: onSessionUpdate, onFrameIndex, onFramesChanged: () => scheduleStrip(), onCursor: (sky) => { S.cursor = sky; },
@@ -80,7 +90,7 @@ const octx = overlay.getContext('2d');
 let rwPanel = null;
 const rewind = new Rewind({
   sphere, input: $('rewind-input'),
-  hud: { box: $('rewind-hud'), year: $('rwh-year'), sub: $('rwh-sub'), legend: $('rwh-legend'), live: $('rwh-live') },
+  hud: { box: $('rewind-hud'), year: $('rwh-year'), sub: $('rwh-sub'), legend: $('rwh-legend'), sky: $('rwh-sky'), live: $('rwh-live') },
   onChange: () => { root.classList.toggle('rewinding', rewind.active); if (rwPanel) rwPanel.sync(); updateReadouts(true); },
 });
 rwPanel = new RewindPanel(rewind, {
@@ -95,8 +105,8 @@ rwPanel = new RewindPanel(rewind, {
 // =====================================================================================
 // UI: a calm layer that is always there, and everything else behind Esc
 // =====================================================================================
-// Calm (the default): the wordmark, one read-out line, a one-line hint, the place markers and a small bar (search and
-// "All controls"). Esc or that button brings up everything else; Esc again, or dragging or scrolling the sky, folds it
+// Calm (the default): the wordmark, one read-out line, a one-line hint, the place markers and a small bar (search, "Turn back the
+// sky" and "All controls"). Esc or that button brings up everything else; Esc again, or dragging or scrolling the sky, folds it
 // back. The dock steps aside while a flight or the rewind whirl plays, then the calm layer returns.
 let loadStart = performance.now();
 function setUi(v) { S.uiVisible = v; ui.classList.toggle('visible', v); root.classList.toggle('ui-on', v); }
@@ -196,7 +206,7 @@ window.addEventListener('pointerup', (e) => {
   if (d.hidden || Math.hypot(e.clientX - d.x, e.clientY - d.y) >= 6) return;
   const r = aladinEl.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
   const hit = markerAt(x, y), w = sphere.screen2world(x, y);
-  if (hit) flyTo(hit.ra, hit.dec); else if (w) flyTo(w.ra, w.dec);
+  if (hit) flyTo3D(hit.ra, hit.dec, hit.label, hit.plx ? { name: hit.label, plx: hit.plx } : null); else if (w) flyTo3D(w.ra, w.dec);
 }, true);
 window.addEventListener('pointercancel', () => { S.dragging = false; down = null; }, true);
 
@@ -264,6 +274,7 @@ function drawMarkers(ctx, W, H) {
 // =====================================================================================
 function applyFly(st) {
   sphere.setCamera(st.ra, st.dec, st.fov);
+  if (S.to3d) return;   // on the way to the 3D page: the camera moves, no patch is shown
   if (st.kind === 'leave') S.flyMix = st.oldMix;
   else if (st.kind === 'fly') S.flyMix = S.committed ? st.newMix : st.oldMix;
 }
@@ -284,6 +295,67 @@ function fillCoords(ra, dec, name) {
   $('in-ra').value = fmtDeg(ra); $('in-dec').value = fmtDeg(dec); $('in-name').value = name || ''; nameDirty = false;
   $('in-ra').removeAttribute('aria-invalid'); $('in-dec').removeAttribute('aria-invalid'); $('coord-error').textContent = '';
 }
+
+/** The 3D page for a spot. width, band and the named target ride along so its "Watch this patch change" opens the same frames. */
+function scene3dUrl(ra, dec, named) {
+  const p = new URLSearchParams({ ra: fmtDeg(ra), dec: fmtDeg(dec) });
+  if (S.width !== DEFAULTS.width) p.set('width', String(S.width));
+  if (S.band !== DEFAULTS.band) p.set('band', String(S.band));
+  if (named && named.name) { p.set('name', named.name); if (named.plx) p.set('plx', String(named.plx)); }
+  return `scene3d.html?${p}`;
+}
+/**
+ * Hand-off to the 3D page: a short dip to black. fov is the field the picture shows across its longer side; the 3D page
+ * opens on the same picture from the Sun (?enter=) and then pulls into the patch, so the two pages read as one move.
+ */
+/** Until most of the view shows the sky, or maxMs passes: resolves to whether it does. */
+async function skyShown(maxMs) {
+  const t0 = performance.now();
+  for (;;) {
+    if (await sphere.loaded() >= SKY_SHOWN) return true;
+    if (performance.now() - t0 > maxMs) return false;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+function enter3D(url, fov, snap = false) {
+  if (reduceMotion() || !(fov > 0)) { location.href = url; return; }
+  const veil = $('veil');
+  veil.classList.remove('lift', 'quick'); veil.classList.add('out');
+  // The 3D page draws stars only; from the sky it opens on this picture of the view and dissolves it into the stars.
+  const shot = snap ? Promise.race([sphere.snapshot(), new Promise((r) => setTimeout(r, 900))]) : null;
+  Promise.all([shot, new Promise((r) => setTimeout(r, VEIL_OUT_MS))]).then(([s]) => {
+    try {
+      if (s && s.img) sessionStorage.setItem(SNAP_KEY, JSON.stringify({ ...s, fov, t: Date.now() }));
+      else sessionStorage.removeItem(SNAP_KEY);
+    } catch (_) { /* storage full or blocked: the 3D page opens on its own stars */ }
+    location.href = `${url}&enter=${+fov.toFixed(4)}`;
+  });
+}
+
+/**
+ * From the sphere, a chosen spot opens the 3D view first: the camera flies there without loading any frames, then the
+ * page changes. Frames load only when asked for ("Watch this patch change" on the 3D page).
+ */
+async function flyTo3D(ra, dec, name, named = null) {
+  if (S.to3d) return;
+  if (rewind.active) rewind.exitNow();
+  setFull(false); closeSuggest();
+  S.drifting = false;
+  const to = { ra: wrap360(ra), dec: clamp(dec, -89.99, 89.99), width: MIN_FOV };
+  if (!named && name) named = { name };   // a name alone is only shown; a parallax makes it a named target in the frames view
+  S.to3d = true; root.classList.add('flying');
+  const done = await fly.fly({ ...sphere.readCamera(), inPatch: false }, to);
+  // the picture handed over is the sky at the spot, so it waits (briefly) for the view's tiles; a blank one is not sent
+  if (done) { const shown = await skyShown(SKY_WAIT_MS); enter3D(scene3dUrl(to.ra, to.dec, named), to.width, shown); return; }
+  S.to3d = false; root.classList.remove('flying');
+}
+// Coming back with the browser's Back button can restore this page as it was left, mid-hand-off and under the veil.
+window.addEventListener('pageshow', (e) => {
+  if (!e.persisted) return;
+  if (S.to3d) { S.to3d = false; root.classList.remove('flying'); }
+  const veil = $('veil');
+  if (veil.classList.contains('out')) { veil.classList.remove('out'); veil.classList.add('lift', 'quick'); }
+});
 
 /** Start loading a patch and fly to it from wherever we are. */
 async function flyTo(ra, dec, name, named = null) {
@@ -352,7 +424,7 @@ async function leaveToSphere() {
 async function zoomButton(factor) {
   if (S.view !== 'sphere' || fly.active || rewind.active) return;
   const cam = sphere.readCamera();
-  const to = clamp(cam.fov * factor, 3.5, 100);
+  const to = clamp(cam.fov * factor, MIN_FOV, 100);
   S.drifting = false;
   root.classList.add('flying');
   await fly.zoom(cam, to);
@@ -402,6 +474,8 @@ async function goName(q, err = $('coord-error')) {
 }
 function go(ra, dec, name, named = null) {
   S.drifting = false;
+  // a new place picked from the sphere opens in 3D; inside a patch the controls keep working on frames
+  if (S.view !== 'patch') { flyTo3D(ra, dec, name, named); return; }
   if (S.view === 'patch' && S.target && !fly.active && separation(S.target.ra, S.target.dec, ra, dec) < 1e-6) { openFade(ra, dec, name, { named }); return; }
   flyTo(ra, dec, name, named);
 }
@@ -451,11 +525,11 @@ $('btn-rings').addEventListener('click', () => {
 $('btn-back').addEventListener('click', leaveToSphere);
 $('btn-3d').addEventListener('click', () => {
   const t = S.target; if (!t || S.view !== 'patch') return;
-  location.href = `scene3d.html?ra=${fmtDeg(t.ra)}&dec=${fmtDeg(t.dec)}`;
+  enter3D(scene3dUrl(t.ra, t.dec, t.named), patch.fieldDeg() || t.width);
 });
 $('btn-zoom-in').addEventListener('click', () => zoomButton(0.55));
 $('btn-zoom-out').addEventListener('click', () => zoomButton(1.8));
-$('btn-open-centre').addEventListener('click', () => { if (fly.active || rewind.active) return; const c = sphere.readCamera(); S.drifting = false; flyTo(c.ra, c.dec); });
+$('btn-open-centre').addEventListener('click', () => { if (fly.active || rewind.active) return; const c = sphere.readCamera(); flyTo3D(c.ra, c.dec); });
 $('btn-play').addEventListener('click', () => { patch.setPlaying(!patch.playing); syncPlay(); });
 function syncPlay() {
   const b = $('btn-play'), n = patch.n;
@@ -695,7 +769,10 @@ function updateReadouts(force) {
 }
 function urlSync() {
   const o = {};
-  if (S.view === 'patch' && S.target) { o.ra = S.target.ra; o.dec = S.target.dec; }
+  if (S.view === 'patch' && S.target) {
+    o.ra = S.target.ra; o.dec = S.target.dec;
+    if (S.target.named) { o.name = S.target.named.name; o.plx = S.target.named.plx; }
+  }
   if (S.width !== DEFAULTS.width) o.width = S.width;
   if (S.band !== DEFAULTS.band) o.band = S.band;
   if (S.layer !== DEFAULTS.layer) o.layer = S.layer;
@@ -717,13 +794,15 @@ window.addEventListener('resize', sizeOverlay);
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   syncUi();
-  // sphere camera: drift, auto-fly, clamp
-  if (S.view === 'sphere' && !fly.active && !rewind.active) {
+  // sphere camera: drift, clamp the zoom (zooming in never opens anything)
+  if (S.view === 'sphere' && !fly.active && !rewind.active && !S.to3d) {
     if (S.drifting) { const c = sphere.cam; sphere.setCamera(wrap360(c.ra + DRIFT_DEG_S * dt), c.dec, c.fov); }
     else {
       const c = sphere.readCamera();
-      if (c.fov < AUTO_FLY_FOV) { S.drifting = false; flyTo(c.ra, c.dec); }
+      if (c.fov < MIN_FOV) { S.drifting = false; sphere.setCamera(c.ra, c.dec, MIN_FOV); }
       else if (c.fov > 100) sphere.setCamera(c.ra, c.dec, 100);
+      const hint = c.fov <= MIN_FOV * 1.02 ? HINT_MIN : HINT;
+      if (hintEl.textContent !== hint) hintEl.textContent = hint;
     }
   }
   // patch fade: frames present -> fade in; a replacement patch fades the old one out first
@@ -766,7 +845,10 @@ async function start() {
   sizeOverlay();
   if (patch.rendererError) $('sphere-note').textContent = 'This browser could not start the image renderer.';
 
-  const cam0 = url.ra !== undefined ? { ra: url.ra, dec: url.dec, fov: Math.max(S.width, 3.5) } : START;
+  // from=3d: handed back by the 3D page, which narrowed to the sphere's closest field around the spot before it went
+  const from3d = new URLSearchParams(location.search).get('from') === '3d' && !reduceMotion();
+  const cam0 = url.ra !== undefined ? { ra: url.ra, dec: url.dec, fov: Math.max(S.width, MIN_FOV) }
+    : url.look ? { ...url.look, fov: from3d ? MIN_FOV : LOOK_FOV } : START;
   sphere.onSource = (src) => {
     S.hips = src;
     const note = $('sphere-note');
@@ -775,10 +857,11 @@ async function start() {
     updateReadouts(true);
   };
   sphere.band = S.band;
-  sphere.init(cam0);   // async; the page does not wait for it
+  const sphereReady = sphere.init(cam0);   // async; the page does not wait for it
 
-  // opening sequence
+  // opening sequence (a hand-back from the 3D page lifts the veil quickly and skips the slow settle)
   if (reduceMotion()) { $('veil').style.display = 'none'; stage.classList.add('entered'); }
+  else if (from3d && !url.look) requestAnimationFrame(() => requestAnimationFrame(() => { $('veil').classList.add('lift', 'quick'); stage.classList.add('entered', 'arrived'); }));
   else requestAnimationFrame(() => requestAnimationFrame(() => { $('veil').classList.add('lift'); stage.classList.add('entered'); }));
   loadStart = performance.now();
 
@@ -786,13 +869,34 @@ async function start() {
     S.drifting = false;
     sphere.setCamera(url.ra, url.dec, Math.max(S.width * 6, 4));   // the all-sky map is pixelated far below ~4 degrees
     S.flyMix = 1; S.readyDur = 1.1;
-    openFade(url.ra, url.dec);
+    openFade(url.ra, url.dec, url.name, { named: url.plx ? { name: url.name, plx: url.plx } : null });
     // first load: no old patch to fade out
     S.readyFade = 0;
-  } else { setView('sphere'); }
+  } else {
+    // ?look=ra,dec (back from the 3D page): the sphere around that spot, nothing loads. Handed back by the 3D page, it
+    // opens at the closest field (the picture the 3D view ended on) and zooms out to the whole sky around the spot.
+    if (url.look) S.drifting = false;
+    setView('sphere');
+    if (url.look && from3d) zoomOutFromSpot(sphereReady);
+  }
   syncChips();
   requestAnimationFrame((t) => { last = t; loop(t); });
   loadCoverage().then((f) => { S.coverage = f; });
+}
+/**
+ * Back from the 3D page at a spot: the veil stays down until the map shows the view (the picture the 3D page ended on),
+ * or a moment has passed, then lifts, and the view widens from the spot to the whole sky.
+ */
+async function zoomOutFromSpot(sphereReady) {
+  await Promise.race([sphereReady, new Promise((r) => setTimeout(r, 2500))]);
+  await skyShown(SKY_WAIT_MS);
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  $('veil').classList.add('lift', 'quick'); stage.classList.add('entered', 'arrived');
+  await new Promise((r) => setTimeout(r, 700));
+  if (S.view !== 'sphere' || fly.active || rewind.active || S.to3d) return;   // already on the way somewhere else
+  root.classList.add('flying');
+  await fly.zoom(sphere.readCamera(), START.fov, 2.6);
+  root.classList.remove('flying');
 }
 start();
 // For tests and debugging from the console.

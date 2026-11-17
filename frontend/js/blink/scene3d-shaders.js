@@ -35,19 +35,25 @@ layout(location=1) in float a_abs;
 layout(location=2) in vec3 a_col;
 uniform mat4 u_vp;
 uniform vec3 u_eye;
-uniform float u_toPc, u_expo, u_limit, u_base, u_perMag, u_dpr, u_maxPt;
+uniform float u_toPc, u_expo, u_limit, u_base, u_perMag, u_dpr, u_maxPt, u_sig;
 uniform int u_skip[16];
 out vec3 v_col;
 out float v_head;
+out vec4 v_psf;                                              // core sigma (px), glow radius (px), glow weight, sprite size (px)
 void main(){
-  for (int i = 0; i < 16; i++) if (gl_VertexID == u_skip[i]) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; v_col = vec3(0.0); v_head = 0.0; return; }
+  for (int i = 0; i < 16; i++) if (gl_VertexID == u_skip[i]) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; v_col = vec3(0.0); v_head = 0.0; v_psf = vec4(1.0); return; }
   vec3 rel = a_pos - u_eye;
   float dist = max(length(rel)*u_toPc, 1e-9);
   float m = a_abs + 2.1714724*log(dist) - 5.0;               // apparent magnitude: 5 log10(d) - 5 + M
   float flux = exp(-0.9210340*(m - u_limit));                // 10^(-0.4 (m - limit)): 1 at the limit
   gl_Position = u_vp * vec4(rel, 1.0);
-  // Size grows linearly with magnitude (log of flux), so a 0 mag star is a big glint, not a screen-filling disc.
-  gl_PointSize = clamp(u_base + u_perMag*max(u_limit - m, 0.0), 1.5*u_dpr, min(40.0*u_dpr, u_maxPt));
+  // The glow's size grows linearly with magnitude (log of flux), so a 0 mag star is a big glint, not a screen-filling
+  // disc. The core is a separate, much tighter gaussian that only widens a little with brightness; the sprite is made
+  // big enough to hold both, and STAR_FS integrates the core over each pixel, so even a faint star is a smooth point.
+  float sz = clamp(u_base + u_perMag*max(u_limit - m, 0.0), 1.5*u_dpr, min(40.0*u_dpr, u_maxPt));
+  float sig = sqrt(u_sig*u_sig + 0.0064*sz*sz);
+  gl_PointSize = min(max(sz, 2.0*ceil(3.0*sig) + 2.0), u_maxPt);
+  v_psf = vec4(sig, 0.5*sz, 0.45*smoothstep(2.5*u_dpr, 9.0*u_dpr, sz), gl_PointSize);
   // The intensity law of tier 1 (0.3 sqrt(flux)), times the exposure; starY adds headroom above white.
   float x = 0.3*sqrt(flux)*u_expo;
   v_col = a_col * min(x, 1.0);                                          // display-referred; the fragment shader maps it to linear
@@ -83,6 +89,39 @@ void main(){
   float k = (exp(-4.0*r2) + 0.12*exp(-1.2*r2)) * (1.0 - r2*r2);
   // The profile is applied in display space, as tier 1 did, then mapped to linear: gaussian tails stay as thin as before.
   o = vec4(invT3(v_col * k) + (v_col / max(max(v_col.r, max(v_col.g, v_col.b)), 1e-4)) * (v_head * k * k * 0.5), 1.0);
+}`;
+// Stars: a pixel-integrated gaussian core plus a soft glow. The core's value at each pixel is the gaussian's average
+// over that pixel's square (a product of erf differences), normalised so a star centred on a pixel peaks at the same
+// display value as tier 1. It is exact for sub-pixel cores, so faint stars keep their brightness and shape as they move
+// instead of snapping between a 1-pixel and a 2x2 dot. The display -> linear map works on the brightest channel and keeps
+// the hue: per channel, the steep top of invT pushed the dominant channel far above the others and a bright blue star
+// got a dark, saturated blue centre.
+export const STAR_FS = `#version 300 es
+precision highp float;
+in vec3 v_col;
+in float v_head;
+in vec4 v_psf;
+out vec4 o;
+${INVT}
+float erfA(float x){                                         // Winitzki: erf to about 1e-4
+  float x2 = x*x, ax2 = 0.147*x2;
+  return sign(x)*sqrt(1.0 - exp(-x2*(1.2732395 + ax2)/(1.0 + ax2)));
+}
+float boxG(float x, float k){ return erfA((x + 0.5)*k) - erfA((x - 0.5)*k); }
+void main(){
+  vec2 d = (gl_PointCoord - 0.5)*v_psf.w;                   // offset from the star in device px (sub-pixel exact)
+  float k = 0.70710678/v_psf.x, c0 = boxG(0.0, k);
+  float core = boxG(d.x, k)*boxG(d.y, k)/(c0*c0);
+  float r2 = dot(d, d)/(v_psf.y*v_psf.y);
+  float glow = r2 < 1.0 ? v_psf.z*(1.0 - r2)*(1.0 - r2)/(1.0 + 8.0*r2) : 0.0;
+  float a = core + glow;
+  if (a < 1e-4) discard;
+  float mx = max(max(v_col.r, v_col.g), max(v_col.b, 1e-4));
+  vec3 hue = v_col/mx;
+  hue = clamp(mix(vec3(dot(hue, vec3(0.2126, 0.7152, 0.0722))), hue, 1.3), 0.0, 1.0);   // a little saturation back: tonemap whitens bright cores
+  hue /= max(max(hue.r, hue.g), max(hue.b, 1e-4));
+  // The profile is applied in display space, as tier 1 did, then mapped to linear on the brightest channel.
+  o = vec4(hue*(invT(mx*a) + v_head*(0.5*core + 0.25*glow)), 1.0);
 }`;
 export const LINE_VS = `#version 300 es
 precision highp float;
@@ -188,11 +227,11 @@ void main(){
   }
   rgb *= u_w; a *= u_w;
 #ifdef LDR
-  rgb = srgb(aces(rgb));
+  rgb = srgb(tonemap(rgb));
 #endif
   o = vec4(rgb, a);
 }`;
 
-export const SPRITE_UNIFORMS_STAR = ['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_base', 'u_perMag', 'u_dpr', 'u_maxPt', 'u_skip'];
+export const SPRITE_UNIFORMS_STAR = ['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_base', 'u_perMag', 'u_dpr', 'u_maxPt', 'u_sig', 'u_skip'];
 export const BODY_UNIFORMS = ['u_rect', 'u_tan', 'u_c', 'u_col', 'u_light', 'u_pole', 'u_v2w', 'u_kind', 'u_u', 'u_surf', 'u_glow', 'u_time',
   'u_evid', 'u_w', 'u_ext', 'u_pix', 'u_ring', 'u_band', 'u_atm'];

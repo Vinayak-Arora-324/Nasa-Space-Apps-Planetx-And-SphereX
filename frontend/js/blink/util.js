@@ -64,7 +64,7 @@ export const fmtDeg = (v) => String(Math.round(v * 1e6) / 1e6);
 export const fmtWidth = (w) => `${w}°`;
 
 // ---- URL state (shareable links) ----
-const KEYS = ['ra', 'dec', 'width', 'band', 'layer', 'mode'];
+const KEYS = ['ra', 'dec', 'width', 'band', 'layer', 'mode', 'name', 'plx'];
 export function readUrlState() {
   const p = new URLSearchParams(location.search), out = {};
   const num = (k) => { const v = parseFloat(p.get(k)); return isFinite(v) ? v : null; };
@@ -75,6 +75,12 @@ export function readUrlState() {
   const b = num('band'); if (b >= 1 && b <= 6) out.band = Math.round(b);
   if (['model', 'raw', 'leftover'].includes(p.get('layer'))) out.layer = p.get('layer');
   if (['video', 'blink', 'diff', 'trail'].includes(p.get('mode'))) out.mode = p.get('mode');
+  // a named target (from a search) keeps its name and parallax through the 3D page and back
+  const name = (p.get('name') || '').trim().slice(0, 80);
+  if (name) { out.name = name; const plx = num('plx'); if (plx > 0) out.plx = plx; }
+  // look=ra,dec: show the sphere around a spot without opening its patch (the 3D page's way back)
+  const look = (p.get('look') || '').split(',').map(Number);
+  if (look.length === 2 && look.every(isFinite) && look[0] >= 0 && look[0] < 360 && Math.abs(look[1]) <= 90) out.look = { ra: look[0], dec: look[1] };
   return out;
 }
 export function writeUrlState(st) {

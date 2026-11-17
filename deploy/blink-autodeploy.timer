@@ -1,5 +1,5 @@
 [Unit]
-Description=Check GitHub for a new SPHEREx Blink commit every 5 minutes
+Description=Check GitHub for a new SPHEREx Space Maps commit every 5 minutes
 
 [Timer]
 OnBootSec=2min

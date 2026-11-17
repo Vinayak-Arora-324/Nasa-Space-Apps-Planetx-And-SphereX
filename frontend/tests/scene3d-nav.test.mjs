@@ -72,3 +72,67 @@ test('retargeting a stationary target every frame does not change the trip', asy
   const d = Math.hypot(r.pos[0] - to[0], r.pos[1] - to[1], r.pos[2] - to[2]);
   assert.ok(Math.abs(d - 0.0024) < 1e-6, `stopped ${d} from the target`);
 });
+
+import { autoThrottleSpeed, keepOutside, fmtTimesC, THROTTLE } from '../js/blink/scene3d-nav.js';
+
+test('autoThrottleSpeed scales with distance and clamps', () => {
+  assert.equal(autoThrottleSpeed(100, 0.5, { min: 0.01, max: 1000 }), 50);
+  assert.equal(autoThrottleSpeed(1e6, 0.5, { min: 0.01, max: 1000 }), 1000);
+  assert.equal(autoThrottleSpeed(1e-6, 0.5, { min: 0.01, max: 1000 }), 0.01);
+  assert.equal(autoThrottleSpeed(Infinity, 0.5, { min: 2, max: 9 }), 2);
+  assert.equal(autoThrottleSpeed(NaN, 0.5, { min: 2, max: 9 }), 2);
+  assert.ok(THROTTLE.min < THROTTLE.def && THROTTLE.def < THROTTLE.max);
+});
+
+test('holding forward under auto throttle converges on the surface exponentially, never inside', () => {
+  const c = [0, 0, 0], r = 1;
+  let x = 1000, prevGap = Infinity;
+  for (let i = 0; i < 6000; i++) {
+    const gap = x - r;
+    x += -autoThrottleSpeed(gap, 0.5, { min: 1e-9, max: 1e9 }) / 60;
+    x = keepOutside([x, 0, 0], [{ c, r }])[0];
+    assert.ok(x >= 1.02 * r - 1e-12 && Number.isFinite(x));
+    assert.ok(x - r <= prevGap + 1e-12); prevGap = x - r;
+  }
+  assert.ok(Math.abs(x - 1.02) < 1e-6);
+});
+
+test('keepOutside pushes to the shell, slides, and leaves outside points alone', () => {
+  const s = [{ c: [0, 0, 0], r: 1 }];
+  assert.deepEqual(keepOutside([5, 0, 0], s), [5, 0, 0]);
+  const q = keepOutside([0.5, 0.8, 0], s);
+  assert.ok(Math.abs(Math.hypot(...q) - 1.02) < 1e-12);
+  assert.ok(q[1] > q[0]);                                   // tangential part kept
+  assert.ok(Math.abs(Math.hypot(...keepOutside([0, 0, 0], s)) - 1.02) < 1e-12);
+});
+
+test('fmtTimesC', () => {
+  assert.equal(fmtTimesC(2.1e6), '2.1 million× c');
+  assert.equal(fmtTimesC(1), '1× c');
+  assert.equal(fmtTimesC(350), '350× c');
+  assert.equal(fmtTimesC(4.5e9), '4.5 billion× c');
+  assert.equal(fmtTimesC(0.001), '<0.01× c');
+});
+
+import { headingWeight } from '../js/blink/scene3d-nav.js';
+test('headingWeight: 1 ahead, floored at 0.2 beside and behind', () => {
+  assert.equal(headingWeight(1), 1);
+  assert.equal(headingWeight(0.5), 0.5);
+  assert.equal(headingWeight(0), 0.2);
+  assert.equal(headingWeight(-1), 0.2);
+  assert.equal(headingWeight(NaN), 1);
+  // sharp cone for distant stars: ahead counts fully, 20 deg partly, beside/behind 50x farther
+  assert.equal(headingWeight(1, true), 1);
+  assert.ok(headingWeight(Math.cos(20 * Math.PI / 180), true) > 0.3);
+  assert.equal(headingWeight(0, true), 0.02);
+  assert.equal(headingWeight(-1, true), 0.02);
+});
+
+import { corridorDistance } from '../js/blink/scene3d-nav.js';
+test('corridorDistance: only stars on your path brake you', () => {
+  assert.equal(corridorDistance(380, 380), 380);                          // the star you aim at: along-track distance
+  assert.equal(corridorDistance(10, Math.hypot(10, 0.04)), 10);           // passing within the 0.05 pc tube
+  assert.equal(corridorDistance(300, Math.hypot(300, 0.6)), 300);         // far away, inside the 0.15 deg corridor
+  assert.equal(corridorDistance(10, Math.hypot(10, 1)), Math.hypot(10, 1) * 50);   // 1 pc off the path: cruise cap only
+  assert.equal(corridorDistance(-5, 5), 250);                             // behind you
+});

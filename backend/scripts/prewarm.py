@@ -6,13 +6,13 @@ Blink targets (BLINK_PRESETS) are centred without the resolver, as frontend/js/b
 does. Then /api/stream is requested with the page's parameters. The cutout cache is keyed by the
 exact centre, so a later visit from the page is served from disk.
 
-    uv run python backend/scripts/prewarm.py                 # the five analysis targets, then Blink's eight
-    uv run python backend/scripts/prewarm.py --blink         # Blink's eight presets as Blink opens them, full-prior models
+    uv run python backend/scripts/prewarm.py                 # the five analysis targets, then Space Maps' eight
+    uv run python backend/scripts/prewarm.py --blink         # Space Maps' eight presets as Space Maps opens them, full-prior models
     uv run python backend/scripts/prewarm.py --blink --band 3 "WISE 0855"
     uv run python backend/scripts/prewarm.py --fov 0.2 "RW Aur" "10.684 41.269"
     uv run python backend/scripts/prewarm.py --server http://localhost:8000   # a running server
 
---model requests model=1 (which also warms Blink's progressive view) and, before each target
+--model requests model=1 (which also warms Space Maps' progressive view) and, before each target
 streams, fetches both fit priors (gaia, catwise) over the full field radius, waiting as long as
 needed. Catalogue fetches for all targets start up front, --catalog-concurrency at a time.
 
@@ -326,7 +326,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("targets", nargs="*",
-                    help="names or coordinates (default: the analysis and Blink presets; only the Blink presets with --blink)")
+                    help="names or coordinates (default: the analysis and Space Maps presets; only the Space Maps presets with --blink)")
     ap.add_argument("--fov", "--width", dest="fov", type=float, default=None,
                     help="field of view in degrees (default 0.1; 0.5 with --blink)")
     ap.add_argument("--band", type=band_arg, default=None,

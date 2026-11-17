@@ -87,3 +87,73 @@ export function suggestSpeed(distToNearestSurface, unitsPerPc) {
   if (!Number.isFinite(distToNearestSurface) || distToNearestSurface <= 0) return lo;
   return clamp(distToNearestSurface / 3, lo, hi);
 }
+
+export const C_PC_PER_S = 9.716e-9;        // light speed in parsecs per second
+export const C_AU_PER_S = 0.0020040;       // and in AU per second
+export const THROTTLE = { min: 0.02, max: 20, def: 1 };
+
+/**
+ * Auto-throttle: free-flight speed (frame units per second) is throttle x the distance to the nearest surface, so each
+ * second of holding forward closes a fixed fraction of the remaining gap. Clamped to [min, max]; a missing or
+ * non-positive distance gives min.
+ */
+export function autoThrottleSpeed(dNear, throttle, { min = 0, max = Infinity } = {}) {
+  if (!Number.isFinite(dNear) || dNear <= 0 || !Number.isFinite(throttle)) return min;
+  return clamp(dNear * throttle, min, max);
+}
+
+/**
+ * Keep a point out of spheres. spheres: [{ c: [x, y, z], r }]; a point inside shell * r is pushed radially onto that
+ * shell, which keeps the tangential part of a move (sliding). Returns a new point.
+ */
+export function keepOutside(p, spheres, shell = 1.02) {
+  let q = p.slice();
+  for (let pass = 0; pass < 2; pass++) {
+    for (const s of spheres) {
+      const R = s.r * shell, d = sub(q, s.c), l = len(d);
+      if (!(R > 0) || l >= R) continue;
+      const u = l > 0 ? [d[0] / l, d[1] / l, d[2] / l] : [0, 0, 1];
+      q = [s.c[0] + u[0] * R, s.c[1] + u[1] * R, s.c[2] + u[2] * R];
+    }
+  }
+  return q;
+}
+
+/** "2.1 million× c" style text for a speed given as a multiple of light speed. */
+export function fmtTimesC(n) {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 0.01) return '<0.01× c';
+  if (n < 1000) return `${n < 10 ? n.toFixed(2).replace(/\.?0+$/, '') : Math.round(n)}× c`;
+  const units = [[1e15, 'quadrillion'], [1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']];
+  for (const [v, name] of units) if (n >= v) return `${(n / v).toPrecision(2).replace(/\.0$/, '')} ${name}× c`;
+  return `${Math.round(n)}× c`;
+}
+
+/**
+ * How much a surface at angle theta from the look direction (cosine c) counts for the auto-throttle: 1 straight ahead,
+ * falling to 0.2 at 90 degrees and behind, so a surface that is far off to the side or behind counts as up to 5x farther.
+ */
+/**
+ * Effective distance of a distant star for the interstellar auto-throttle. A star only brakes you if your heading will
+ * actually take you close to it: when the path passes within a corridor of radius max(tube, along * tan 0.15 deg), it
+ * counts at its along-track distance (so the star you aim at pulls you in smoothly). Any other star counts 50x farther,
+ * which only caps the cruise speed in dense fields. Inputs in frame units: along = distance ahead along the heading,
+ * dist = straight-line distance.
+ */
+export const CORRIDOR = { tube: 0.05, tanAngle: Math.tan(0.15 * Math.PI / 180), cruise: 50 };
+export function corridorDistance(along, dist, tube = CORRIDOR.tube) {
+  if (!(dist > 0)) return 0;
+  if (along > 0) {
+    const miss2 = Math.max(0, dist * dist - along * along), r = Math.max(tube, along * CORRIDOR.tanAngle);
+    if (miss2 <= r * r) return along;
+  }
+  return dist * CORRIDOR.cruise;
+}
+
+export function headingWeight(c, sharp = false) {
+  if (!Number.isFinite(c)) return 1;
+  // sharp: for distant stars in the interstellar field. Only stars within ~20-30 deg of the heading slow you; one well
+  // off-axis counts 50x farther, so a dense field doesn't make you crawl. cos^16: 10 deg 0.78, 20 deg 0.37, 30 deg 0.10.
+  if (sharp) return clamp(Math.pow(Math.max(c, 0), 16), 0.02, 1);
+  return clamp(c, 0.2, 1);
+}

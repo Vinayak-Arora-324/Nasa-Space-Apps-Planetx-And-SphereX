@@ -8,6 +8,7 @@
 //   - Stars: straight-line motion through space from position, proper motion, parallax and radial velocity,
 //     with the light-time correction used by ERFA eraStarpm.
 //   - Not modelled: nutation (<= 17"), annual aberration (<= 20.5"), refraction (34' at the horizon, 1' at 45 deg).
+//   - Sun, Moon and planets: ephem.js.
 const D2R = Math.PI / 180, AS2R = D2R / 3600, TAU = 2 * Math.PI;
 export const JD2000 = 2451545.0;
 export const JD_GREGORIAN = 2299160.5;            // 1582 October 15, 00:00 (first Gregorian day)
@@ -57,8 +58,9 @@ export const jyear = (jd) => 2000 + (jd - JD2000) / 365.25;
 
 /**
  * Delta T = TT - UT1 in seconds (Espenak & Meeus 2006 polynomials, Morrison & Stephenson 2004 outside them).
- * Only the precession and star-motion time argument uses it, so its uncertainty (minutes, 2,000 years ago)
- * changes nothing visible; Earth's rotation is driven by UT, which local solar time fixes directly.
+ * Earth's rotation is driven by UT, which local solar time fixes directly, so the stars and the Sun do not
+ * depend on it. The Moon does: it moves its own width in an hour of TT, and Delta T is uncertain by hours
+ * in the deep past (see deltaTSigma).
  */
 export function deltaT(y) {
   const u = (y - 1820) / 100;
@@ -76,6 +78,16 @@ export function deltaT(y) {
   if (y < 2005) { const t = y - 2000; return 63.86 + 0.3345 * t - 0.060374 * t ** 2 + 0.0017275 * t ** 3 + 0.000651814 * t ** 4 + 0.00002373599 * t ** 5; }
   if (y < 2050) { const t = y - 2000; return 62.92 + 0.32217 * t + 0.005589 * t * t; }
   return -20 + 32 * u * u - 0.5628 * (2150 - y);
+}
+
+/**
+ * Rough one-sigma uncertainty of Delta T in seconds: 0.8 u^2 with u in centuries from 1820 (the growth of the
+ * Morrison & Stephenson 2004 error estimate, extrapolated). About 0.5 h at 3000 BCE and 3 h at 10,000 BCE.
+ */
+export function deltaTSigma(y) {
+  if (y > 1600 && y < 2030) return 1;
+  const u = (y - 1820) / 100;
+  return Math.max(1, 0.8 * u * u);
 }
 
 // ------------------------------------------------------------------------------------- vectors
@@ -198,14 +210,14 @@ export function equationOfOrigins(r, s) {
 
 /**
  * Everything the view needs for a place and instant. jdUt: UT Julian Day; lat/lon in degrees (east positive).
- * Returns { epj, prec (ICRS -> mean of date), theta (local sidereal angle, radians) }.
+ * Returns { epj, jdTt, prec (ICRS -> mean of date), theta (local sidereal angle, radians) }.
  */
 export function skyState(jdUt, lon) {
   const cal = calendarFromJd(jdUt), y = cal.year + (cal.month - 0.5) / 12;
   const jdTt = jdUt + deltaT(y) / 86400, epj = jyear(jdTt);
   const prec = ltpb(epj);
   const theta = earthRotationAngle(jdUt) - equationOfOrigins(prec, cioLocator(epj)) + lon * D2R;
-  return { epj, prec, theta };
+  return { epj, jdTt, prec, theta };
 }
 
 /**

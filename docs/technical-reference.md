@@ -4,15 +4,15 @@ A small web tool for the NASA Space Apps "SPHEREx sky viewer" challenge. Give it
 
 The app has two pages:
 
-- `/` is **Blink**, a full-window sky viewer. It opens on the whole sky. Click a spot, or enter coordinates, to fly into a patch and play its frames.
+- `/` is **Space Maps**, a full-window sky viewer. It opens on the whole sky. Click a spot, or enter coordinates, to fly into a patch and play its frames.
 - `/analysis.html` is the earlier pixel viewer. It shows every frame of a patch as a time series, with photometry, light curve and spectrum at a position.
 
-Blink draws the sky from measurements: each frame is fitted with point sources and a smooth background, and the picture is drawn from those fits. Raw pixels and Leftover (data minus model) are available under Advanced options. The unknown-mover search is an opt-in checkbox.
+Space Maps draws the sky from measurements: each frame is fitted with point sources and a smooth background, and the picture is drawn from those fits. Raw pixels and Leftover (data minus model) are available under Advanced options. The unknown-mover search is an opt-in checkbox.
 
 The browser cannot talk to the IRSA archive directly because IRSA sends no CORS headers. This repo therefore has two parts:
 
 - `backend/spherex_app/` is a FastAPI service. It finds frames (IRSA TAP), downloads cutouts and keeps only the parts it needs, then resamples them onto a north-up grid and streams them to the browser. It also does photometry, name resolution, catalogue overlays, source fitting and moving-object search.
-- `frontend/` is a static site served by the backend: `index.html` (Blink), `analysis.html` (analysis view), and the `js/blink/` modules described below.
+- `frontend/` is a static site served by the backend: `index.html` (Space Maps), `analysis.html` (analysis view), and the `js/blink/` modules described below.
 
 ## Run
 
@@ -22,7 +22,7 @@ Requires [uv](https://docs.astral.sh/uv/). From the repo root:
 uv run uvicorn spherex_app.main:app --app-dir backend --port 8000
 ```
 
-Then open http://localhost:8000/ (Blink) or http://localhost:8000/analysis.html. The API is under `/api/`, and interactive docs are at `/docs`.
+Then open http://localhost:8000/ (Space Maps) or http://localhost:8000/analysis.html. The API is under `/api/`, and interactive docs are at `/docs`.
 
 Tests (offline and fast; some use a sample cutout and are skipped if it is absent):
 
@@ -71,14 +71,14 @@ The cache is safe to delete at any time.
 `backend/scripts/prewarm.py` loads targets the same way the pages do, so its centres and the quantized cutout size match the app's cache keys. There are two kinds of target:
 
 - **Analysis-page targets** (Barnard's Star, eps Ind B, WISE 0855, RW Aur, R Dra): the name is resolved, a moving target is propagated to epoch 2026.0 and the centre is rounded to seven decimals. The proper motion is sent with the stream request.
-- **Blink presets** (North and South Ecliptic Poles, Orion Nebula, Galactic Centre, Barnard's Star, ε Indi B, WISE 0855, R Draconis): centred exactly as `frontend/js/blink/app.js` does (fixed coordinates, high proper-motion stars propagated from 2000.0 to 2026.0), with no proper motion in the request, as Blink sends it.
+- **Space Maps presets** (North and South Ecliptic Poles, Orion Nebula, Galactic Centre, Barnard's Star, ε Indi B, WISE 0855, R Draconis): centred exactly as `frontend/js/blink/app.js` does (fixed coordinates, high proper-motion stars propagated from 2000.0 to 2026.0), with no proper motion in the request, as Space Maps sends it.
 
-Options match what Blink requests: `--width` (alias `--fov`), `--band` (detectors, e.g. `2`), `--per-visit`, and `--model`, which requests `model=1`. Models are cached per frame, field and catalogues used, and shared with Blink's progressive mode, so warming with `model=1` also warms Blink. With `--model`, the script first fetches **both** fit catalogues (Gaia DR3 and CatWISE2020) for every target and waits as long as they take. Fetches for all targets start up front, `--catalog-concurrency` (default 3) at a time. They bypass the server's 10-minute failure cache, so the fits are made with full priors and the first visitor never waits. `--blink` is shorthand for `--width 0.5 --band 2 --per-visit 6 --model` (Blink's defaults) and, with no targets given, warms only the eight Blink presets. Explicit options override it. Each output line reports frames, failures, model cache hits and fits, the catalogues the fits used, and the catalogue wait. The command exits nonzero if any target, frame or catalogue fails.
+Options match what Space Maps requests: `--width` (alias `--fov`), `--band` (detectors, e.g. `2`), `--per-visit`, and `--model`, which requests `model=1`. Models are cached per frame, field and catalogues used, and shared with Space Maps' progressive mode, so warming with `model=1` also warms Space Maps. With `--model`, the script first fetches **both** fit catalogues (Gaia DR3 and CatWISE2020) for every target and waits as long as they take. Fetches for all targets start up front, `--catalog-concurrency` (default 3) at a time. They bypass the server's 10-minute failure cache, so the fits are made with full priors and the first visitor never waits. `--blink` is shorthand for `--width 0.5 --band 2 --per-visit 6 --model` (Space Maps' defaults) and, with no targets given, warms only the eight Space Maps presets. Explicit options override it. Each output line reports frames, failures, model cache hits and fits, the catalogues the fits used, and the catalogue wait. The command exits nonzero if any target, frame or catalogue fails.
 
 ```sh
-uv run python backend/scripts/prewarm.py --blink                       # Blink's eight presets, as Blink opens them
+uv run python backend/scripts/prewarm.py --blink                       # Space Maps' eight presets, as Space Maps opens them
 uv run python backend/scripts/prewarm.py --blink --band 3 "WISE 0855"  # another band / one preset
-uv run python backend/scripts/prewarm.py                               # analysis targets, then Blink presets, at fov 0.1, no model
+uv run python backend/scripts/prewarm.py                               # analysis targets, then Space Maps presets, at fov 0.1, no model
 uv run python backend/scripts/prewarm.py --fov 0.2 "RW Aur"            # other targets / field sizes
 uv run python backend/scripts/prewarm.py --server http://localhost:8000 --blink   # warm a running server
 ```
@@ -87,7 +87,7 @@ It uses the same `SPHEREX_CACHE_DIR` as the server. With `--server`, catalogues 
 
 ### Coverage index for cold fields
 
-Opening a field nobody has opened before first spends two to five minutes on the IRSA TAP query that lists its exposures. `backend/scripts/warm_coverage.py` runs only that query, ahead of time, for a list or grid of fields. It downloads no cutouts and fits no models. Each list is cached on disk and indexed, so the field appears as a "ready" marker on Blink's sphere (from `/api/coverage`) and opens without the TAP wait.
+Opening a field nobody has opened before first spends two to five minutes on the IRSA TAP query that lists its exposures. `backend/scripts/warm_coverage.py` runs only that query, ahead of time, for a list or grid of fields. It downloads no cutouts and fits no models. Each list is cached on disk and indexed, so the field appears as a "ready" marker on Space Maps' sphere (from `/api/coverage`) and opens without the TAP wait.
 
 ```sh
 uv run python backend/scripts/warm_coverage.py "10.6847 41.2690" "56.75,24.1167"    # fields as "ra dec"
@@ -130,7 +130,7 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-Enable it with `systemctl --user daemon-reload && systemctl --user enable --now spherex-coverage.timer`, check it with `systemctl --user list-timers` and `journalctl --user -u spherex-coverage`. If you set `SPHEREX_CACHE_DIR` for the server, set the same value here (`Environment=SPHEREX_CACHE_DIR=...` in the service, or in the crontab line). Blink loads `/api/coverage` when the page opens, so new markers appear on the next page load.
+Enable it with `systemctl --user daemon-reload && systemctl --user enable --now spherex-coverage.timer`, check it with `systemctl --user list-timers` and `journalctl --user -u spherex-coverage`. If you set `SPHEREX_CACHE_DIR` for the server, set the same value here (`Environment=SPHEREX_CACHE_DIR=...` in the service, or in the crontab line). Space Maps loads `/api/coverage` when the page opens, so new markers appear on the next page load.
 
 ## API summary
 
@@ -142,7 +142,7 @@ All angles are ICRS degrees and times are MJD. Proper motions are in mas/yr with
 - `GET /api/stream?ra&dec&fov=0.1&scale=6.15&detectors=1,…,6&mjd_min&mjd_max&max_frames=400&pmra&pmdec&epoch&per_visit&model=0` returns a binary stream of length-prefixed JSON records plus image payloads, one per frame, in completion order. `fov` is in degrees, from 0.01 to 3.5. Each image is IMAGE − ZODI in MJy/sr, resampled onto a north-up TAN grid (row 0 = north, column 0 = east), followed by its flag plane. Each frame also carries metadata, the wavelength at the field centre, and quick-look photometry of the (optionally moving) target.
   - `per_visit=N` keeps at most N frames for each (detector, visit) pair, spread evenly in time. A gap of more than 20 days starts a new visit. It is applied before `max_frames`.
   - `model=1` fits a source model to each frame. The `start` record then has `"model": true`, and each ok frame record has a `model` object: `psf_fwhm_px`, `noise`, `quality` (leftover RMS over expected noise; about 1 means the model explains the data) and a `sources` list. Each source has a position `x`, `y` in grid pixels, `flux`, `flux_err`, `snr`, `kind` (`point` or `extended`), `saturated` and a `cat` match or `null`. The payload gains two planes after the flags: background (the smooth diffuse light) and leftover (image − background − sources), both float32. The `end` record gains `model_stats` (`cached`, `fitted`, and the `priors` catalogues the fits in this stream used).
-  - `model=progressive` sends raw pixels first and the model later; Blink uses it. The `start` record has `"model": "progressive"`, and each ok frame record goes out as soon as its pixels are ready, with image and flags only. Later, a `{"type": "model", "id": <frame id>, "model": {…}}` record carries the same model object, followed by the background and leftover planes. Progress and end records count the model records sent (`models`). Both model modes share one model cache.
+  - `model=progressive` sends raw pixels first and the model later; Space Maps uses it. The `start` record has `"model": "progressive"`, and each ok frame record goes out as soon as its pixels are ready, with image and flags only. Later, a `{"type": "model", "id": <frame id>, "model": {…}}` record carries the same model object, followed by the background and leftover planes. Progress and end records count the model records sent (`models`). Both model modes share one model cache.
   - Catalogue priors never delay frames. A cached model is used without any catalogue lookup. A fit uses the catalogues already cached (usually Gaia); a missing one is fetched in the background, one shared query per field, and saved to disk for later loads. A failed query is not retried for 10 minutes. The model cache key records the catalogues a fit used, so a field fitted with Gaia only is refitted once CatWISE is cached, and is otherwise reused.
 - `GET /api/spectrum?ra&dec&fov&pos_ra&pos_dec&…&aper=2` returns per-frame aperture photometry at a position, with the wavelength each frame saw there. That is a spectrum and light curve in one. It uses the same frame selection as `/api/stream` and so reuses its cached cutouts. The response also includes a `failed` count of frames that could not be fetched.
 - `GET /api/catalog?cat=gaia|catwise&ra&dec&radius` returns Gaia DR3 or CatWISE2020 sources for overlays, with proper motions in mas/yr and the epoch of each catalogue position.
@@ -158,9 +158,9 @@ Moving-object endpoints. They take the same parameters: `ra`, `dec`, `fov` (defa
 
 ## Frontend layout
 
-The Blink page is an ES module app with no framework. Its code is in `frontend/js/blink/`:
+The Space Maps page is an ES module app with no framework. Its code is in `frontend/js/blink/`:
 
-- `app.js`: the Blink shell. It owns the view state, UI visibility and fly-to flights, and wires the sphere, patch and DOM controls.
+- `app.js`: the Space Maps shell. It owns the view state, UI visibility and fly-to flights, and wires the sphere, patch and DOM controls.
 - `sphere.js`: the sphere view, Aladin Lite full-window with all chrome hidden. It falls back to a dark ground when the library or the HiPS tiles are unreachable.
 - `patch.js`: the patch view. It handles streaming, playback, driving the renderer, overlays and pointer interaction.
 - `skygl.js`: `SkyRenderer`, the WebGL2 renderer (bicubic float images and source glows) with a Canvas2D fallback.
@@ -170,9 +170,11 @@ The Blink page is an ES module app with no framework. Its code is in `frontend/j
 - `hover.js`: hover card contents for the patch view.
 - `util.js`: small shared helpers for maths, coordinate parsing and formatting, and URL state.
 - `rewind.js`: the whole-sky rewind ("Turn back the sky"): horizon camera, the whirl animation, overlays and the controls in the sphere dock.
-- `skytime.js`: the rewind's astronomy (calendar, ΔT, long-term precession, Earth rotation, horizon frame, 3-D star motion), with no DOM.
+- `skytime.js`: the rewind's astronomy (calendar, ΔT and its uncertainty, long-term precession, Earth rotation, horizon frame, 3-D star motion), with no DOM.
+- `ephem.js`: the Sun, Moon and planets for the rewind (ports of ERFA `eraPlan94` and `eraMoon98`, light-time, the Moon's parallax and phase, planet magnitudes), with no DOM.
+- `rewind-sky.js`: the rewind's sky layers: which ones are switched on (kept in `localStorage`), sky brightness by Sun and Moon altitude, the Sun and Moon discs, and overlap-free label placement.
 
-Blink also uses `frontend/js/api.js` (streaming, including the model planes), `frontend/js/wcs.js` and `frontend/js/data.js`.
+Space Maps also uses `frontend/js/api.js` (streaming, including the model planes), `frontend/js/wcs.js` and `frontend/js/data.js`.
 
 ## How it works
 
@@ -190,14 +192,22 @@ In the sphere view, the **Turn back the sky…** button opens a small form (fold
 - **Stars that move against the others** come from XHIP (Hipparcos 2007 astrometry plus radial velocities; 3,114 stars brighter than V = 5 or faster than 400 mas/yr, in `frontend/data/rewind-stars.json`). They are moved in a straight line through space with the light-time and relativistic terms of ERFA `eraStarpm`. Over 2,000 years this puts Barnard's Star 5.0° from its 1991 position, where a straight line on the sky gives 5.8°. Because the map is a 2025 snapshot, each fast star is drawn in gold where it was on the chosen date, with a ring where the map shows it.
 - **Checked against ERFA and astropy** (`frontend/tests/skytime.test.mjs`): the precession matrix matches `eraLtpb` to 1e-9″, the Earth Rotation Angle matches `eraEra00`, star positions match `eraPmsafe` to 1 mas at 5000 BCE, 26 CE and 13,700 CE, and altitude/azimuth at Giza agree with astropy's `AltAz` to within 30″ in 2026 and 21″ in 26 CE. The residual is nutation and aberration, which are left out (under 40″ together, a fraction of a screen pixel). Thuban came within 0.1° of the pole in about 2800 BCE; Vega's closest approach in the coming cycle is 5.7° in about 13,600 CE.
 - **The whirl is faster than real time.** Each turn stands for many thousands of nights. During the whirl the date, precession and star motions are those of the year shown, but the turn angle is compressed; where it stops is exact. Times are local mean solar time, which fixes Earth's rotation directly (UT), so the uncertainty of ΔT (minutes, 2,000 years ago) does not move the stars. Dates before 15 October 1582 use the Julian calendar.
-- **Not modelled:** nutation, annual aberration, atmospheric refraction (about 0.5° at the horizon) and brightness changes. Stars not in the list stay where the 2025 map has them.
+- **Sun, Moon and planets** (`ephem.js`). The planets come from ERFA `eraPlan94` (Simon et al. 1994 mean elements with periodic terms; Mercury to Uranus). The Moon comes from `eraMoon98` (Meeus ch. 47), carried from the ecliptic of date to J2000 through the same Vondrák 2011 poles as the precession. Both are ported term for term and match pyerfa to machine precision. The Sun is the negated Earth–Moon barycentre. Planets get one light-time iteration, and the Moon is shifted for parallax from the observer's place (up to 1°). Phase comes from the Sun–Moon–observer angle and magnitudes from the Astronomical Almanac formulas (Meeus ch. 41). Against JPL DE441, the Sun is within 0.07° and Mercury to Mars within 0.25° over the whole range. Jupiter and Saturn are within about 1° back to 10,000 BCE and 2–3° by 15,000 BCE. The Moon is within 0.16° at 3000 BCE, 2.1° at 9900 BCE and 4–6° by 15,000 BCE. Outside ±10,000 years both theories are extrapolated beyond their fits. Tests (`frontend/tests/ephem.test.mjs`) cover the Meeus worked examples, DE441 points, the 2020 Jupiter–Saturn conjunction (0.10°), the triple conjunction of 7 BCE, and the eclipses of 2017, 763 BCE and 585 BCE.
+- **ΔT and the Moon.** Local solar time fixes Earth's rotation (UT), but the bodies move in dynamical time (TT = UT + ΔT). ΔT is several hours at 10,000 BCE, and its uncertainty grows roughly as 0.8 u² s (u in centuries from 1820). At 10,000 BCE that is about 1.5 hours, and the Moon moves about 0.55° an hour. The Moon's position error is taken as hypot(0.55° × σΔT in hours, model error). Above 1°, a dotted arc shows the stretch of its orbit it could be on, and the HUD says so. The date conversion also accounts for ΔT so that mean noon stays mean noon: the mean Sun's hour angle at local noon is within 5 minutes at 15,000 BCE, where it would be 36 minutes off without the correction.
+- **Daylight.** The sky colour, the faintest magnitude shown, and how much of the figure lines and deep-sky labels to keep all follow the Sun's geometric altitude: day above −0.83°, then civil, nautical and astronomical twilight to −18°. A lit Moon above the horizon brightens a dark sky a little and hides about 1.5 magnitudes. In an eclipse the Moon's disc is drawn over the Sun with the true overlap, and the HUD names the eclipse as total, annular or partial. On 28 May 585 BCE it finds the Thales eclipse as partial over Asia Minor late in the afternoon. The darkening of the sky during totality is not modelled.
+- **Constellations and deep sky** (`frontend/data/rewind-sky.json`, about 95 KiB). This file holds all 88 IAU constellations: stick figures, names, label points and boundaries, with Serpens in two parts. The data comes from d3-celestial by Olaf Frohn (BSD-3-Clause), pinned to one commit. Every figure vertex is snapped to the nearest XHIP star within 0.05°, so the figures are made of real stars that move with their proper motions. Thirty-one figure stars not in `rewind-stars.json` are added; ξ UMa, which has no Hipparcos solution, is taken from the literature. Label points are carried by the mean motion of their figure's stars. The boundaries are the IAU's (Delporte 1930), drawn along parallels and meridians of the 1875 equinox. They are precessed to B1875, filled in at steps of 1° or less along those lines, and turned back to ICRS. That keeps them fixed to the sky as drawn, so they turn with precession like the map. Deep-sky labels cover the Messier list plus the Magellanic Clouds, ω Centauri, 47 Tucanae, the Hyades, the Double Cluster, the Carina Nebula, the Coalsack and the Galactic centre. Clusters that ride with a star (the Pleiades, the Hyades) move with it. Stellarium's data was not used because it is CC BY-SA.
+- **Layers.** "Show on the sky" in the rewind form switches constellation lines, constellation names, boundaries (off by default), star names, the Sun, Moon and planets, daylight, and galaxies and nebulae. The choice is kept in `localStorage`. Labels are placed greedily by priority (Sun, Moon and planets first, then bright stars, constellations and deep-sky objects), and a label that would overlap one already placed is dropped. Below the date, the HUD gives the light (day, twilight or night), the Moon's phase and altitude, where the date falls in the seasons, and the planets that can be seen.
+- **Not modelled:** nutation, annual aberration, atmospheric refraction (about 0.5° at the horizon), brightness changes, Neptune, minor bodies and the Moon's libration. Stars not in the list stay where the 2025 map has them.
 - **Cost:** on an AMD Radeon 780M (integrated), a full frame during the whirl (overlay plus Aladin's render) took a median 10 ms (p90 12.7 ms) at 1543×964 pixels, against 1.4 ms for the ordinary sphere view.
 
 The star list is rebuilt from VizieR (CDS, with mirrors as fallback) with:
 
 ```sh
 uv run python backend/scripts/build_rewind_stars.py
+uv run python backend/scripts/build_rewind_sky.py     # constellations, boundaries and deep-sky labels
 ```
+
+`build_rewind_sky.py` reads the same XHIP table (`--tsv` takes a local copy) and the pinned d3-celestial files. It prints a note for the 4 boundary segments near the north pole (Cepheus and Ursa Minor) that run along neither a B1875 meridian nor a parallel; those are kept as given.
 
 ## New data releases
 
@@ -212,7 +222,7 @@ Nothing needs to change when IRSA ingests new SPHEREx data or a new release (`qr
 - Catalogue priors are limited to Gaia G ≤ 19 and a capped count (`PRIOR_MAX` = 3000). Many faint stars are therefore fitted as unmatched free detections.
 - SkyBoT positions are geocentric. Main-belt objects carry a parallax error of a few arcseconds, and near-Earth objects more.
 - Large patches (1° and above) download several GB, because the S3 reader fetches whole detector rows.
-- The sky rewind turns the 2025 map; only the 3,114 listed stars are moved. Aladin paints tiles it has not loaded yet in flat grey, so a slow connection shows grey patches while the whirl uncovers new sky.
+- The sky rewind turns the 2025 map; only the 3,114 listed stars (plus 31 constellation-figure stars) are moved. The Moon is uncertain by degrees before about 8000 BCE (see above), so eclipses and close conjunctions that long ago are only indicative. Aladin paints tiles it has not loaded yet in flat grey, so a slow connection shows grey patches while the whirl uncovers new sky.
 
 ## Download benchmark (2026-11-14)
 

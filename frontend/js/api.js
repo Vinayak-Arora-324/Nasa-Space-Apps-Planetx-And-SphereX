@@ -98,4 +98,5 @@ export async function streamFrames(params, { signal, onStart, onFrame, onEnd, on
 }
 /** 3D fly-through payload: stars (Gaia cone) and solar system. Cold cache can take 30 to 90 s. */
 export const getScene3D = (params, signal) => getJSON('/api/scene3d', params, signal);
+export const getCoverage = (signal) => getJSON('/api/coverage', {}, signal);
 export const getSystem = (id, signal) => getJSON(`/api/system/${encodeURIComponent(id)}`, {}, signal);

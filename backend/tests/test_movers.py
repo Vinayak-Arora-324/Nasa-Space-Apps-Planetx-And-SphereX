@@ -79,6 +79,19 @@ def test_parse_skybot_sample():
     assert a["dra"] == 64.5481 and a["ddec"] == -20.2203 and a["vmag"] == 23.5
 
 
+def test_parse_skybot_distances():
+    """Geocentric/heliocentric distances (AU) from `-output=all` keys 'dg (ua)' / 'dh (ua)'."""
+    text = ('[{"Name":"2019 AX78","RA (hms)":"11 59 59.1535","DEC (dms)":"+00 00 22.332",'
+            '"Class":"MB>Inner","VMag (mag)":24.4,"dg (ua)":2.40786541923,'
+            '"dh (ua)":2.07195936032,"position (au)":{"x":-1.889},"ref_epoch":2461000}]')
+    (a,) = movers.parse_skybot(text)
+    assert a["dg_au"] == pytest.approx(2.40786541923) and a["dh_au"] == pytest.approx(2.07195936032)
+    # objects without distances (the older sample) give None, existing keys unchanged
+    objs = movers.parse_skybot(SKYBOT_SAMPLE)
+    assert objs[1]["dg_au"] is None and objs[1]["dh_au"] is None
+    assert set(objs[0]) >= {"number", "name", "class", "vmag", "ra", "dec", "dra", "ddec", "err_arcsec"}
+
+
 def test_parse_skybot_empty_and_errors():
     assert movers.parse_skybot("") == []
     assert movers.parse_skybot("[]") == []

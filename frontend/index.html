@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Blink — SPHEREx sky viewer</title>
+<title>Space Maps — SPHEREx sky viewer</title>
 <meta name="description" content="Fly through the SPHEREx sky and watch a patch of it change over time.">
 <meta name="theme-color" content="#05070B">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305070B'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23F2B84B'/%3E%3C/svg%3E">
@@ -25,6 +25,7 @@
   <div id="rewind-hud" class="rewind-hud" aria-hidden="true" hidden>
     <p id="rwh-year" class="rwh-year"></p>
     <p id="rwh-sub" class="rwh-sub"></p>
+    <p id="rwh-sky" class="rwh-sky" hidden></p>
     <p id="rwh-legend" class="rwh-legend" hidden></p>
   </div>
   <p id="rwh-live" class="visually-hidden" role="status" aria-live="polite"></p>
@@ -40,7 +41,7 @@
   <div id="ui" class="ui">
     <div class="scrim"></div>
     <header class="header">
-      <h1 class="wordmark">Blink</h1>
+      <h1 class="wordmark">Space Maps</h1>
       <div class="readouts" id="readouts" tabindex="0" aria-label="Read-outs">
         <div id="ro-centre" class="ro"></div>
         <div id="ro-mission" class="ro more"></div>
@@ -132,13 +133,19 @@
               <button type="submit" class="btn accent" id="rw-go">Turn back the sky</button>
             </div>
             <p id="rw-error" class="error" role="alert"></p>
+            <h3 class="label rw-show-label" id="rw-layers-label">Show on the sky</h3>
+            <div class="chips layers" id="rw-layers" role="group" aria-labelledby="rw-layers-label"></div>
             <details class="advanced rw-accuracy">
               <summary><span class="chev" aria-hidden="true"></span>How accurate is this?</summary>
               <div class="adv-body">
                 <p class="note">The picture is SPHEREx’s 2025 all-sky map. Turning it to another date and place is a rotation, which is exact for every pixel: Earth’s slow wobble (precession, from the long-term model of Vondrák, Capitaine &amp; Wallace 2011 used in the IAU’s SOFA and ERFA libraries) and Earth’s daily spin.</p>
                 <p class="note">Stars that drift against the others are moved through space from their Hipparcos positions, motions, distances and radial velocities (the XHIP catalogue). They agree with ERFA to a thousandth of an arcsecond. They are drawn in gold where they really were; a ring marks where the 2025 map shows them. Fainter stars stay where the map has them: over 2,000 years almost all move less than a pixel at this zoom.</p>
+                <p class="note">The Sun, Moon and planets come from the analytical theories in ERFA: Simon et al. (1994) for the planets and Meeus’s lunar series for the Moon. Checked against NASA JPL’s DE441 ephemeris, the Sun is within 0.07° and Mercury to Mars within 0.25° across the whole range. Jupiter and Saturn drift by about 1° by 10,000 BCE and 2–3° by 15,000 BCE.</p>
+                <p class="note">The Moon is the hardest. It is within 0.2° (under half its width) back to 3000 BCE but drifts by 2° at 10,000 BCE and 4–6° by 15,000 BCE. Earth’s day also lengthens unevenly (ΔT), so a clock time long ago can be off by hours, and the Moon moves about half a degree an hour. When the uncertainty passes 1°, a dotted arc shows how far along its path the Moon could really be. Old eclipses and close conjunctions should be taken as approximate.</p>
+                <p class="note">The sky colour follows the Sun’s height: day, civil, nautical and astronomical twilight, then night. Fainter stars and labels fade out as the sky brightens, and moonlight washes them out a little.</p>
+                <p class="note">All 88 constellations, their figures and their IAU boundaries come from d3-celestial by Olaf Frohn (BSD licence). Their stars are moved like every other star, so the figures change shape over thousands of years. The boundaries are fixed to the sky as the IAU drew them for the equinox of 1875, so they turn with precession. Bright galaxies, clusters and nebulae are labelled from the Messier list and a few more.</p>
                 <p class="note">The whirl is faster than real time: each turn stands for many thousands of nights. Where it stops is exact for the date and local solar time you chose.</p>
-                <p class="note">Left out: nutation and aberration (together under 40″, a fraction of a pixel), atmospheric refraction (it lifts stars by about half a degree at the horizon) and changes in brightness. Dates before 15 October 1582 are in the Julian calendar.</p>
+                <p class="note">Left out: nutation and aberration (together under 40″, a fraction of a pixel), atmospheric refraction (it lifts stars by about half a degree at the horizon), changes in star brightness, and minor bodies such as comets and Neptune. Dates before 15 October 1582 are in the Julian calendar, which slowly drifts against the seasons: on 21 June 10,000 BCE the Sun was near the March equinox, about 80 days earlier in the seasons. Under the sky, the panel says where in the seasons the date falls.</p>
               </div>
             </details>
           </form>
@@ -146,7 +153,7 @@
       </div>
 
       <div id="sphere-dock" class="sphere-dock">
-        <p class="hint sphere-only" id="hint">Drag to look around · scroll to zoom · click a spot to open it</p>
+        <p class="hint sphere-only" id="hint">Drag to look around · scroll to zoom · click a spot to fly into it in 3D</p>
         <p id="bar-msg" class="error bar-msg sphere-only" role="alert"></p>
         <div class="bar sphere-only">
           <form class="search" id="q-form" role="search" autocomplete="off">
@@ -157,9 +164,9 @@
             <button type="button" class="round" id="btn-zoom-out" aria-label="Zoom out">−</button>
             <button type="button" class="round" id="btn-zoom-in" aria-label="Zoom in">+</button>
           </span>
-          <button type="button" class="btn accent full-only" id="btn-open-centre">Open the centre</button>
+          <button type="button" class="btn accent full-only" id="btn-open-centre">Fly into the centre</button>
           <button type="button" class="btn quiet full-only" id="btn-find" aria-expanded="false" aria-controls="panel-find">Coordinates</button>
-          <button type="button" class="btn quiet full-only" id="rw-open" aria-expanded="false" aria-controls="panel-rewind">Turn back the sky</button>
+          <button type="button" class="btn quiet" id="rw-open" aria-expanded="false" aria-controls="panel-rewind">Turn back the sky</button>
           <button type="button" class="btn quiet more-btn" aria-expanded="false" aria-keyshortcuts="Escape"><span class="more-label">All controls</span><kbd>Esc</kbd></button>
         </div>
         <div class="bar rewind-only">
@@ -192,6 +199,7 @@
           <button type="button" class="pill toggle" id="btn-rings" aria-pressed="false">Ring the movers</button>
           <button type="button" class="btn quiet" id="btn-find-2" aria-expanded="false" aria-controls="panel-find">Coordinates &amp; options</button>
           <button type="button" class="btn" id="btn-back">Back to the whole sky</button>
+          <button type="button" class="btn" id="btn-3d">Fly into this patch in 3D</button>
           <span id="load-line" class="mono dim load-line"></span>
         </div>
         <p class="mode-note full-only" id="mode-note"></p>
@@ -199,7 +207,7 @@
     </div>
   </div>
 </div>
-<noscript><p style="position:fixed;inset:0;display:grid;place-items:center;color:#E9E6DF;background:#05070B;font:16px system-ui">Blink needs JavaScript to draw the sky.</p></noscript>
+<noscript><p style="position:fixed;inset:0;display:grid;place-items:center;color:#E9E6DF;background:#05070B;font:16px system-ui">Space Maps needs JavaScript to draw the sky.</p></noscript>
 <script type="module" src="js/blink/app.js"></script>
 </body>
 </html>

@@ -278,6 +278,8 @@ def parse_skybot(text: str) -> list[dict]:
             "vmag": _num(r, "VMag (mag)", "V"), "ra": ra, "dec": dec,
             "dra": _num(r, "dRA (arcsec/h)") or 0.0, "ddec": _num(r, "dDEC (arcsec/h)") or 0.0,
             "err_arcsec": _num(r, "Err (arcsec)"),
+            # geocentric (dg) and heliocentric (dh) distances, AU (`-output=all`)
+            "dg_au": _num(r, "dg (ua)"), "dh_au": _num(r, "dh (ua)"),
         })
     return out
 
@@ -290,7 +292,7 @@ async def _skybot_fetch(ra: float, dec: float, radius: float, jd: float) -> str:
 
 async def skybot_cone(ra: float, dec: float, radius: float, jd: float) -> list[dict]:
     """Cone search at one epoch (disk-cached).  Raises on service failure."""
-    key = cache.key_hash("skybot-1", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
+    key = cache.key_hash("skybot-2", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
     hit = cache.get_json("skybot", key, ttl=SKYBOT_TTL_S)
     if hit is not None:
         return hit

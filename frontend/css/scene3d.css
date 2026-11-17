@@ -1,0 +1,89 @@
+/* 3D fly-through page. Tokens, fonts and button styles come from blink.css. */
+.scene3d { position: fixed; inset: 0; overflow: hidden; background: var(--ground); }
+.layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#gl { touch-action: none; cursor: crosshair; outline: none; }
+#gl.locked { cursor: none; }
+#labels { pointer-events: none; }
+
+/* ---- veil for the hand-off to and from the flat views (index.html): over everything, shown only when used ---- */
+.scene3d .veil { display: none; z-index: 30; }
+.entering .scene3d .veil, .scene3d .veil.out { display: block; }
+/* if the page script never runs, the veil still goes */
+.entering .scene3d .veil:not(.lift):not(.out) { animation: veil-gone 0.6s ease 4s forwards; }
+@keyframes veil-gone { to { opacity: 0; visibility: hidden; } }
+/* the sky page's picture under the panels; the scene sets its scale and opacity each frame */
+.scene3d .enter-snap { object-fit: cover; pointer-events: none; transform-origin: 50% 50%; will-change: transform, opacity; }
+.scene3d .enter-snap[hidden] { display: none; }
+.mono { font-family: var(--mono); }
+.hint { position: absolute; z-index: 4; left: 50%; bottom: 96px; transform: translateX(-50%); margin: 0; padding: 3px 10px; border-radius: 6px; background: rgba(5, 7, 11, 0.5); color: var(--text-2); text-shadow: var(--shadow); font-size: 13px; pointer-events: none; white-space: nowrap; }
+
+/* ---- HUD, top left ---- */
+.hud { position: absolute; z-index: 4; top: 10px; left: 10px; width: min(352px, calc(100% - 20px)); padding: 6px 10px 4px; border-radius: 10px; pointer-events: none; text-shadow: var(--shadow);
+  /* a dark backing so the read-outs stay legible when a star's surface fills the view */
+  background: rgba(5, 7, 11, 0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.title { margin: 0 0 2px; font: 500 28px/1.1 var(--serif); letter-spacing: 0.01em; }
+.coords { margin: 0 0 12px; color: var(--text-2); font-size: 12px; }
+.readout { margin: 0 0 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
+.readout > div { display: contents; }
+.readout dt { color: var(--text-2); }
+.readout dd { margin: 0; overflow-wrap: anywhere; }
+.note { margin: 0 0 6px; color: var(--text-2); font-size: 12px; line-height: 1.45; }
+.note.warn { color: var(--accent); }
+
+/* ---- status banner, top centre ---- */
+.status { position: absolute; z-index: 6; top: 16px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); padding: 10px 14px; border: 1px solid var(--ctl-border); border-radius: 8px; background: rgba(5, 7, 11, 0.82); text-align: center; font-size: 13px; }
+.status-text { margin: 0 0 8px; color: var(--text); overflow-wrap: anywhere; }
+.status.error { border-color: var(--error); }
+.status.error .status-text { color: var(--error); }
+.status .btn { height: 36px; }
+
+/* ---- picked-object card: floats by the object, or docks top right once selected ---- */
+.card { position: absolute; z-index: 5; top: 0; left: 0; width: min(284px, calc(100% - 32px)); background: rgba(10, 12, 20, 0.84); color: #e8e6e0; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.4; backdrop-filter: blur(6px); pointer-events: none; }
+.card.pinned { top: 16px; left: auto; right: 16px; pointer-events: auto; }
+.card .btn { height: 32px; margin-top: 6px; }
+.card-title { margin: 0 0 2px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.card-sub { opacity: .6; font-size: 11px; margin-bottom: 6px; }
+.card-rows { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0; }
+.card-rows dt { opacity: .65; }
+.card-rows dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.card-rows .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.tier { display: inline-block; width: 1.1em; text-align: center; }
+.tier-measured { color: #fff4e0; }
+.tier-catalogue { color: #f0b04a; }
+.tier-inferred { color: #8da0b8; }
+.tier-illustrative { color: rgba(232,230,224,.45); border-bottom: 1px dashed rgba(232,230,224,.4); }
+.card-legend { font-size: 10px; opacity: .7; margin: 4px 0; }
+.card-note { font-size: 10px; opacity: .6; margin: 3px 0; }
+.card-loading { font-size: 11px; opacity: .6; margin: 4px 0; }
+.card-error { font-size: 11px; color: #f08a7a; margin: 4px 0; }
+.dim { opacity: .55; }
+.ev-chip { position: absolute; z-index: 4; left: 50%; top: 16px; transform: translateX(-50%); margin: 0; padding: 4px 10px; border: 1px solid var(--ctl-border); border-radius: 999px; background: rgba(5, 7, 11, 0.7); color: var(--accent); font-size: 12px; pointer-events: none; white-space: nowrap; }
+.btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+/* ---- help ---- */
+.help { position: absolute; z-index: 8; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(5, 7, 11, 0.6); }
+.help-card { width: min(440px, 100%); padding: 20px 22px; border: 1px solid var(--ctl-border); border-radius: 10px; background: rgba(5, 7, 11, 0.94); }
+.help-title { margin: 0 0 6px; font: 500 24px/1.2 var(--serif); }
+.help-line { margin: 0 0 12px; color: var(--text-2); }
+.help-list { margin: 0 0 16px; padding-left: 18px; color: var(--text-2); font-size: 13px; }
+.help-list li { margin-bottom: 4px; }
+
+/* ---- bottom bar ---- */
+.bottom { position: absolute; z-index: 4; left: 50%; bottom: 12px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 4px; border-radius: 12px; background: rgba(5, 7, 11, 0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.pills { display: flex; gap: 6px; }
+.pill:disabled { opacity: 0.45; cursor: default; }
+.bottom .btn { height: 36px; padding: 0 14px; }
+.frames-go { display: inline-flex; align-items: center; gap: 8px; }
+.frames-note { font-size: 11px; white-space: nowrap; }
+.noscript { position: fixed; inset: 0; display: grid; place-items: center; margin: 0; color: var(--text); }
+
+@media (max-width: 600px) {
+  .hud { top: 12px; left: 12px; width: calc(100% - 24px); }
+  .title { font-size: 24px; }
+  .readout { font-size: 12px; gap: 2px 10px; }
+  .status { top: auto; bottom: 150px; }
+  .hint { bottom: 140px; white-space: normal; width: calc(100% - 32px); text-align: center; }
+  .frames-note { display: none; }
+  .card.pinned { top: auto; bottom: 150px; right: 16px; }
+  .ev-chip { top: auto; bottom: 190px; }
+}

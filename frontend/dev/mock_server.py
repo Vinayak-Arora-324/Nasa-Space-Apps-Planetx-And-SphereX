@@ -286,6 +286,105 @@ def frame_meta(f, npix, scale, pm, ra, dec, img, flags, info):
     }
 
 
+# ---- 3D fly-through (/api/scene3d): deterministic synthetic scene matching the backend contract ----
+SCENE_N = 6000
+OBLIQ = math.radians(23.4392911)
+PLANETS_AU = [("Mercury", 0.387), ("Venus", 0.723), ("Earth", 1.0), ("Mars", 1.524), ("Jupiter", 5.203),
+              ("Saturn", 9.537), ("Uranus", 19.19), ("Neptune", 30.07)]
+
+def _ecl_to_icrs(X, Y, Z):
+    """Ecliptic to ICRS equatorial: rotate about x by the obliquity."""
+    return (X, Y * math.cos(OBLIQ) - Z * math.sin(OBLIQ), Y * math.sin(OBLIQ) + Z * math.cos(OBLIQ))
+
+def scene3d_payload(ra, dec, radius, limit, mjd):
+    rng = random.Random(f"scene3d/{ra:.4f}/{dec:.4f}/{radius:.3f}")
+    a0, d0 = math.radians(ra), math.radians(dec)
+    c = (math.cos(d0) * math.cos(a0), math.cos(d0) * math.sin(a0), math.sin(d0))
+    e1 = (-math.sin(a0), math.cos(a0), 0.0)
+    e2 = (c[1] * e1[2] - c[2] * e1[1], c[2] * e1[0] - c[0] * e1[2], c[0] * e1[1] - c[1] * e1[0])
+    cosR = math.cos(math.radians(radius))
+    rows = []
+    for i in range(SCENE_N):
+        ct = 1 - rng.random() * (1 - cosR); st = math.sqrt(max(0.0, 1 - ct * ct)); phi = rng.random() * 2 * math.pi
+        v = [c[k] * ct + st * (math.cos(phi) * e1[k] + math.sin(phi) * e2[k]) for k in range(3)]
+        d = 2.0 * math.exp(rng.random() * math.log(2000.0))           # log-uniform 2 to 4000 pc
+        absg = -2.0 + 14.0 * math.sqrt(rng.random())                  # more faint stars than bright ones
+        bprp = None if rng.random() < 0.03 else round(rng.uniform(0.0, 3.0), 3)
+        f = rng.uniform(0.10, 0.30)
+        rows.append([str(4472832130942575872 + i * 7919), round(v[0] * d, 4), round(v[1] * d, 4), round(v[2] * d, 4),
+                     round(absg, 3), bprp, round(d * (1 - f), 3), round(d * (1 + f), 3)])
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    # Solar system: circular orbits with phases from mjd (Kepler periods), ecliptic -> ICRS.
+    t = 2 * math.pi * (mjd - 51544.5) / 365.25
+    planets, earth = [], None
+    for k, (name, au) in enumerate(PLANETS_AU):
+        th = t / (au ** 1.5) + 2 * math.pi * k / 9.0
+        x, y, z = _ecl_to_icrs(au * math.cos(th), au * math.sin(th), 0.0)
+        planets.append(dict(name=name, x=round(x, 6), y=round(y, 6), z=round(z, 6)))
+        if name == "Earth": earth = (x, y, z)
+    th_m = t * 13.37 / 1.0
+    mx, my, mz = _ecl_to_icrs(0.00257 * math.cos(th_m), 0.00257 * math.sin(th_m), 0.0)
+    planets.append(dict(name="Moon", x=round(earth[0] + mx, 6), y=round(earth[1] + my, 6), z=round(earth[2] + mz, 6)))
+    u = (math.cos(d0) * math.cos(a0), math.cos(d0) * math.sin(a0), math.sin(d0))
+    bodies = []
+    for j, (name, cls, vmag, dl) in enumerate([("Mock Asteroid A", "MBA", 14.1, 2.6), ("Mock Asteroid B", "NEO", 16.3, 3.3), ("Mock Comet C", "COM", 12.2, 3.9)]):
+        jitter = [rng.uniform(-0.3, 0.3) for _ in range(3)]
+        p = [earth[k] + u[k] * dl + jitter[k] for k in range(3)]
+        dg = math.dist(p, earth); dh = math.sqrt(sum(q * q for q in p))
+        bodies.append(dict(name=name, number=990001 + j, **{"class": cls}, vmag=vmag,
+                           x=round(p[0], 6), y=round(p[1], 6), z=round(p[2], 6), dg_au=round(dg, 6), dh_au=round(dh, 6)))
+    return dict(ra=ra, dec=dec, radius=radius, mjd=mjd,
+                stars=dict(epoch=2016.0, source="mock (synthetic)", fields=["id", "x", "y", "z", "abs_g", "bp_rp", "d_lo", "d_hi"],
+                           rows=rows, truncated=truncated),
+                solar=dict(earth=[round(e, 6) for e in earth], sun=[0, 0, 0], planets=planets, bodies=bodies, bodies_error=None))
+
+
+# ---- /api/system/<id>: deterministic synthetic stellar parameters (hash of the id) ----
+def _sv(v, src, tier, lo=None, hi=None):
+    return dict(v=v, lo=lo, hi=hi, src=src, tier=tier)
+
+def system_payload(sid):
+    if sid == "sun":
+        iau = "IAU 2015 nominal"
+        vals = {k: None for k in ("dist_pc", "g_mag", "bp_rp", "teff_k", "radius_rsun", "lum_lsun", "mass_msun", "age_gyr", "logg", "spectral_type", "wd_prob")}
+        for k, v in (("teff_k", 5772.0), ("radius_rsun", 1.0), ("lum_lsun", 1.0), ("mass_msun", 1.0), ("age_gyr", 4.57), ("logg", 4.438)):
+            vals[k] = _sv(v, iau, "measured")
+        vals["spectral_type"] = dict(v="G2V", src=iau, tier="measured")
+        return dict(id="sun", name="Sun", ra=None, dec=None, values=vals, planets=[], companions=[], notes=[])
+    rng = random.Random(f"system/{sid}")
+    teff = round(math.exp(rng.uniform(math.log(2800), math.log(30000))))
+    giant = rng.random() < 0.12
+    if giant:
+        radius = round(math.exp(rng.uniform(math.log(8), math.log(200))), 3)
+    else:
+        radius = round(max(0.1, (teff / 5772.0) ** 1.6 * rng.uniform(0.8, 1.2)), 3)
+    lum = round(radius ** 2 * (teff / 5772.0) ** 4, 5)
+    mass = round(max(0.08, min(40.0, lum ** 0.25 * rng.uniform(0.9, 1.1) if not giant else rng.uniform(0.8, 5))), 3)
+    logg = round(4.438 + math.log10(mass) - 2 * math.log10(radius), 3)
+    have_flame = rng.random() >= 0.30
+    cat = "catalogue"
+    spec = "OBAFGKM"[min(6, max(0, int((8000 / max(teff, 2000)) ** 1.0 * 1.2)))] if teff > 25000 or rng.random() < 0.3 else None
+    d = round(math.exp(rng.uniform(math.log(2), math.log(4000))), 3)
+    f = rng.uniform(0.05, 0.2)
+    hs = teff > 25000
+    vals = dict(
+        dist_pc=_sv(d, "Bailer-Jones 2021 (geometric)", "measured", round(d * (1 - f), 3), round(d * (1 + f), 3)),
+        g_mag=_sv(round(rng.uniform(6, 19), 4), "Gaia DR3 photometry", "measured"),
+        bp_rp=_sv(round(rng.uniform(-0.4, 3.5), 4), "Gaia DR3 photometry", "measured"),
+        teff_k=_sv(float(teff), "Gaia DR3 ESP-HS" if hs else "Gaia DR3 GSP-Phot", cat, round(teff * 0.97, 1), round(teff * 1.03, 1)),
+        radius_rsun=_sv(radius, "Gaia DR3 FLAME" if have_flame else "Gaia DR3 GSP-Phot", cat, round(radius * 0.93, 4), round(radius * 1.07, 4)),
+        lum_lsun=_sv(lum, "Gaia DR3 FLAME", cat, round(lum * 0.85, 5), round(lum * 1.15, 5)) if have_flame else None,
+        mass_msun=_sv(mass, "Gaia DR3 FLAME", cat, round(mass * 0.95, 4), round(mass * 1.05, 4)) if have_flame else None,
+        age_gyr=_sv(round(rng.uniform(0.1, 12), 3), "Gaia DR3 FLAME", cat, None, None) if have_flame else None,
+        logg=_sv(logg, "Gaia DR3 GSP-Phot", cat, round(logg - 0.1, 3), round(logg + 0.1, 3)),
+        spectral_type=dict(v=spec, src="Gaia DR3 ESP-HS", tier=cat) if spec else None,
+        wd_prob=_sv(round(rng.random() ** 8, 6), "Gaia DR3 DSC", cat),
+    )
+    notes = [] if have_flame else ["FLAME mass not available for this star", "FLAME age not available for this star", "FLAME luminosity not available for this star"]
+    return dict(id=sid, name=None, ra=round(rng.uniform(0, 360), 5), dec=round(rng.uniform(-90, 90), 5), values=vals, planets=[], companions=[], notes=notes)
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -375,6 +474,21 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"detail": f"Could not resolve '{q}'"}, 404)
         if ep == 'coverage':
             return self.send_json({"fields": [dict(ra=133.795129, dec=-7.245147, n_frames=18), dict(ra=270.0, dec=66.56, n_frames=18), dict(ra=269.452, dec=4.6934, n_frames=18)]})
+        if ep == 'scene3d':
+            try:
+                ra, dec = float(p['ra']), float(p['dec'])
+                radius = float(p.get('radius', 3)); limit = int(p.get('limit', 20000))
+                mjd = float(p['mjd']) if 'mjd' in p else 61000.0
+            except (KeyError, ValueError):
+                return self.send_json({"detail": "ra and dec are required numbers; radius, limit and mjd must be numbers"}, 400)
+            if not (0 <= ra < 360 and -90 <= dec <= 90): return self.send_json({"detail": "ra must be in [0, 360) and dec in [-90, 90]"}, 400)
+            if not (0 < radius <= 30): return self.send_json({"detail": "radius must be in (0, 30] degrees"}, 400)
+            if limit < 1: return self.send_json({"detail": "limit must be at least 1"}, 400)
+            return self.send_json(scene3d_payload(ra, dec, radius, limit, mjd))
+        if ep.startswith('system/'):
+            sid = ep[7:].strip('/')
+            if sid != 'sun' and not sid.isdigit(): return self.send_json({"detail": "source_id must be a Gaia source id (digits) or 'sun'"}, 400)
+            return self.send_json(system_payload(sid))
         if ep.startswith('movers/'): return self.movers(ep[7:], p)
         ra = float(p.get('ra', 0)); dec = float(p.get('dec', 0))
         if ep == 'frames':

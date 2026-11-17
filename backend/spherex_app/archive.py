@@ -150,10 +150,13 @@ async def get_text(url: str, params: dict | None = None, *, irsa: bool = False,
 
 
 async def tap_csv(url: str, adql: str, *, irsa: bool, what: str,
-                  timeout: float | None = None, attempts: int | None = None) -> list[dict]:
+                  timeout: float | None = None, attempts: int | None = None,
+                  extra: dict | None = None) -> list[dict]:
     params = {"QUERY": adql, "FORMAT": "csv"}
     if not irsa:
         params.update({"REQUEST": "doQuery", "LANG": "ADQL"})
+    if extra:
+        params.update(extra)
     text = await get_text(url, params, irsa=irsa, what=what, timeout=timeout, attempts=attempts)
     if text.lstrip().startswith("<"):
         # VOTable error document

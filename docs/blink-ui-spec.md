@@ -1,4 +1,4 @@
-# Blink — sky viewer UI specification
+# Space Maps — sky viewer UI specification
 
 A handoff document for building this interface into an existing front end. It describes a working design prototype: what the user sees, how it behaves, the exact visual values, and what the real data layer must supply.
 
@@ -48,7 +48,7 @@ The accent is the only saturated colour in the UI. Alternatives offered in the p
 
 | Use | Family | Details |
 |---|---|---|
-| Wordmark "Blink" | Cormorant Garamond 500 | 30px, line-height 1 |
+| Wordmark "Space Maps" | Cormorant Garamond 500 | 30px, line-height 1 |
 | UI text | Inter 400/500/600 | 14px base, 13px for notes |
 | Coordinates, numbers, band labels | IBM Plex Mono 400/500 | 12–14px |
 | Section labels | Inter 600 | 11px, uppercase, letter-spacing 0.12em |
@@ -72,7 +72,7 @@ One root element, `height: 100vh` (min 560px), `overflow: hidden`.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Blink                                   centre coords · width │  header: one read-out line,
+│ Space Maps                              centre coords · width │  header: one read-out line,
 │                                                               │  the rest on hover / focus
 │                                                               │
 │                     full-bleed sky canvas                     │
@@ -81,13 +81,13 @@ One root element, `height: 100vh` (min 560px), `overflow: hidden`.
 │               │ Coordinates  or  Turn back the sky   │         │  coordinates + advanced, or
 │               └──────────────────────────────────────┘         │  the rewind form
 │   ╭──────────────────────────────────────────────────────╮    │
-│   │ Find an object…  −  +  Open the centre  Coordinates  │    │  bar (bottom centre)
+│   │ Find an object…  −  +  Fly into the centre  Coordinates│    │  bar (bottom centre)
 │   │                               Turn back the sky       │    │
 │   ╰──────────────────────────────────────────────────────╯    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The bar above is the full level (Esc). The calm level shows only the search box and "All controls `Esc`". The bar
+The bar above is the full level (Esc). The calm level shows only the search box, "Turn back the sky" and "All controls `Esc`". The bar
 changes with the view: in a rewind, "Back to the whole sky" (plus "Change date or place · Back to tonight" when
 full); in a patch, the play button and frame strip (plus modes, speeds and "Coordinates & options" when full).
 
@@ -112,8 +112,8 @@ full); in a patch, the play button and frame strip (plus modes, speeds and "Coor
 
 The UI never disappears; it has a calm level that is always there and a full level behind Esc.
 
-- **Calm (default):** the wordmark, one read-out line, the place markers, a one-line hint ("Drag to look around · scroll to zoom · click a spot to open it") and a small bar: the search box and an "All controls `Esc`" button. In a rewind the bar holds "Back to the whole sky" and the toggle; in a patch, the play button, the frame strip and the toggle.
-- **Full:** Esc, or the toggle button, adds everything else: zoom, "Open the centre", "Coordinates" and "Turn back the sky" in the sphere view; "Change date or place" and "Back to tonight" in a rewind; the view modes, speeds, "Ring the movers", "Coordinates & options", "Back to the whole sky" and the mode note in a patch. The button reads "Fewer controls" while it is open.
+- **Calm (default):** the wordmark, one read-out line, the place markers, a one-line hint ("Drag to look around · scroll to zoom · click a spot to fly into it in 3D"; at the closest zoom, "As close as the all-sky map goes · click a spot to fly into it in 3D") and a small bar: the search box, a "Turn back the sky" button and an "All controls `Esc`" button. In a rewind the bar holds "Back to the whole sky" and the toggle; in a patch, the play button, the frame strip and the toggle.
+- **Full:** Esc, or the toggle button, adds everything else: zoom, "Fly into the centre", "Coordinates" and "Turn back the sky" in the sphere view; "Change date or place" and "Back to tonight" in a rewind; the view modes, speeds, "Ring the movers", "Coordinates & options", "Back to the whole sky" and the mode note in a patch. The button reads "Fewer controls" while it is open.
 - Esc acts on the innermost thing first: it closes the search suggestions, then an open panel, and otherwise toggles between calm and full.
 - Dragging (6px or more) or scrolling the sky folds the full level back to calm, unless a panel is open. Flying to a patch, leaving one and starting a rewind also return to calm.
 - The calm layer fades in after the first part of the load fade, so the opening stays clean. The dock steps aside (opacity 0, no clicks) while a flight or the rewind whirl plays; the header stays.
@@ -121,6 +121,8 @@ The UI never disappears; it has a calm level that is always there and a full lev
 ### Panels
 
 - "Coordinates" and "Turn back the sky" each open a panel above the bar; opening one closes the other. The × button, Esc or a click on the sky closes it. A click that closes a panel does not also navigate.
+- The "Turn back the sky" panel ends with **Show on the sky**: toggle pills (`aria-pressed`) for Constellations, Constellation names, Boundaries (off by default), Star names, "Sun, Moon and planets", Daylight, and "Galaxies and nebulae". A change shows on the next frame and is remembered in `localStorage`. "How accurate is this?" folds away below it.
+- After landing, the rewind HUD adds one line under the date: the light ("Night", "Evening civil twilight", "Daytime, the Sun 12° up in the SW"), any eclipse, the Moon's phase and place, where the date falls in the seasons, and the planets that can be seen. The live region reads the same sentence. When the Moon's position is uncertain by more than 1°, the legend line says by how much, and a dotted arc on the sky shows the range.
 
 ### Other rules tied to visibility
 
@@ -135,7 +137,7 @@ The UI never disappears; it has a calm level that is always there and a full lev
 
 - State: centre right ascension, centre declination, horizontal field of view.
 - Starts at RA 285°, Dec −8°, field of view 85° (Milky Way in frame).
-- Field of view range 3.5°–100°.
+- Field of view range 4°–100° (the all-sky map is pixelated below about 4°).
 - Projection is perspective from the sphere's centre (gnomonic). East is to the left, north is up.
 
 ### Interaction
@@ -144,10 +146,10 @@ The UI never disappears; it has a calm level that is always there and a full lev
 |---|---|
 | Drag | Turn the view; the sky follows the pointer. Declination clamps at ±89°. |
 | Scroll | Zoom, `fov *= exp(deltaY * 0.0015)`. |
-| Zoom in past 4.5° | Automatically fly into the patch at the centre. |
-| Click (movement under 6px) | Fly to that spot and open its patch. |
+| Zoom in past 4° | Stops there; the hint changes to say so. Zooming never opens anything. |
+| Click (movement under 6px) | Fly to that spot, then open the 3D view of it (`scene3d.html`). No frames load. |
 | Zoom buttons | Animate field of view ×0.55 (in) or ×1.8 (out) over 0.45s. |
-| "Open the patch at the centre" | Fly into the current centre. |
+| "Fly into the centre" | The same for the current centre. |
 
 All input is ignored while a fly animation is running. Cursor is `grab`.
 
@@ -161,7 +163,28 @@ All input is ignored while a fly animation is running. Cursor is `grab`.
 ### Dock (right block)
 
 - A search box ("Find an object…"). Focusing it lists the preset places; typing filters them and offers "Look up “…”" for any other name, resolved as in the coordinates form.
-- Zoom out button, zoom in button, the accent-outlined "Open the centre" (the only accent control in the bar), and quiet "Coordinates" and "Turn back the sky" buttons that open their panels.
+- Search results, the place pills and the coordinates form also open the 3D view when used from the sphere. Inside a patch they keep opening frames.
+- Zoom out button, zoom in button, the accent-outlined "Fly into the centre" (the only accent control in the bar), and quiet "Coordinates" and "Turn back the sky" buttons that open their panels.
+
+### Opening a spot: 3D first, frames on request
+
+Frames are the expensive part (up to 400 SPHEREx cutouts streamed from IRSA), so nothing on the sphere loads them. A chosen spot opens the 3D fly-through first; the frames load only when asked for there.
+
+| Where | Control | Goes to |
+|---|---|---|
+| 3D view | "Watch this patch change" (accent) | `./?ra&dec[&width&band&name&plx]`: the patch view, which starts loading frames. A note beside it says whether the frame list is cached ("312 frames · opened before") or not ("the first load can take minutes"); hidden on phones. |
+| 3D view | "Back to the whole sky" | `./?look=ra,dec&from=3d[&width&band]`: the sphere opens on that spot at its closest field (4°) and zooms out to the whole sky around it. Nothing loads. A `?look` link without `from=3d` opens at a 12° field, still. |
+| Patch view | "Fly into this patch in 3D" | The 3D view of the same patch. |
+
+Width and band chosen on the main page ride through the 3D page to the frames. A target found by name keeps its name (shown in the 3D header) and its parallax.
+
+#### The hand-off between the flat views and the 3D page
+
+Seen from the Sun, the 3D scene is the same picture as the sky, so the two pages are joined through that picture:
+
+- **Into 3D** (`enter3D()` in `app.js`, from the sphere after the camera flight to 4°, or from the patch view): from the sphere, the view first waits up to 3 s for its tiles (`sphere.loaded()`: the share of an 8 × 6 grid that is not the flat colour of unloaded tiles, 0.85 needed). Then a 0.35 s dip to black, and the 3D page opens with `?enter=<field>` (the degrees the picture showed across its longer side). The 3D page draws stars only, so from the sphere a JPEG of the view goes along in `sessionStorage` (`scene3d-enter-snap`, read once, only when the tiles had loaded) and is laid over the canvas (`#enter-snap`). The page starts at the Sun with that field under a veil that lifts in 1.1 s, so the picture and the stars sit where the sky had them. When the Gaia stars arrive, a 3.2 s dolly zoom pulls into the patch: the field widens to the normal one while the camera moves along the axis, keeping stars at 0.3 × the median Gaia distance in place, so nearer stars spread outward and farther ones draw in. If they have not arrived after 1.5 s, the view widens at the Sun; when they come later and the controls are untouched, the camera glides to the same place. The picture follows the field (it stays put in the dolly zoom and shrinks to the patch as the view widens at the Sun) and fades over 1.2 s once the camera moves. Any key or click ends the animation where it is and drops the picture. The help card waits until the arrival is over. The page removes `enter` from its URL, so a reload opens it as usual.
+- **Out of 3D** ("Watch this patch change", "Back to the whole sky"): the camera glides back to the Sun, looking at the patch, while the field narrows to 4° (1.3 s), then the same dip to black. In the Sun's system (the solar scene) there is no such picture to match, so it only dips. The links carry `from=3d`, which lifts the main page's veil quickly instead of the slow opening; at a spot (`?look`) the veil stays down until the 4° view has its tiles (up to 3 s), then lifts, and the view widens to the whole sky.
+- Reduced motion, a new tab or window (modifier keys, middle click), or no WebGL: plain page changes.
 
 ---
 
@@ -342,6 +365,7 @@ Adapt to whatever framework the existing front end uses.
 |---|---|---|
 | view | sphere, patch | sphere |
 | UI visible | boolean | false |
+| rewind layers | lines, cnames, borders, snames, bodies, daylight, deepsky (booleans) | all on except borders |
 | camera | RA, Dec, field of view | 285°, −8°, 85° |
 | patch | RA, Dec, width | — |
 | patch width | 0.25, 0.5, 1, 2, 3.5 | 1 |

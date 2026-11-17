@@ -1,0 +1,25 @@
+__DOMAIN__ {
+	# Compress the static frontend and JSON, but never the binary frame stream
+	# (compression would buffer it and break progressive playback).
+	@compressible not path /api/stream*
+	encode @compressible zstd gzip
+
+	reverse_proxy 127.0.0.1:8000 {
+		# Pass streamed frames straight through as they are produced.
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/blink.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

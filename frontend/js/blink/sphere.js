@@ -10,6 +10,8 @@ const C_LIGHT = 299792458;
 // above it turns unloaded areas into the ground colour and darkens the noisy sky background a little.
 const CUT_MIN = 30;
 const SKY_PIXEL_DEG = 0.0035786;   // hips_pixel_scale of the cube (order 5)
+// brightness variance (8-bit levels squared) above which a patch of the view counts as showing the sky (see loaded)
+const LOADED_VAR = 2;
 
 let libPromise = null;
 function loadLib() {
@@ -100,6 +102,33 @@ export class Sphere {
     try { this.al.gotoRaDec(ra, dec); this.al.setFoV(fov); } catch (_) { /* mid-load */ }
   }
   setCenter(ra, dec) { this.setCamera(ra, dec, this.cam.fov); }
+  /**
+   * The share of the view (0..1) that shows the sky, over an 8 x 6 grid of a small copy of it. Tiles that have not
+   * loaded are one flat colour, so a cell still waiting for them has (almost) no spread of brightness.
+   */
+  async loaded() {
+    if (!this.al) return 0;
+    try {
+      const W = 96, H = 54, CX = 8, CY = 6;
+      const url = await this.al.getViewDataURL({ format: 'image/png', width: W, height: H, logo: false });
+      const img = new Image(); img.src = url; await img.decode();
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, W, H);
+      const d = g.getImageData(0, 0, W, H).data, s = new Float64Array(CX * CY), s2 = new Float64Array(CX * CY), n = new Float64Array(CX * CY);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = 4 * (y * W + x), v = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2], k = Math.floor(y * CY / H) * CX + Math.floor(x * CX / W);
+        s[k] += v; s2[k] += v * v; n[k]++;
+      }
+      let ok = 0;
+      for (let k = 0; k < CX * CY; k++) if (s2[k] / n[k] - (s[k] / n[k]) ** 2 > LOADED_VAR) ok++;
+      return ok / (CX * CY);
+    } catch (_) { return 0; }
+  }
+  /** The view as a JPEG data URL (null without Aladin), and the CSS blur it is shown with (see soften). */
+  async snapshot() {
+    if (!this.al) return null;
+    try { return { img: await this.al.getViewDataURL({ format: 'image/jpeg', logo: false }), blur: this._sd || 0 }; } catch (_) { return null; }
+  }
   setRotation(deg) {
     this.rot = deg;
     if (!this.al) return;

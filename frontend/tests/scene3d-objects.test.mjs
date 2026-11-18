@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, countPhrase, capNotes, hostCountText } from '../js/blink/scene3d-objects.js';
+import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from '../js/blink/scene3d-objects.js';
 import { orbitPlacement } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-frames.js';
@@ -465,4 +465,68 @@ test('planGo: an exoplanet from the galaxy frame goes via the resolved host; a c
   assert.deepEqual(planGo(trB, { camFrame: 'galaxy', camHostKey: null }), { type: 'via-host', hostId: HOST }, 'without a resolver the raw id is used');
   assert.deepEqual(planGo(pleiades, stars), { type: 'fly-galaxy' });
   assert.deepEqual(planGo({ kind: 'cluster', id: 'x', host: null }, { ...stars, camFrame: 'system', camHostKey: 'k' }), { type: 'fly-galaxy' });
+});
+
+// ---- host stars (section 16.7)
+const starRec = (id, o = {}) => ({
+  id, kind: 'star', name: id, same_as: [], position: { model: 'fixed', ra: 10, dec: -20, dist: q(10, 'pc', 'measured') },
+  props: { gmag: q(15, 'mag'), teff: q(5772, 'K', 'catalogue'), mass: q(0.5, 'Msun', 'catalogue') }, size: { radius: q(0.8, 'Rsun', 'catalogue') }, render: { mag: 14 }, ...o,
+});
+
+test('bpRpFromTeff is monotone, the Sun is 0.82, and a missing Teff is Sun-like', () => {
+  assert.ok(Math.abs(bpRpFromTeff(5772) - 0.82) < 1e-9);
+  assert.equal(bpRpFromTeff(null), 0.82); assert.equal(bpRpFromTeff(NaN), 0.82);
+  let prev = Infinity;
+  for (const t of [1000, 2500, 2566, 3000, 4000, 5000, 5772, 6500, 8000, 10000, 20000, 40000, 90000]) { const b = bpRpFromTeff(t); assert.ok(b <= prev, `${t}`); prev = b; }
+  assert.equal(bpRpFromTeff(1000), 4.5); assert.equal(bpRpFromTeff(90000), -0.6);
+});
+
+test('objectStarParams: absolute magnitude from gmag, else vmag, else render.mag; null without a distance', () => {
+  const p = objectStarParams(starRec('a'));           // G = 15 at 10 pc
+  assert.ok(Math.abs(p.abs - 15) < 1e-9); assert.equal(p.d, 10); assert.equal(p.ra, 10); assert.ok(Math.abs(p.bp - 0.82) < 1e-9);
+  const v = objectStarParams(starRec('b', { props: { vmag: q(12, 'mag') } }));
+  assert.ok(Math.abs(v.abs - 12) < 1e-9);
+  const r = objectStarParams(starRec('c', { props: {}, render: { mag: 9 } }));
+  assert.ok(Math.abs(r.abs - 9) < 1e-9);
+  assert.equal(objectStarParams(starRec('d', { props: {}, render: {} })).abs, 10, 'no magnitude: faint default');
+  assert.equal(objectStarParams(starRec('e', { position: { model: 'fixed', ra: 1, dec: 2, dist: null } })), null);
+  assert.equal(objectStarParams(starRec('f', { position: { model: 'fixed', ra: 1, dec: 2, dist: q(0, 'pc') } })), null);
+  const far = objectStarParams(starRec('g', { position: { model: 'fixed', ra: 1, dec: 2, dist: q(100, 'pc') } }));
+  assert.ok(Math.abs(far.abs - 10) < 1e-9, 'G = 15 at 100 pc');
+});
+
+test('starValuesFromRecord: quantities keep their tier and src, radius converts to Rsun', () => {
+  const v = starValuesFromRecord(starRec('a', { size: { radius: q(1, 'Rjup', 'catalogue') } }));
+  assert.equal(v.teff_k.tier, 'catalogue'); assert.equal(v.teff_k.src, 'test'); assert.equal(v.teff_k.v, 5772);
+  assert.ok(Math.abs(v.radius_rsun.v - 71492 / 695700) < 1e-9); assert.equal(v.radius_rsun.src, 'test');
+  assert.equal(v.mass_msun.v, 0.5); assert.deepEqual(v.dist_pc.unit, 'pc'); assert.equal(v.dist_pc.v, 10); assert.equal(v.g_mag.v, 15);
+  assert.deepEqual(starValuesFromRecord(starRec('b', { props: {}, size: null, position: { model: 'fixed', ra: 1, dec: 2, dist: null } })), {});
+  assert.equal(starValuesFromRecord(starRec('c', { props: { mass: q(1, 'Mjup') } })).mass_msun, undefined, 'a mass in another unit is left out');
+});
+
+test('resolveStarAliases: loaded stars absorb a record and its same_as ids; the rest are appended; no distance stays unresolved', () => {
+  const loaded = new Set(['ss:sun', 'gdr3:1', 'hip:7']);
+  const stars = new Map([
+    ['gdr3:1', starRec('gdr3:1')],                                         // loaded as is
+    ['neahost:X', starRec('neahost:X', { same_as: ['hip:7'] })],           // an alias of a loaded star
+    ['neahost:Y', starRec('neahost:Y', { same_as: ['hip:99'] })],          // not loaded, has a distance: appended
+    ['neahost:Z', starRec('neahost:Z', { position: { model: 'fixed', ra: 1, dec: 2, dist: null } })],   // no distance: unresolved
+  ]);
+  const { append, alias } = resolveStarAliases(stars, (k) => loaded.has(k));
+  assert.deepEqual(append.map((r) => r.id), ['neahost:Y']);
+  assert.equal(alias.get('gdr3:1'), 'gdr3:1'); assert.equal(alias.get('neahost:X'), 'hip:7'); assert.equal(alias.get('hip:7'), 'hip:7');
+  assert.equal(alias.get('neahost:Y'), 'neahost:Y'); assert.equal(alias.get('hip:99'), 'neahost:Y');
+  assert.equal(alias.has('neahost:Z'), false);
+  // a first claim on an id wins
+  const dup = resolveStarAliases(new Map([['a', starRec('a', { same_as: ['x'] })], ['b', starRec('b', { same_as: ['x'] })]]), () => false);
+  assert.equal(dup.alias.get('x'), 'a'); assert.deepEqual(dup.append.map((r) => r.id), ['a', 'b']);
+});
+
+test('starSignature changes with the ids and aliases only', () => {
+  const a = new Map([['a', starRec('a')], ['b', starRec('b', { same_as: ['x'] })]]);
+  const sig = starSignature(a);
+  assert.equal(starSignature(new Map([['a', starRec('a', { name: 'other' })], ['b', starRec('b', { same_as: ['x'] })]])), sig);
+  assert.notEqual(starSignature(new Map([['a', starRec('a')]])), sig);
+  assert.notEqual(starSignature(new Map([['a', starRec('a')], ['b', starRec('b', { same_as: ['y'] })]])), sig);
+  assert.equal(starSignature(new Map()), '');
 });

@@ -11,8 +11,10 @@ import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
-import { loadLayers, saveLayers, layerOf, kindSpec, fmtNum as regFmtNum } from './scene3d-registry.js';
-import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo } from './scene3d-objects.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, planetLine, fmtNum as regFmtNum } from './scene3d-registry.js';
+import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
+  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from './scene3d-objects.js';
+import { orbitPath } from './scene3d-orbits.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
 import { getSystem } from '../api.js';
@@ -93,10 +95,12 @@ export class Scene3D {
     this._ver = 0;                                               // bumps when layers, evidence or objects change (the pick cache key)
     this._vis = []; this._groups = {}; this._warned = new Set(); this.pxPerRad = 1;
     this.st = { n: 0, pos: new Float64Array(0), data: new Float32Array(0), gal: new Float32Array(0), meta: [] };
-    this.counts = { gaia: 0, ctx: 0 };
+    this.counts = { gaia: 0, ctx: 0, obj: 0 };
     this.keys = new Set(); this.touch = new Map(); this.pinch = null;
     this.hover = null; this.sel = null; this.locked = false;
     this.sys = new Map(); this.models = new Map();
+    this._keyIdx = new Map(); this._alias = new Map(); this._starSig = null;   // star key -> idx, record id or alias -> key, star records seen (see _rebuildStars)
+    this._visSig = ''; this._bufHost = null;                   // what _vis and the per-host buffers (points, lineSys) were built for
     this.ap = null; this.dyn = new Map(); this.cands = [];
     this.dpr = 1; this.cssW = 1; this.cssH = 1; this.vp = new Float32Array(16); this.R = M.lookRotation([1, 0, 0]);
     this.expo = 1; this.expoTarget = 1; this.vScan = 0; this.scanN = 0; this.hdrBad = false;
@@ -219,38 +223,67 @@ export class Scene3D {
     const r = this.store.ingest(payload);
     this._ver++; this._pickSig = ''; this._near = null;
     const e = this._earthAu();
-    const orbits = [];
-    for (const o of this.store.byKind.get('planet') || []) {      // the Moon travels with Earth: it has no orbit of its own
-      const p = this.store.placement(o.id);
-      if (p && p.sysAu) orbits.push(M.orbitCircle(Math.hypot(p.sysAu[0], p.sysAu[1], p.sysAu[2])));
-    }
-    const lines = linesToBuf(orbits, [0.6, 0.7, 0.95, 0.18]);
-    this._put('lineSolar', lines.data, lines.n);
     let cb = { data: new Float32Array(0), n: 0 };
     if (e) {
       const { ra, dec, radius } = this.target;
       cb = linesToBuf(M.coneLines(ra, dec, radius, 8).map((pl) => pl.map((q) => [q[0] + e[0], q[1] + e[1], q[2] + e[2]])), [1, 0.82, 0.55, 0.4]);
     }
     this._put('coneSolar', cb.data, cb.n);
-    this._refreshVisible(); this._rebuildPoints();
     if (this.scene === 'solar') this.cam = this._startCam('solar');
+    // Objects usually land before Gaia. The host stars they bring (and the host resolver that needs them) change only with
+    // the set of star records, so an unchanged set skips the rebuild; the resolver closes over this._alias and this._keyIdx.
+    if (starSignature(this.store.stars) !== this._starSig) this._rebuildStars();
+    else this._refreshObjectBuffers();
     return r;
   }
+  /** Visible entries and the per-host buffers (points, orbit lines) after the objects, layers, evidence, frame or host changed. */
+  _refreshObjectBuffers() { this._refreshVisible(); this._refreshGroups(); this._rebuildPoints(); this._rebuildLines(); }
   /** Earth's heliocentric position in AU from its record (the patch's cone is drawn around it), or null. */
   _earthAu() {
     const p = this.store.earth && this.store.earth.position.xyz_au;
     return Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) ? p.slice(0, 3) : null;
   }
-  /** The static small-body buffer: the visible 'point' entries of the Sun's system, in AU. Rebuilt when layers, evidence or data change. */
+  /** The star key of the camera's system frame, or null in the galaxy frame. */
+  _hostKey() { return this.cam.frame === 'system' ? this.cam.host.key : null; }
+  /**
+   * The static point buffer for the camera's current host: its visible 'point' entries in AU (small bodies of the Sun, exoplanets
+   * without a radius). Empty in the galaxy frame. Rebuilt when layers, evidence, data, the frame or the host change.
+   */
   _rebuildPoints() {
-    const vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: 'system', inHost: (h) => h === SUN_HOST.key, pxPerRad: this.pxPerRad });
-    const pts = [];
-    for (const e of vis) {
-      if (e.renderer !== 'point') continue;
-      const c = e.spec.color(e.o);
-      pts.push(e.sysAu[0], e.sysAu[1], e.sysAu[2], e.spec.pointSize(e.o), 0.9, c[0], c[1], c[2]);
+    this._refreshVisible();
+    const key = this._hostKey(), pts = [];
+    if (key) {
+      for (const e of this._vis) {
+        if (e.renderer !== 'point') continue;
+        const c = e.spec.color(e.o);
+        pts.push(e.sysAu[0], e.sysAu[1], e.sysAu[2], e.spec.pointSize(e.o), 0.9, c[0], c[1], c[2]);
+      }
     }
+    this._bufHost = key;
     this._put('points', new Float32Array(pts), pts.length / 8);
+  }
+  /**
+   * The orbit lines for the camera's current host (buffer lineSys, AU relative to the host). The Sun: a circle per Sun-hosted
+   * planet. Another star: the ellipse of each of its exoplanets (orbitPath), only with the exoplanets layer on and never in the
+   * Evidence view, because the orientation of those orbits is illustrative. The orbits layer is checked when drawing.
+   */
+  _rebuildLines() {
+    const key = this._hostKey(), polys = [];
+    if (key === SUN_HOST.key) {
+      for (const o of this.store.byKind.get('planet') || []) {      // the Moon travels with Earth: it has no orbit of its own
+        const p = o.host === SUN_HOST.key && this.store.placement(o.id);
+        if (p && p.sysAu) polys.push(M.orbitCircle(Math.hypot(p.sysAu[0], p.sysAu[1], p.sysAu[2])));
+      }
+    } else if (key && !this.evidence) {
+      for (const o of this.store.childrenOf(key)) {
+        const spec = kindSpec(o.kind), l = spec && spec.layer;
+        if (!spec || !spec.hosted || (l && this.layers[l] === false)) continue;
+        const path = orbitPath(o);
+        if (path.length) polys.push(path);
+      }
+    }
+    const lines = linesToBuf(polys, key === SUN_HOST.key ? [0.6, 0.7, 0.95, 0.18] : [0.55, 0.75, 0.9, 0.3]);
+    this._put('lineSys', lines.data, lines.n);
   }
   get hasSolar() { return this.store.hasSolar; }
   /** The kinds' layers are toggles: turning one off hides its objects, labels and picks, and clears a selection in it. */
@@ -259,7 +292,7 @@ export class Scene3D {
     this.layers[id] = !!on;
     saveLayers(this.layers);
     this._ver++; this._pickSig = ''; this._near = null;
-    this._refreshVisible(); this._refreshGroups(); this._rebuildPoints();
+    this._refreshObjectBuffers();
     if (this.sel && this.sel.kind !== 'star' && (layerOf(this.sel.kind) === id && !on || !this._valid(this.sel))) { this.sel = null; this._cardSig = ''; }
     this.hooks.onLayers(this.layers);
   }
@@ -273,36 +306,61 @@ export class Scene3D {
     // is dropped only when a Gaia star of similar brightness sits within 2' of it (2' covers decades of proper motion).
     const ctx = g ? this.ctx.filter((c) => M.separationDeg(c.ra, c.dec, ra, dec) >= radius || !g.match(c)) : this.ctx;
     const rows = g ? g.rows : [];
-    const n = 1 + rows.length + ctx.length;                      // the Sun is star 0
-    const pos = new Float64Array(3 * n), gal = new Float32Array(7 * n), meta = new Array(n), named = [0];
-    meta[0] = { kind: 'sun', name: 'Sun', id: 'sun', abs: SUN_ABS_G, bp: SUN_BP_RP, d: 0 };
+    const cap = 1 + rows.length + ctx.length + this.store.stars.size;   // the Sun is star 0; archive host stars (kind 'obj') come last
+    const pos = new Float64Array(3 * cap), gal = new Float32Array(7 * cap), meta = [], named = [0], keyIdx = new Map();
+    meta.push({ kind: 'sun', key: 'ss:sun', name: 'Sun', id: 'sun', abs: SUN_ABS_G, bp: SUN_BP_RP, d: 0 }); keyIdx.set('ss:sun', 0);
     gal[3] = SUN_ABS_G; gal.set(M.bpRpToRgb(SUN_BP_RP), 4);
     let k = 1;
     if (g) {
       const I = g.I;
       for (const r of rows) {
-        const o = 7 * k, abs = Number.isFinite(r[I.abs_g]) ? r[I.abs_g] : 5;
+        const o = 7 * k, abs = Number.isFinite(r[I.abs_g]) ? r[I.abs_g] : 5, id = String(r[I.id]);
         pos[3 * k] = r[I.x]; pos[3 * k + 1] = r[I.y]; pos[3 * k + 2] = r[I.z];
         gal[o + 3] = abs; gal.set(M.bpRpToRgb(r[I.bp_rp]), o + 4);
-        meta[k] = { kind: 'gaia', id: String(r[I.id]), dlo: r[I.d_lo], dhi: r[I.d_hi], bp: r[I.bp_rp], abs, name: null };
+        meta.push({ kind: 'gaia', key: 'gdr3:' + id, id, dlo: r[I.d_lo], dhi: r[I.d_hi], bp: r[I.bp_rp], abs, name: null });
+        keyIdx.set('gdr3:' + id, k);
         k++;
       }
     }
     for (const c of ctx) {
       const o = 7 * k, p = M.radecToXyz(c.ra, c.dec, c.d);
       pos.set(p, 3 * k); gal[o + 3] = c.absMag; gal.set(M.bpRpToRgb(c.bpRp), o + 4);
-      meta[k] = { kind: 'ctx', hip: c.hip, name: c.name, d: c.d, vmag: c.vmag, bp: c.bpRp, abs: c.absMag };
+      meta.push({ kind: 'ctx', key: 'hip:' + c.hip, hip: c.hip, name: c.name, d: c.d, vmag: c.vmag, bp: c.bpRp, abs: c.absMag });
+      keyIdx.set('hip:' + c.hip, k);
       if (c.name) named.push(k);
       k++;
     }
+    // Host stars from the objects payload that Gaia and the context stars lack. Their colour is an illustrative estimate from Teff.
+    const { append, alias } = resolveStarAliases(this.store.stars, (key) => keyIdx.has(key));
+    for (const rec of append) {
+      const sp = objectStarParams(rec), o = 7 * k;
+      pos.set(M.radecToXyz(sp.ra, sp.dec, sp.d), 3 * k); gal[o + 3] = sp.abs; gal.set(M.bpRpToRgb(sp.bp), o + 4);
+      meta.push({ kind: 'obj', key: rec.id, id: rec.id, rec, name: rec.name || null, d: sp.d, abs: sp.abs, bp: sp.bp });
+      keyIdx.set(rec.id, k);
+      k++;
+    }
+    const n = k;
     for (let i = 0; i < n; i++) { gal[7 * i] = pos[3 * i]; gal[7 * i + 1] = pos[3 * i + 1]; gal[7 * i + 2] = pos[3 * i + 2]; }
-    this.st = { n, pos, gal, data: gal, meta };
+    this.st = { n, pos: pos.subarray(0, 3 * n), gal: gal.subarray(0, 7 * n), data: gal.subarray(0, 7 * n), meta };
+    this._keyIdx = keyIdx; this._alias = alias; this._starSig = starSignature(this.store.stars);
+    // The store resolves archive host ids (gdr3, hip, neahost, same_as) to the keys above and places their planets there.
+    this.store.setHostResolver({ key: (id) => this._alias.get(id) || (this._keyIdx.has(id) ? id : null),
+      pc: (key) => { const i = this._keyIdx.get(key); return i === undefined ? null : this._starPc(i); } });
+    for (const [key, i] of keyIdx) {                              // a Gaia star that hosts planets takes the archive's name for it
+      const m = meta[i], rec = m.kind === 'gaia' && !m.name ? this.store.starRecord(key) : null;
+      if (rec && rec.name) m.name = rec.name;
+    }
     this.namedIdx = named; this._pickSig = ''; this.models.clear(); this.dyn.clear();
     if (this.sel && this.sel.kind === 'star') this.sel = null;         // star indices changed; an object selection keeps its id
     if (this.ap && this.ap.type === 'star') this.ap = null;
-    this.counts.gaia = rows.length; this.counts.ctx = ctx.length;
-    if (this.cam.frame === 'system') this.cam.host = { ...this.cam.host };
+    this.counts.gaia = rows.length; this.counts.ctx = ctx.length; this.counts.obj = append.length;
+    if (this.cam.frame === 'system') {                           // the host's index may have moved
+      const i = keyIdx.get(this.cam.host.key);
+      this.cam.host = i === undefined ? { ...this.cam.host } : { ...this.cam.host, idx: i, pc: this._starPc(i) };
+    }
+    this._disarmIdx = null; this._near = null; this._ver++;
     this._syncStarFrame();
+    this._refreshObjectBuffers();                                 // the resolver re-placed the hosted records
   }
   /** Fill the star buffer for the camera's frame: parsecs in the galaxy frame, AU relative to the host in a system frame. */
   _syncStarFrame() {
@@ -318,37 +376,42 @@ export class Scene3D {
     this._put('stars', st.data, st.n);
   }
   _starPc(i) { const p = this.st.pos; return [p[3 * i], p[3 * i + 1], p[3 * i + 2]]; }
-  _starKey(i) { const m = this.st.meta[i]; return m.kind === 'sun' ? 'ss:sun' : m.kind === 'gaia' ? 'gdr3:' + m.id : 'hip:' + m.hip; }
-  /** Index of the star with this schema id ('ss:sun', 'gdr3:…', 'hip:…'), or -1 when it is not loaded. */
-  _starIdx(key) { for (let i = 0; i < this.st.n; i++) if (this._starKey(i) === key) return i; return -1; }
+  _starKey(i) { return this.st.meta[i].key; }
+  /** Index of the star with this schema id ('ss:sun', 'gdr3:…', 'hip:…', or an archive host's id), or -1 when it is not loaded. */
+  _starIdx(key) { const i = this._keyIdx.get(key); return i === undefined ? -1 : i; }
   _starSel(i) { return { kind: 'star', id: this._starKey(i), idx: i }; }
   _starName(i) {
-    const m = this.st.meta[i], s = this.sys.get(this._starKey(i));
+    const m = this.st.meta[i], s = this.sys.get(m.key);
     if (s && s.payload && s.payload.name) return s.payload.name;
-    return m.name || (m.kind === 'gaia' ? (/^Gaia/i.test(m.id) ? m.id : `Gaia DR3 ${m.id}`) : `HIP ${m.hip}`);
+    return m.name || (m.kind === 'gaia' ? (/^Gaia/i.test(m.id) ? m.id : `Gaia DR3 ${m.id}`) : m.kind === 'obj' ? m.id : `HIP ${m.hip}`);
   }
   _modelFor(i) {
     let md = this.models.get(i);
     if (md) return md;
-    const m = this.st.meta[i], s = this.sys.get(this._starKey(i)), system = s && s.payload ? s.payload : undefined;
+    const m = this.st.meta[i], s = this.sys.get(m.key), system = s && s.payload ? s.payload : undefined;
     const distPc = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(i));
     if (m.kind === 'sun') md = starModel({ kind: 'sun', system });
     else if (m.kind === 'gaia') md = starModel({ system, absG: m.abs, bpRp: m.bp, distPc, kind: 'gaia' });
+    // An archive host: its physical rows are the record's props (tier and src kept); a Gaia payload, once fetched, replaces them
+    // (the two are not mixed). The BP-RP estimate only colours the point, so it is not passed here: it would read as measured.
+    else if (m.kind === 'obj') md = starModel({ system: system || { values: starValuesFromRecord(m.rec), notes: [] }, absG: m.abs, distPc: m.d, kind: 'obj' });
     else md = starModel({ absG: m.abs, bpRp: m.bp, distPc: m.d, name: m.name, kind: 'ctx' });
     this.models.set(i, md);
     return md;
   }
-  /** The system payload for a star (fetched once, cached): { state: 'loading' | 'ok' | 'error', payload, error }. */
+  /** The system payload for a star (fetched once, cached): { state: 'loading' | 'ok' | 'error', payload, error }. Null for stars with none. */
   _system(i) {
     const m = this.st.meta[i];
-    if (m.kind === 'ctx') return null;
-    const key = this._starKey(i);
+    // Gaia sources (loaded, or archive hosts with a gdr3 id) have an /api/system payload; the context stars and other archive hosts do not
+    const sid = m.kind === 'sun' ? 'sun' : m.kind === 'gaia' ? m.id : m.kind === 'obj' && m.id.startsWith('gdr3:') ? m.id.slice(5) : null;
+    if (sid === null) return null;
+    const key = m.key;
     let s = this.sys.get(key);
     if (s) return s;
     s = { state: 'loading', payload: null, error: null };
     this.sys.set(key, s);
-    getSystem(m.kind === 'sun' ? 'sun' : m.id).then((p) => { s.state = 'ok'; s.payload = p; }, (e) => { s.state = 'error'; s.error = e.message || String(e); })
-      .finally(() => { this.models.delete(i); this._cardSig = ''; });
+    getSystem(sid).then((p) => { s.state = 'ok'; s.payload = p; }, (e) => { s.state = 'error'; s.error = e.message || String(e); })
+      .finally(() => { const j = this._starIdx(key); if (j >= 0) this.models.delete(j); this._cardSig = ''; });
     return s;
   }
 
@@ -376,14 +439,14 @@ export class Scene3D {
     this.ap = null; this.sel = null; this.hover = null; this.card.hidden = true; this._cardT = 0;
     this.cam = this._startCam(name);
     this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null;
-    this._refreshVisible(); this._refreshGroups();
+    this._refreshObjectBuffers();
     this.hooks.onScene(this.scene);
   }
   toggleScene() { this.setScene(this.scene === 'stars' ? 'solar' : 'stars'); }
   resetView() { this.setScene(this.scene); }
   setEvidence(on) {
     this.evidence = !!on; this._cardSig = ''; this._ver++; this._pickSig = '';
-    this._refreshVisible(); this._refreshGroups(); this._rebuildPoints();
+    this._refreshObjectBuffers();
     this.hooks.onEvidence(this.evidence);
   }
   toggleEvidence() { this.setEvidence(!this.evidence); }
@@ -530,8 +593,7 @@ export class Scene3D {
     const cam = this.cam, st = this.st, sys = cam.frame === 'system', u = F.unitsPerPc(cam), p = st.pos, spheres = [];
     const w = F.worldPc(cam), host = sys ? cam.host.idx : -1, r2 = NEAR_PC * NEAR_PC, f = M.dirFromYawPitch(cam.yaw, cam.pitch);
     if (cam.disarm && (!this._disarmIdx || this._disarmIdx.key !== cam.disarm)) {
-      let idx = -1; for (let i = 0; i < st.n && idx < 0; i++) if (this._starKey(i) === cam.disarm) idx = i;
-      this._disarmIdx = { key: cam.disarm, idx };
+      this._disarmIdx = { key: cam.disarm, idx: this._starIdx(cam.disarm) };
     }
     const dis = cam.disarm && this._disarmIdx ? this._disarmIdx.idx : -1;
     let raw = { name: null, d: Infinity }, ahead = Infinity;
@@ -613,7 +675,7 @@ export class Scene3D {
     }
     const o = this.store.get(sel.id), pl = o && this.store.placement(sel.id), spec = o && kindSpec(o.kind);
     if (!o || !spec || !pl || !pl.sysAu) return null;
-    return { type: 'object', host: o.host, pos: pl.sysAu, rAu: spec.arriveAu(o), name: o.name, o };
+    return { type: 'object', host: this.store.resolveHost(o.host), pos: pl.sysAu, rAu: spec.arriveAu(o), name: o.name, o };   // host: the key the camera's frame carries
   }
   _inSun() { return this.cam.frame === 'system' && this.cam.host.key === SUN_HOST.key; }
   _inHost(hostId) { return this.cam.frame === 'system' && this.cam.host.key === hostId; }
@@ -621,30 +683,31 @@ export class Scene3D {
     const px = (GO_DEG * D2R) * this.pxPerRad;
     this._go(this._pickAt(this.cssW / 2, this.cssH / 2, px) || this.sel);
   }
-  /** What "Go there" does for this selection (see planGo): 'star' | 'fly' | 'solar-scene' | 'via-host' | 'fly-galaxy'. */
+  /** What "Go there" does for this selection (see planGo): { type: 'star' | 'fly' | 'solar-scene' | 'via-host' | 'fly-galaxy', hostId? }. */
   _planFor(sel) {
     const cam = this.cam;
     const target = sel.kind === 'star' ? { kind: 'star' } : sel.kind === 'group' ? { kind: 'group', id: sel.id } : { kind: sel.kind, id: sel.id, host: (this.store.get(sel.id) || {}).host };
-    return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null }).type;
+    return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null, resolveHost: (h) => this.store.resolveHost(h) });
   }
+  /** A via-host trip whose host star is not in the star list cannot start (the card's button says so). */
+  _hostMissing(plan) { return plan.type === 'via-host' && this._starIdx(plan.hostId) < 0; }
   _go(sel) {
     if (!sel) return;
     const plan = this._planFor(sel);
-    if (plan === 'star') this._goStar(sel, null);
-    else if (plan === 'fly') this._flyTo(sel);
-    else if (plan === 'solar-scene') {
+    if (plan.type === 'star') this._goStar(sel, null);
+    else if (plan.type === 'fly') this._flyTo(sel);
+    else if (plan.type === 'solar-scene') {
       this.setScene('solar');
       if (this.scene !== 'solar' || sel.kind === 'group') return;
       if (sel.kind === 'sun') { this.sel = this._starSel(0); this._cardSig = ''; this._goStar(this.sel, null); return; }   // in its own frame the Sun is star 0
       this.sel = sel; this._cardSig = ''; this._cardT = 0;      // setScene cleared it: keep the target's card pinned
       this._refreshVisible(); this._refreshGroups();
       this._flyTo(sel);
-    } else if (plan === 'via-host') {
-      const o = sel.kind === 'group' ? null : this.store.get(sel.id), hostId = sel.kind === 'group' ? String(sel.id).replace(/^group:/, '') : o && o.host;
-      const idx = hostId ? this._starIdx(hostId) : -1;
+    } else if (plan.type === 'via-host') {
+      const idx = this._starIdx(plan.hostId);                   // the resolved host; not loaded: nothing to fly to (the card disables the button)
       if (idx >= 0) this._goStar(this._starSel(idx), sel);       // the host star first; on arrival the trip to the object starts
     }
-    // 'fly-galaxy': nothing yet (no kind needs it in this phase)
+    // 'fly-galaxy': nothing yet (clusters are flown to in a later slice)
   }
   /** The star trip, run in galaxy parsecs (doubles keep the last few AU exact), so crossing into the star's system frame needs no restart. */
   _goStar(sel, then) {
@@ -706,7 +769,7 @@ export class Scene3D {
   _onFrameChange(kind) {
     const cam = this.cam;
     this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
-    this._refreshVisible(); this._refreshGroups();                // the visible set depends on the frame
+    this._refreshObjectBuffers();                                 // the visible set and the per-host buffers depend on the frame and the host
     if (kind === 'enter') {
       this._system(cam.host.idx);
       cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), F.rangeOf('system').min, F.rangeOf('system').max);
@@ -945,9 +1008,14 @@ export class Scene3D {
     this._overlay(t);
   }
 
-  /** The visible object entries for this frame and the camera's frame. Cheap: the store is a few hundred records at most. */
+  /**
+   * The visible object entries for the camera's frame and host. They depend only on the layers, the evidence flag, the store and
+   * the frame and host, all of which bump this._ver, so the list is rebuilt only then (a Kepler-field cone holds thousands).
+   */
   _refreshVisible() {
-    const cam = this.cam;
+    const cam = this.cam, sig = `${this._ver}|${cam.frame}|${cam.frame === 'system' ? cam.host.key : ''}`;
+    if (sig === this._visSig) return;
+    this._visSig = sig;
     this._vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: cam.frame, inHost: (h) => cam.frame === 'system' && cam.host.key === h, pxPerRad: this.pxPerRad });
     for (const e of this._vis) {
       if (e.renderer === 'billboard' && !this._warned.has(e.kind)) { this._warned.add(e.kind); console.warn(`scene3d: the billboard renderer is not implemented (kind ${e.kind} is skipped)`); }
@@ -962,7 +1030,8 @@ export class Scene3D {
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     this._drawSky();
-    const sun = this._inSun(), vis = this._vis, groups = this._groups;
+    const sun = this._inSun(), inSys = cam.frame === 'system', vis = this._vis, groups = this._groups;
+    const bufOk = inSys && this._bufHost === cam.host.key;       // points and lineSys belong to the camera's host (rebuilt on every frame change)
     const bodies = [];                                            // spheres to draw, with their crossfade weight
     const dynStars = [], dynPts = [], skip = new Int32Array(16).fill(-1);
     this.dyn.clear();
@@ -992,10 +1061,13 @@ export class Scene3D {
     for (const g of Object.values(groups)) if (g.grouped) nMark++;
     // lines
     if (cam.frame === 'galaxy') { if (this.layers.cone) this._drawLines('lineStars'); }
-    else if (sun) { if (this.layers.orbits) this._drawLines('lineSolar'); if (this.layers.cone) this._drawLines('coneSolar'); }
+    else if (inSys) {                                             // orbits of the current host; the cone outline is the Sun's only (it is Earth's patch)
+      if (bufOk && this.layers.orbits) this._drawLines('lineSys');
+      if (sun && this.layers.cone) this._drawLines('coneSolar');
+    }
     this._drawStars('stars', skip);
     if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
-    if (sun) { this._drawPoints(this.gpu.points, cam.pos); }
+    if (bufOk) this._drawPoints(this.gpu.points, cam.pos);
     if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
     if (nMark) this._drawDynPoints(this._markerData(vis, groups, nMark));
     // spheres, far to near, premultiplied "over"
@@ -1186,7 +1258,14 @@ export class Scene3D {
     if (bi >= 0) cands.push({ sel: this._starSel(bi), priority: kindSpec('star').pick.priority, d: bd });
     cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0 }));
     const win = choosePick(cands);
-    return win ? win.sel : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
+    return win ? this._pickTarget(win.sel) : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
+  }
+  /** A group marker of another star stands for that star: picking it selects the host star (whose card lists the planets). */
+  _pickTarget(sel) {
+    const t = groupTarget(sel);
+    if (t === sel || t.kind !== 'star') return sel;
+    const idx = this._starIdx(t.id);
+    return idx >= 0 ? this._starSel(idx) : sel;                  // the host is not in the star list: keep the group
   }
   _select(sel) {
     this.sel = sel; this._cardSig = ''; this._cardT = 0;
@@ -1220,24 +1299,45 @@ export class Scene3D {
     if (dpc < 0.02) return `${fmtNum(dpc * AU_PER_PC)} AU`;    // solar-system objects seen from the Stars scene read in AU too
     return `${fmtNum(dpc)} pc · ${fmtNum(dpc * LY)} ly`;
   }
+  /**
+   * The planet list of a host star's card (renderStarCard's `children`), or null for a star without any. It lists every child of
+   * the star whatever the evidence view or layers say, because the planets exist whether or not their positions are drawn. A
+   * child has a Go button only while it is drawn (not in the Evidence view, its layer on) and the card is pinned.
+   */
+  _childrenFor(key, pinned) {
+    const kids = this.store.childrenOf(key);
+    if (!kids.length) return null;
+    const off = [...new Set(kids.map((o) => layerOf(o.kind)).filter((l) => l && this.layers[l] === false))];
+    const go = !this.evidence && !off.length;
+    const items = kids.map((o) => {
+      const p = planetLine(o, fmtNum);
+      return { name: o.name, line: p.line, tier: p.tier, onGo: pinned && go ? () => this._go({ kind: o.kind, id: o.id }) : null };
+    });
+    const label = (id) => (layerDefs().find((l) => l.id === id) || { label: id }).label;
+    const note = this.evidence ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
+      : off.length ? `The ${off.map(label).join(' and ')} layer is off, so they are not drawn.` : null;
+    return { title: `${kindsPhrase([...new Set(kids.map((o) => o.kind))])} · ${kids.length}`, items, total: kids.length, note };
+  }
   _renderCard(sel, pinned) {
     const rel = this._selPos(sel);
     if (sel.kind === 'star') {
       const onGo = pinned ? () => this._go(sel) : undefined;
       const m = this.st.meta[sel.idx], md = this._modelFor(sel.idx), s = this._system(sel.idx), dSun = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(sel.idx));
-      const sub = m.kind === 'sun' ? 'The Sun' : m.kind === 'gaia' ? `${fmtNum(dSun)} pc · ${fmtNum(dSun * LY)} ly from the Sun` : 'Bright star (XHIP parallax)';
+      const sub = m.kind === 'sun' ? 'The Sun' : m.kind === 'ctx' ? 'Bright star (XHIP parallax)' : `${fmtNum(dSun)} pc · ${fmtNum(dSun * LY)} ly from the Sun`;
       renderStarCard(this.card, md, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo,
+        children: this._childrenFor(m.key, pinned),
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
     }
-    const plan = this._planFor(sel), goLabel = plan === 'solar-scene' ? 'Show in the Solar system' : 'Go there';
-    const onGo = pinned && plan !== 'fly-galaxy' ? () => this._go(sel) : undefined;
+    const plan = this._planFor(sel), goLabel = plan.type === 'solar-scene' ? 'Show in the Solar system' : 'Go there';
+    const onGo = pinned && plan.type !== 'fly-galaxy' ? () => this._go(sel) : undefined;
+    const goDisabled = this._hostMissing(plan) ? 'host star not in this view' : null;
     if (sel.kind === 'group') {
       const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host];
       const names = this._vis.filter((e) => e.host === host).sort((a, b) => a.spec.pick.priority - b.spec.pick.priority).map((e) => e.o.name);
       const sub = names.length ? `In this view: ${names.slice(0, 6).join(', ')}${names.length > 6 ? ` and ${names.length - 6} more` : ''}` : null;
       const rows = Object.entries(g.byKind).map(([k, n]) => { const sp = kindSpec(k); const noun = sp ? sp.noun[n === 1 ? 0 : 1] : k; return [noun.charAt(0).toUpperCase() + noun.slice(1), String(n), 'measured', 'objects in this view']; });
-      renderBodyCard(this.card, { title: g.name, subtitle: sub, rows, onGo, goLabel });
+      renderBodyCard(this.card, { title: g.name, subtitle: sub, rows, onGo, goLabel, goDisabled });
       return;
     }
     if (sel.kind === 'sun') {                                     // the Sun's marker: star 0's card, placed where the marker is
@@ -1246,8 +1346,10 @@ export class Scene3D {
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
     }
-    const e = this._entry(sel.id), c = e.spec.card(e.o, { fromYou: this.evidence ? null : this._fromYou(rel), evidence: this.evidence, fmtNum });
-    renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel });
+    const e = this._entry(sel.id);
+    const c = e.spec.card(e.o, { fromYou: this.evidence ? null : this._fromYou(rel), evidence: this.evidence, fmtNum,
+      place: this.store.placement(e.id), hostName: e.host ? this.store.hostName(e.host) : null });
+    renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled });
   }
   _updateCard(t) {
     let sel = null, pinned = false;
@@ -1350,6 +1452,17 @@ export class Scene3D {
     const short = name.length > 28 && /^Gaia/i.test(name) ? 'Gaia …' + name.slice(-8) : name;
     return (this._xh = { name: short, dist: this._fromYou(surf), sel });
   }
+  /** "7 exoplanets (positions illustrative)" in a system frame of a star with planets, else ''. */
+  _hostCountText() {
+    const key = this._hostKey();
+    return key && key !== SUN_HOST.key ? hostCountText(this.store, key, { evidence: this.evidence, layers: this.layers }) : '';
+  }
+  /** Visible object counts by kind in the galaxy frame ({} elsewhere), for the HUD's exoplanet and cluster phrases. */
+  _visCounts() {
+    const out = {};
+    if (this.cam.frame === 'galaxy') for (const e of this._vis) out[e.kind] = (out[e.kind] || 0) + 1;
+    return out;
+  }
   _hudData() {
     const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody();
     return {
@@ -1359,6 +1472,7 @@ export class Scene3D {
       sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), auto: this.autoSpeed, throttle: this.throttle,
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
+      hostCount: this._hostCountText(), visCounts: this._visCounts(),
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };
   }

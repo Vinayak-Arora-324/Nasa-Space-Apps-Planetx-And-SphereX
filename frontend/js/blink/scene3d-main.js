@@ -7,7 +7,7 @@ import { Scene3D, fmtNum } from './scene3d.js';
 import { contextStars, LY_PER_PC as LY } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
 import { layers as layerList, kinds as kindList, kindSpec } from './scene3d-registry.js';
-import { kindsPhrase } from './scene3d-objects.js';
+import { kindsPhrase, countPhrase, capNotes } from './scene3d-objects.js';
 import { C_PC_PER_S, fmtTimesC } from './scene3d-nav.js';
 import { fmtRA, fmtDec, fmtDeg, separation } from './util.js';
 
@@ -69,6 +69,7 @@ document.title = 'Inside the patch · 3D fly-through';
 
 // ---------------------------------------------------------------- status banner
 let solarDate = '';
+let pageScene = 'stars';        // the scene the HUD last reported: the Gaia sentences of #warn belong to the Stars scene
 let gaiaState = 'loading';      // loading | ok | error
 let objectsState = 'loading';   // loading | ok | error
 function showStatus(text, { error = false, retry = false } = {}) {
@@ -83,6 +84,7 @@ const hideStatus = () => { $('status').hidden = true; };
 // ---------------------------------------------------------------- HUD
 function onHud(h) {
   const stars = h.scene === 'stars';
+  if (h.scene !== pageScene) { pageScene = h.scene; refreshWarn(); }
   document.querySelectorAll('[data-only]').forEach((el) => { el.hidden = el.dataset.only !== h.scene; });
   $('hud-where').textContent = h.frame === 'system'
     ? `Near ${h.hostName} · ${fmtNum(h.surfaceAu)} AU from its surface`
@@ -94,22 +96,29 @@ function onHud(h) {
   $('hud-near').textContent = h.nearName && h.nearText ? `${h.nearName} · ${h.nearText}` : 'n/a';
   $('hud-ev').textContent = `${h.ev >= 0 ? '+' : '−'}${Math.abs(h.ev).toFixed(1)} EV`;
   const c = h.counts;
-  $('hud-count').textContent = stars
-    ? (c.gaia ? `${c.gaia.toLocaleString('en-US')} Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around`
-      : gaiaState === 'error' ? `No Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around` : 'Gaia stars loading…')
-    : solarCountText(h.objCounts || {});
+  $('hud-count').textContent = h.frame === 'system' && h.hostCount ? h.hostCount : stars ? starsCountText(h, c) : solarCountText(h.objCounts || {});
   $('hud-limit').textContent = `${h.limit.toFixed(1)} mag · [ and ] change it`;
   $('hint').textContent = h.flying ? 'Autopilot · Esc cancels' : h.locked ? 'WASD move · mouse look · wheel throttle · T auto/manual speed · Shift boost · G autopilot to the target · Esc release' : 'Click a star to select it · click empty sky to fly · WASD move · wheel throttle · T auto/manual speed · Shift boost · G autopilot';
   document.querySelectorAll('.scene-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === h.scene)));
   setEvidenceUi(h.evidence);
 }
 const plural = (n, kind) => { const s = kindSpec(kind); return s ? s.noun[n === 1 ? 0 : 1] : kind; };
-/** "8 planets and the Moon · 23 small bodies", from the store's counts and the registry nouns. */
+const SMALL_KINDS = ['dwarf_planet', 'asteroid', 'comet'];
+/** "8 planets and the Moon · 23 small bodies" (or "2,000 brightest small bodies (more in this cone)"), from the store's counts and the registry nouns. */
 function solarCountText(c) {
   if (objectsState === 'loading') return 'Solar system loading…';
-  const planets = c.planet || 0, moons = c.moon || 0, small = (c.dwarf_planet || 0) + (c.asteroid || 0) + (c.comet || 0);
+  const planets = c.planet || 0, moons = c.moon || 0, status = scene ? scene.store.kindStatus : {};
+  const small = countPhrase(SMALL_KINDS, c, status) || '0 small bodies';
   const first = [planets ? `${planets} ${plural(planets, 'planet')}` : '', moons === 1 ? 'the Moon' : moons > 1 ? `${moons} ${plural(moons, 'moon')}` : ''].filter(Boolean).join(' and ');
-  return [first, `${small} small ${small === 1 ? 'body' : 'bodies'}`].filter(Boolean).join(' · ');
+  return [first, small].filter(Boolean).join(' · ');
+}
+/** The Stars scene's count line: the Gaia counts, and in the galaxy frame the exoplanets and clusters in view. */
+function starsCountText(h, c) {
+  const gaia = c.gaia ? `${c.gaia.toLocaleString('en-US')} Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around`
+    : gaiaState === 'error' ? `No Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around` : 'Gaia stars loading…';
+  const status = scene ? scene.store.kindStatus : {}, vis = h.visCounts || {};
+  const beyond = h.frame === 'galaxy' ? ['exoplanet', 'cluster'].filter((k) => vis[k] > 0).map((k) => countPhrase([k], vis, status)) : [];
+  return [gaia, ...beyond].join(' · ');
 }
 function setEvidenceUi(on) {
   $('btn-evidence').setAttribute('aria-pressed', String(!!on));
@@ -132,6 +141,7 @@ try {
     onEvidence: setEvidenceUi,
     onLayers: syncLayers,
     onScene: (name) => {
+      if (name !== pageScene) { pageScene = name; refreshWarn(); }
       $('btn-stars').setAttribute('aria-pressed', String(name === 'stars'));
       $('btn-solar').setAttribute('aria-pressed', String(name === 'solar'));
     },
@@ -170,6 +180,13 @@ function refreshStatus() {
   if (!text && timer) { clearInterval(timer); timer = 0; }
 }
 let gaiaError = '';
+let gaiaWarn = [];   // the Gaia truncation sentences
+/** #warn: the Gaia sentences (Stars scene only) and the cap sentences of the objects payload (both scenes). */
+function refreshWarn() {
+  const parts = [...(pageScene === 'stars' ? gaiaWarn : []), ...(scene ? capNotes(scene.store.kindStatus) : [])];
+  const w = $('warn');
+  w.textContent = parts.join(' '); w.hidden = !parts.length;
+}
 async function loadStars() {
   gaiaState = 'loading';
   try {
@@ -178,11 +195,11 @@ async function loadStars() {
       scene.setGaia(p.stars);
       scene.reveal();   // only moves the camera on an untouched arrival from the sphere or the frames
       const shown = Array.isArray(p.stars.rows) ? p.stars.rows.length : 0;
-      $('warn').hidden = !p.stars.truncated && !p.stars.incomplete;
-      $('warn').textContent = [
+      gaiaWarn = [
         p.stars.truncated ? `Showing the ${shown.toLocaleString('en-US')} brightest Gaia stars in the cone; fainter ones are left out.` : '',
         p.stars.incomplete ? 'Part of the cone failed to load, so some areas have no Gaia stars.' : '',
-      ].filter(Boolean).join(' ');
+      ].filter(Boolean);
+      refreshWarn();
     }
     gaiaState = 'ok';
   } catch (e) {
@@ -211,6 +228,7 @@ async function loadObjects() {
   } finally {
     $('btn-solar').disabled = !scene.hasSolar;
     buildLayers();
+    refreshWarn();
     refreshStatus();
   }
 }
@@ -228,13 +246,21 @@ function loadScene() {
 
 // ---------------------------------------------------------------- layers panel
 const panel = $('layers'), layersBtn = $('btn-layers');
-const LAYER_GROUPS = [['sky', 'Sky'], ['solar', 'Solar system']];
+const LAYER_GROUPS = [['sky', 'Sky'], ['solar', 'Solar system'], ['beyond', 'Beyond the Solar system']];
 /** A layer whose kinds all failed to load is disabled, with the error as its title. */
 function layerError(l) {
   const ks = kindList().filter((k) => k.layer === l.id);
   if (!ks.length) return null;
   const st = scene.store.kindStatus || {};
   return ks.every((k) => st[k.kind] && st[k.kind].status === 'error') ? ks.map((k) => st[k.kind].error).find(Boolean) || 'did not load' : null;
+}
+/** Pressed and enabled state of a layer's pill: a sub-switch (a layer with a parent) is disabled while its parent is off. */
+function applyLayerState(b, l, map) {
+  b.setAttribute('aria-pressed', String(!!map[l.id]));
+  const par = l.parent ? layerList().find((x) => x.id === l.parent) : null;
+  const err = layerError(l), parentOff = !!par && (!map[par.id] || !!layerError(par));
+  b.disabled = !!err || parentOff;
+  b.title = err || (parentOff ? `Turn on ${(layerList().find((x) => x.id === l.parent) || { label: l.parent }).label} first` : '');
 }
 function buildLayers() {
   if (!scene) return;
@@ -245,20 +271,25 @@ function buildLayers() {
     if (!list.length) continue;
     const h = document.createElement('h3'); h.className = 'layers-label'; h.textContent = label; h.id = `layers-${gid}`;
     const chips = document.createElement('div'); chips.className = 'chips layers'; chips.setAttribute('role', 'group'); chips.setAttribute('aria-labelledby', h.id);
-    for (const l of list) {
+    const pill = (l) => {
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'pill'; b.textContent = l.label; b.dataset.layer = l.id;
-      b.setAttribute('aria-pressed', String(!!scene.layers[l.id]));
-      const err = layerError(l);
-      if (err) { b.disabled = true; b.title = err; }
+      b.type = 'button'; b.className = l.parent ? 'pill sub' : 'pill'; b.textContent = l.label; b.dataset.layer = l.id;
+      applyLayerState(b, l, scene.layers);
       b.addEventListener('click', () => scene.setLayer(l.id, !scene.layers[l.id]));
-      chips.append(b);
+      return b;
+    };
+    const brk = () => { const d = document.createElement('div'); d.className = 'layer-break'; return d; };
+    for (const l of list.filter((x) => !x.parent)) {
+      chips.append(pill(l));
+      const subs = list.filter((x) => x.parent === l.id);   // sub-switches follow their parent, on a row of their own, indented
+      if (subs.length) { chips.append(brk()); for (const sub of subs) chips.append(pill(sub)); chips.append(brk()); }
     }
     host.append(h, chips);
   }
 }
 function syncLayers(map) {
-  panel.querySelectorAll('[data-layer]').forEach((b) => b.setAttribute('aria-pressed', String(!!map[b.dataset.layer])));
+  const defs = new Map(layerList().map((l) => [l.id, l]));
+  panel.querySelectorAll('[data-layer]').forEach((b) => applyLayerState(b, defs.get(b.dataset.layer), map));
 }
 function setLayersOpen(open) {
   panel.hidden = !open;

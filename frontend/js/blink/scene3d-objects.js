@@ -95,7 +95,20 @@
 //   hostCountText(store, hostKey, { evidence, layers }) -> string   '7 exoplanets (positions illustrative)'; in the Evidence view
 //       '7 exoplanets (positions illustrative, hidden in the Evidence view)'; with the layer off '(..., layer off)'; '' without
 //       children. The caller adds the 'Near TRAPPIST-1 · ' prefix.
-import { kindSpec, kinds, SCHEMA_MAJOR, toPc, rendererOf, clusterRgb, layerOf } from './scene3d-registry.js';
+//
+// HOST STARS (section 16.7; pure helpers for the renderer's _rebuildStars)
+//   bpRpFromTeff(teffK) -> number   an illustrative BP-RP from Teff: the dwarf sequence of scene3d-physics.js read backwards (monotone,
+//       linear between anchors, clamped to 2500-40000 K); the Sun's 0.82 when Teff is missing
+//   objectStarParams(o) -> { ra, dec, d, abs, bp } | null   what the renderer needs to append a star record: its direction, its
+//       distance in pc, an absolute magnitude (gmag, else vmag, else render.mag, combined with the distance; 10 when it has none) and
+//       bp (bpRpFromTeff). null without a positive distance or a direction
+//   starValuesFromRecord(o) -> { teff_k, radius_rsun, mass_msun, age_gyr, spectral_type, dist_pc, g_mag }   the star model's `values`
+//       (starModel input), as Quantities that keep their own tier and src; only what the record has
+//   resolveStarAliases(stars, has) -> { append: record[], alias: Map }   stars: store.stars (id -> record); has(key) -> bool for the
+//       keys the renderer loaded. A record any of whose ids (id, same_as) is loaded maps all its ids to that key; otherwise, when it
+//       has a distance, it is appended and all its ids map to its own id. Records with neither stay unresolved
+//   starSignature(stars) -> string   changes when the set of star ids (or their same_as) changes: when _rebuildStars must run again
+import { kindSpec, kinds, SCHEMA_MAJOR, toPc, rendererOf, clusterRgb, layerOf, UNIT_KM } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
 import { radecToXyz, smoothstep } from './scene3d-math.js';
 import { orbitPlacement, J2000_MJD } from './scene3d-orbits.js';
@@ -413,4 +426,67 @@ export function hostCountText(store, hostKey, { evidence = false, layers = {} } 
   if (illus) bits.push('positions illustrative');
   if (evidence && illus) bits.push('hidden in the Evidence view'); else if (off) bits.push('layer off');
   return `${text} (${bits.join(', ')})`;
+}
+
+// ------------------------------------------------------------------ host stars (section 16.7)
+const SUN_BP_RP = 0.82, FAINT_ABS = 10;
+// Teff (K) -> Gaia BP-RP: the dwarf colour sequence of scene3d-physics.js (Pecaut & Mamajek 2013) read from the other side. It is
+// monotone, so a host's illustrative colour never contradicts its temperature; it is only a colour, never shown as a measurement.
+const TEFF_BPRP = [[2500, 4.5], [2850, 3.8], [3200, 2.9], [3550, 2.2], [3850, 1.84], [4400, 1.4], [4800, 1.15], [5280, 0.98], [5772, 0.82],
+  [5920, 0.74], [6510, 0.55], [7220, 0.38], [8100, 0.2], [9700, 0], [11000, -0.1], [16000, -0.3], [30000, -0.45], [40000, -0.6]];
+export function bpRpFromTeff(teffK) {
+  if (!Number.isFinite(teffK)) return SUN_BP_RP;
+  const T = TEFF_BPRP;
+  if (teffK <= T[0][0]) return T[0][1];
+  for (let i = 1; i < T.length; i++) {
+    if (teffK <= T[i][0]) { const [x0, y0] = T[i - 1], [x1, y1] = T[i]; return y0 + ((y1 - y0) * (teffK - x0)) / (x1 - x0); }
+  }
+  return T[T.length - 1][1];
+}
+const qv = (q) => (q && Number.isFinite(q.v) ? q.v : null);
+const pcOf = (q) => (q && q.unit === 'pc' ? (Number.isFinite(q.v) ? q.v : null) : toPc(q));   // pc stays exact: no round trip through km
+export function objectStarParams(o) {
+  const p = o && o.position;
+  if (!p || !Number.isFinite(p.ra) || !Number.isFinite(p.dec)) return null;
+  const d = p.dist ? pcOf(p.dist) : null;
+  if (!(d > 0)) return null;
+  const pr = o.props || {};
+  const mag = qv(pr.gmag) ?? qv(pr.vmag) ?? (o.render && Number.isFinite(o.render.mag) ? o.render.mag : null);
+  return { ra: p.ra, dec: p.dec, d, abs: mag === null ? FAINT_ABS : mag - 5 * Math.log10(d) + 5, bp: bpRpFromTeff(qv(pr.teff)) };
+}
+
+/** The star model's `values` for a star record (see the header). */
+export function starValuesFromRecord(o) {
+  const pr = (o && o.props) || {}, out = {};
+  const keep = (q, v) => ({ v, lo: q.lo, hi: q.hi, src: q.src, tier: q.tier, unit: q.unit });
+  const scaled = (q, to) => {          // q's value in the unit `to` (lo and hi scale with it); null when the unit is unknown
+    if (!q || !Number.isFinite(q.v) || !UNIT_KM[q.unit] || !UNIT_KM[to]) return null;
+    const k = UNIT_KM[q.unit] / UNIT_KM[to];
+    return { ...keep(q, q.v * k), lo: Number.isFinite(q.lo) ? q.lo * k : undefined, hi: Number.isFinite(q.hi) ? q.hi * k : undefined };
+  };
+  if (qv(pr.teff) !== null) out.teff_k = keep(pr.teff, pr.teff.v);
+  const r = scaled(o && o.size && o.size.radius, 'Rsun'); if (r) out.radius_rsun = r;
+  const m = pr.mass; if (qv(m) !== null && (!m.unit || m.unit === 'Msun')) out.mass_msun = keep(m, m.v);
+  const a = pr.age; if (qv(a) !== null && (!a.unit || a.unit === 'Gyr')) out.age_gyr = keep(a, a.v);
+  const st = pr.spectral_type; if (st && typeof st.v === 'string' && st.v) out.spectral_type = { v: st.v, src: st.src, tier: st.tier };
+  const d = o && o.position && o.position.dist, pc = d ? pcOf(d) : null;
+  if (pc > 0) out.dist_pc = { ...keep(d, pc), lo: Number.isFinite(d.lo) ? pcOf({ v: d.lo, unit: d.unit }) : undefined, hi: Number.isFinite(d.hi) ? pcOf({ v: d.hi, unit: d.unit }) : undefined, unit: 'pc' };
+  if (qv(pr.gmag) !== null) out.g_mag = keep(pr.gmag, pr.gmag.v);
+  return out;
+}
+export function resolveStarAliases(stars, has) {
+  const append = [], alias = new Map();
+  for (const rec of stars.values()) {
+    const ids = [rec.id, ...(Array.isArray(rec.same_as) ? rec.same_as.filter((a) => typeof a === 'string') : [])];
+    const loaded = ids.find(has);
+    let key = loaded || null;
+    if (!key && objectStarParams(rec)) { key = rec.id; append.push(rec); }
+    if (key) for (const id of ids) if (!alias.has(id)) alias.set(id, key);
+  }
+  return { append, alias };
+}
+export function starSignature(stars) {
+  let s = '';
+  for (const r of stars.values()) s += `${r.id}=${Array.isArray(r.same_as) ? r.same_as.join(',') : ''};`;
+  return s;
 }

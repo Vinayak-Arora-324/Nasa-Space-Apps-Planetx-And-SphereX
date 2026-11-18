@@ -1560,8 +1560,9 @@ camera comes within a few r50, where the member stars show the cluster. The Evid
 
 ## 17. Phase 2: nebulae and black holes (design)
 
-Status: **proposed 2026-11-18, awaiting approval.** Sections of §1–§16 that Phase 2 changes carry a "Phase 2 change"
-note pointing here. Where this section and an earlier one disagree, this one wins.
+Status: **approved 2026-11-18, with the conditions recorded in §17.16** (they are already folded into the sections below).
+Sections of §1–§16 that Phase 2 changes carry a "Phase 2 change" note pointing here. Where this section and an earlier one
+disagree, this one wins.
 
 Every catalogue fact below was checked against the live source on 2026-11-18:
 - OpenNGC on GitHub;
@@ -1569,7 +1570,8 @@ Every catalogue fact below was checked against the live source on 2026-11-18:
 - the Gaia archive (ESA TAP);
 - arXiv full texts for every black-hole number.
 
-SIMBAD was unreachable, so companion identities rest on the Gaia position matches and the papers (§17.8).
+SIMBAD's main site was unreachable, but its Harvard (`simbad.cfa.harvard.edu`) and South African (`simbad.idia.ac.za`)
+mirrors answered. All seven black-hole companions were cross-checked there by their Gaia DR3 ids (§17.8).
 
 ### 17.1 Decisions at a glance
 
@@ -1581,10 +1583,11 @@ SIMBAD was unreachable, so companion identities rest on the Gaia position matche
 | Distance catalogues (at most two) | **Adopted.** (1) **Chornay & Walton 2021** (`J/A+A/656/A110`): Gaia EDR3 parallaxes of PN central stars, giving `measured` distances, **59 PNe**. (2) **Russeil 2003** (`J/A+A/397/133`) *stellar* (spectrophotometric) distances of star-forming complexes, giving `derived` distances, at most 155 Sharpless regions. **Rejected:** Russeil's kinematic distances, the WISE HII catalogue and González-Santamaría 2021 (§17.4). |
 | Direction-only records | Unchanged schema (`fixed`, `dist: null`), plus validator guards. They are drawn **at infinity in the galaxy frame**, faded with the camera's distance from the Sun exactly like the Milky Way glow. They are never placed in 3D. Picking and labels work; the card says "distance unknown". "Go there" becomes **"Turn to it"**, which rotates the camera without moving it (§17.5). |
 | Nebula look | A `billboard` variant (`nebula`): an ellipse on screen from `size.angular`, projected so that from the Sun it is exactly the catalogue's major, minor and PA. It has a **procedural illustrative look per type**: emission, reflection, planetary, SNR shell and dark. The Evidence view shows the catalogue outline only, reusing §16.10 (§17.6). |
-| Real images | **Follow-up, not Phase 2.** ESA/Hubble and ESA/Webb (CC BY 4.0) clearly allow shipping cropped images with credit, commercial use included. The work needed is per-image curation, astrometric registration from the images' AVM/WCS, and a provenance record per image (§17.6.4). |
+| Real images | **Follow-up, not Phase 2.** ESA/Hubble and ESA/Webb (CC BY 4.0) clearly allow shipping cropped images with credit, commercial use included. The work needed is per-image curation, astrometric registration from the images' AVM/WCS, and a provenance record per image. **A later version should prefer images with proper sky alignment (tiled sky surveys, e.g. HiPS) over press images, licence permitting** (§17.6.4). |
+| Data licence | The OpenNGC-derived `nebulae` data files are **CC BY-SA 4.0**; the code stays MIT. A licence notice sits in both nebula dataset folders, the main `LICENSE` says which data files are CC BY-SA 4.0, and the credit is shown **in the app** (nebula cards and a credits line in the 3D view), not only in the manifest. The same applies to the Phase 3 galaxy files (§17.2). |
 | Black holes | `bh-curated`: a hand-curated, committed JSON source in which every number carries its paper and table location. Records: Sgr A*, Gaia BH1, BH2 and BH3, Cyg X-1, V404 Cyg, A0620-00, MAXI J1820+070 and GRS 1915+105, plus `star` records for the seven companions (§17.8). |
-| Hosted black holes | `black_hole` joins `HOSTED_KINDS`. Each BH with a Gaia companion is an `orbit` record hosted by the companion's `gdr3:` id. **Gaia BH1 and BH2 are `measured`**: their astrometric orbits give P, e, i, Ω, ω and T_p. **BH3 is `derived`**, because its relative semi-major axis is scaled from a₁. **The X-ray binaries are `illustrative`**: Ω is unknown, so they are hidden in the Evidence view but still counted on the host card. |
-| Companion distances | A new optional star-record field, **`prefer_record: true`**. When the star payload holds that star, its 3D position comes from the record's distance (orbit-corrected or VLBI) instead of the single-star Gaia solution, which is biased for these binaries (RUWE up to 9). |
+| Hosted black holes | `black_hole` joins `HOSTED_KINDS`. Each BH with a Gaia companion is an `orbit` record hosted by the companion's `gdr3:` id. **Gaia BH1 and BH2 are `measured`**: their astrometric orbits give P, e, i, Ω, ω and T_p. **BH3 is `derived`**, because its relative semi-major axis is scaled from a₁. **The X-ray binaries are `illustrative`**: Ω is unknown, so they are hidden in the Evidence view but still counted on the host card, with no special case (a general rule for all hosted kinds is a follow-up, §17.15). |
+| Companion distances | A new optional star-record field, **`prefer_record: {replace: "dist", reason}`**, allowed **only on the seven curated companions, listed by id in the validator** (not a general override). When the star payload holds that star, its **distance only** comes from the record (orbit-corrected, VLBI or the cited parallax); its sky position and Gaia identity stay Gaia's. The single-star Gaia value is shown on the card as "not used", with the reason (§17.8). |
 | `lensing` style | A new renderer: a shadow disc, a photon ring and a soft lensed halo, plus an accretion disc for accreting systems. Its size comes from the real shadow radius (2.6 r_s, with r_s from the mass) when that exceeds a few pixels; otherwise it is drawn enlarged and the card says by how much. It is illustrative, and the Evidence view shows the marker only (§17.9). |
 | Sgr A*'s parent | `null` in Phase 2. `gal:milky_way` arrives with Phase 3 galaxies (§17.8). |
 | Layers | `nebulae` ("Nebulae") and `blackHoles` ("Black holes") in group `beyond`, default on, persisted in the existing map. **No sub-switches.** Planetary nebulae are small and drawn as markers anyway, and dark nebulae are two objects. |
@@ -1609,10 +1612,18 @@ Both scripts follow `build_objects_hr23.py`:
 | `--refresh` | OpenNGC by the pinned SHA; VizieR from the CfA mirror, then CDS. The new sha256 is written to `SOURCE.json`, and a changed VizieR table fails loudly. | Only the Gaia snapshot. `black_holes.json` is edited by hand in a reviewed commit and never downloaded. |
 | Report | rows read; rows kept per type; excluded `Dup`/`NonEx`; Dup designations folded in; merges by rule (identifier / override / positional), with the **full list of merged pairs**; Sharpless-only regions; distances by method; PN distance cut counts; Russeil links rejected by the 1° filter | records per kind and evidence, and every `src`/`where` pair |
 
-**Licences** go in `SOURCE.json` and `manifest.provenance.licence`:
-- **OpenNGC is CC BY-SA 4.0** (`.reuse/dep5`; there is no LICENSE file). The derived `nebulae` tiles therefore carry CC BY-SA 4.0 and the OpenNGC credit line: "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC". It also carries OpenNGC's acknowledgements of NED, HyperLEDA, SIMBAD, HEASARC and Corwin (question Q1).
+**VizieR mirrors** for `--refresh`, in order: CfA (`vizier.cfa.harvard.edu`), IDIA South Africa (`vizier.idia.ac.za`), then
+CDS (`vizier.cds.unistra.fr`). The mirror actually used goes into `SOURCE.json`.
+
+**Licences** go in `SOURCE.json` and `manifest.provenance`:
+- **OpenNGC is CC BY-SA 4.0** (`.reuse/dep5`; there is no LICENSE file). The derived `nebulae` data files therefore carry CC BY-SA 4.0 and the OpenNGC credit line: "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC". They also carry OpenNGC's acknowledgements of NED, HyperLEDA, SIMBAD, HEASARC and Corwin.
+- **Where the licence is stated** (approval condition 1; the Phase 3 galaxy files do the same):
+  - `LICENSE.md` in **both** `backend/data/sources/nebulae/` and `frontend/data/objects/nebulae/`: what is covered (every file in that folder), CC BY-SA 4.0 with its URL, the verbatim OpenNGC credit and acknowledgements, the Sharpless/VizieR, Chornay & Walton and Russeil citations, and a statement that the build code is MIT.
+  - The repository `LICENSE` gains a paragraph after the MIT text: the code is MIT; the data files in those two folders are derived from OpenNGC and licensed CC BY-SA 4.0 (see each folder's `LICENSE.md`).
+  - `manifest.provenance` gains **`credit`** (the verbatim line), **`licence_name`** (`"CC BY-SA 4.0"`) and keeps **`licence`** (the URL). `/api/objects` already returns each dataset's provenance in `sources`, so the frontend needs no new endpoint.
+  - **In the app:** every nebula card has a `Data` row, "OpenNGC (Mattia Verga), CC BY-SA 4.0" (plus "Sharpless 1959 via VizieR" when merged or Sharpless-only). The 3D view gets a **credits line** listing `credit · licence_name` for every dataset that returned records in the current cone and has a `credit`. It is generic, so the galaxy files need no new code.
 - VizieR tables carry the VizieR terms URL and the catalogue citation, as in Phase 1.
-- `bh-curated` cites each paper per record.
+- `bh-curated` cites each paper per record. Its manifest has no `credit` (no licence condition requires one), so it adds nothing to the credits line.
 
 ### 17.3 Nebula records and the cross-catalogue merge
 
@@ -1701,6 +1712,8 @@ The research run of the plain nearest-centre rule merged 47 pairs, with the Rose
   - `table1.Name` (`l±b`) is joined to `table3` (`GLON`/`GLAT`, zero-padded) numerically, to within 0.05°. 476 of 481 rows are reached.
   - **The `S` prefix is not always a Sharpless number:** 98 of 289 links point more than 1° from the Sharpless position.
   - Links are therefore kept only when the precessed Sharpless centre lies **within 1° of the complex's (l, b)**. That leaves 191 regions, 155 of them with a stellar distance.
+  - **Checked on known regions** (approval condition 5; test assertions on the committed snapshot): Orion (Sh2-281 → M42) gets 350–500 pc, M8 (`S25` → NGC 6523) 1.0–1.8 kpc and the Rosette (Sh2-275 → NGC 2237) 1.3–1.8 kpc. A link outside its range fails the build test, and the fix goes in the override table or the filter, not the test.
+  - **The build report states how many links the 1° filter drops** (98 of 289 in the research run), and lists them.
 - **Distance:** `DistSt ± e_DistSt` (kpc → pc), `method: photometric`, tier `inferred`, so `evidence: derived` and a hollow marker. The src names the complex, e.g. "Russeil 2003 table3: stellar distance of complex 208.0-19.0". `n_DistSt = ')'` ("photometric data only") is kept and noted in the src.
 - **Kinematic distances (`Dist`) are rejected.**
   - Their error columns `err+D`/`err-D` carry inconsistent signs, and the ReadMe that would explain them is unreachable.
@@ -1711,6 +1724,10 @@ The research run of the plain nearest-centre rule merged 47 pairs, with the Rose
 - **Precedence:** a PN parallax distance beats a Russeil distance; nothing else conflicts.
 
 The expected yield is ≤ 59 measured + ≤ 155 derived distances, with every other nebula direction-only. The real counts come from the build report.
+
+**Follow-up:** look for HII-region distance catalogues based on Gaia parallaxes of the ionising stars (for example
+Méndez-Delgado et al. 2020 and later work), which would replace the photometric Russeil distances where they overlap
+(§17.15).
 
 ### 17.5 Direction-only records end to end
 
@@ -1822,6 +1839,9 @@ The semi-axes are vectors in frame units:
 
 #### 17.6.4 Real image billboards: follow-up
 
+**Preference for later work (approval condition 4):** images with proper sky alignment, i.e. tiled sky surveys (HiPS)
+with a licence that allows redistribution, come before press images, which need hand registration.
+
 Research findings (licence pages read 2026-11-18):
 - **ESA/Hubble and ESA/Webb** are CC BY 4.0: reproduction without fee, cropping is "not a significant change", commercial use allowed, unaltered credit ("ESA/Hubble") required, no logos.
 - **SDSS** is CC BY 4.0, "any purpose".
@@ -1844,7 +1864,12 @@ All additive; the schema stays at version 1.
 2. **Direction-only guards** (`fixed`, `dist: null`): `host` must be null, `method` must be null, and `size.radius` must be null. The 28 direction-only NEA host stars already satisfy all three; `--check` on every existing dataset proves it.
 3. **Orbit tier floor:** an `orbit` position's `tier` may not be stronger than its weakest element tier (measured = catalogue > inferred > illustrative). BH3's inferred `a_au` therefore makes it `derived`. NEA orbits are all `illustrative` already.
 4. **`render.style`**, when present, must be in `RENDER_STYLES = ("lensing",)`, and `lensing` only on `black_hole`. It stays a hint, never data.
-5. **`prefer_record`** (star records, optional boolean, validated as a boolean). Allowed only with a `dist` of tier `measured` or `catalogue`.
+5. **`prefer_record`** (star records, optional): exactly `{"replace": "dist", "reason": <non-empty string>}`. Allowed only
+   - on `kind: star`;
+   - on an id in **`PREFER_RECORD_IDS`**, a tuple in `objects.py` listing the seven companions of §17.8 explicitly. Any other id is rejected, so this cannot grow into a general override mechanism without a reviewed code change;
+   - with a `dist` of tier `measured` or `catalogue`.
+
+   `replace` names the one thing replaced; nothing else (sky position, epoch, Gaia identity, photometry) may be.
 6. **Props tiers.** No new rule. Each build test asserts its own: a nebula's `size.radius` is `inferred`, and a black hole's event-horizon `size.radius` is `inferred`, never `measured`.
 
 ### 17.8 Black holes: `bh-curated`
@@ -1889,12 +1914,32 @@ All additive; the schema stays at version 1.
 
 **Companion `star` records** (seven; `kind: star`):
 - Id `gdr3:<id>`.
-- Name from the paper: "Gaia BH1 companion", "HDE 226868" (Cyg X-1's optical counterpart; the name is not printed in Miller-Jones et al. 2021, so the src says "SIMBAD identification not verified").
+- **SIMBAD cross-check** (Harvard mirror, 2026-11-18): each Gaia DR3 id resolves to the expected object.
+
+  | Black hole | Companion Gaia DR3 | SIMBAD main id (type) | Name used |
+  |---|---|---|---|
+  | Gaia BH1 | 4373465352415301632 | GALEX J172841.0-003451 (SB*) | "Gaia BH1 companion" |
+  | Gaia BH2 | 5870569352746779008 | UCAC4 154-126202 (SB*) | "Gaia BH2 companion" |
+  | Gaia BH3 | 4318465066420528000 | LS II +14 13 (SB?) | "LS II +14 13" |
+  | Cyg X-1 | 2059383668236814720 | HD 226868 (HXB) | "HD 226868" |
+  | V404 Cyg | 2056188624872569088 | V* V404 Cyg (HXB) | "V404 Cyg" |
+  | A0620-00 | 3118721026600835328 | 1A 0620-00 = V* V616 Mon (HXB) | "V616 Mon" |
+  | MAXI J1820+070 | 4477902563164690816 | MAXI J1820+070 (LXB) | "MAXI J1820+070 companion" |
+
+  The name's src is "SIMBAD (simbad.cfa.harvard.edu mirror), 2026-11-18". GRS 1915+105 has no Gaia DR3 entry in SIMBAD either.
 - Position from the committed Gaia DR3 snapshot, epoch 2016.
-- `dist` as in the table above, `method: parallax`.
-- **`prefer_record: true`.**
+- `dist` as in the table above, `method: parallax`. **The distance of a system is stored once, on the companion.** The hosted black hole has no distance of its own and is placed from its host, so the two cannot differ (approval condition 3).
+- **`prefer_record: {"replace": "dist", "reason": …}`**, with a reason per star, e.g. "The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together". For A0620-00 the curated value is the inverse of the same Gaia DR3 parallax, as cited; the reason says that the star layer's Bailer-Jones distance adds a Galactic prior.
+- **`props.gaia_parallax`**: the single-star Gaia DR3 parallax from the snapshot, `{v, lo, hi, unit: "mas", src: "Gaia DR3 single-star solution (RUWE r)", tier: "measured"}`. The card shows it, with its inverse in pc, as "not used".
 - `props`: `teff`, `radius`, `mass` and `spectral_type`/description as printed (e.g. BH1 5850 ± 50 K, 0.99 ± 0.05 R☉, 0.93 ± 0.05 M☉), and `gmag` from Gaia.
 - `render.mag` = G.
+
+**How `prefer_record` is applied (frontend).** A pure function, `preferredStarDistance(rec)`, returns
+`{ pc, lo, hi, src, tier, notUsed: { plxMas, pc, reason } }` or null.
+- When the star payload holds the star (`gdr3:<id>` is loaded), `_rebuildStars` keeps the Gaia row's sky position and apparent G and replaces only its distance (and the absolute magnitude derived from it) with the record's. The meta keeps the Gaia (Bailer-Jones) distance as `gaiaPc` for the card.
+- When the payload lacks the star (outside the star cone, or below the payload's parallax S/N cut, as for V404 Cyg and MAXI J1820+070), the record is appended as today, at the same position and distance.
+- **The star card** shows `Distance` = the curated value with its paper (its own tier), and a row **"Gaia single-star distance · not used"**: the parallax and its inverse (and the Bailer-Jones value when the payload has one), followed by the reason.
+- Hosted black holes resolve through the same key, so the black hole sits at its companion's curated distance in both cases.
 
 **Black hole `props`:**
 - `mass` (Msun, with interval);
@@ -2069,17 +2114,23 @@ The position src is "Reid & Brunthaler 2004, ApJ 616, 872 / 2020, ApJ 892, 39: J
 
 **Its companion:**
 ```json
-{ "id": "gdr3:4373465352415301632", "kind": "star", "name": "Gaia BH1 companion", "designations": ["Gaia DR3 4373465352415301632"],
-  "same_as": [], "prefer_record": true, "host": null, "parent": null,
+{ "id": "gdr3:4373465352415301632", "kind": "star", "name": "Gaia BH1 companion",
+  "designations": ["Gaia DR3 4373465352415301632", "GALEX J172841.0-003451", "2MASS J17284110-0034514"],
+  "same_as": [], "host": null, "parent": null,
+  "prefer_record": { "replace": "dist", "reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together." },
   "position": { "model": "fixed", "ra": 262.1712073, "dec": -0.581092, "epoch": 2016.0, "method": "parallax",
     "dist": { "v": 478.47, "lo": 473.93, "hi": 483.09, "unit": "pc", "src": "El-Badry et al. 2023, Table 1: parallax 2.09 ± 0.02 mas (orbit-corrected)", "tier": "measured" } },
   "size": { "radius": { "v": 0.99, "lo": 0.94, "hi": 1.04, "unit": "Rsun", "src": "El-Badry et al. 2023, Table 1", "tier": "catalogue" }, "angular": null },
   "props": { "teff": { "v": 5850, "lo": 5800, "hi": 5900, "unit": "K", "src": "El-Badry et al. 2023, Table 1", "tier": "catalogue" },
              "mass": { "v": 0.93, "lo": 0.88, "hi": 0.98, "unit": "Msun", "src": "El-Badry et al. 2023, Table 1", "tier": "catalogue" },
-             "gmag": { "v": 13.772, "unit": "mag", "src": "Gaia DR3", "tier": "measured" } },
+             "gmag": { "v": 13.772, "unit": "mag", "src": "Gaia DR3", "tier": "measured" },
+             "gaia_parallax": { "v": 2.07, "lo": 1.9533, "hi": 2.1867, "unit": "mas", "src": "Gaia DR3 single-star solution (RUWE from the snapshot)", "tier": "measured" } },
   "provenance": { "source": "static:bh-curated", "dataset": "bh-curated", "catalogue": "Space Maps curated black holes", "version": "1" },
   "evidence": "measured", "render": { "mag": 13.772 } }
 ```
+
+The companion's `gaia_parallax`, `gmag` and position come from the committed Gaia snapshot. Where they differ in the last
+digit, the fixture follows the build (§17.12 preamble).
 
 These replace the hypothetical black-hole example in §10.
 
@@ -2092,7 +2143,7 @@ These replace the hypothetical black-hole example in §10.
     - a direction-only record with a host, a method or a `size.radius`;
     - an orbit whose tier is stronger than an inferred element;
     - `render.style: 'lensing'` on a nebula, and an unknown style;
-    - a non-boolean `prefer_record`, and `prefer_record` with an inferred distance.
+    - `prefer_record` that is not exactly `{replace: "dist", reason}`, on an id not in `PREFER_RECORD_IDS`, on a non-star, or with an inferred distance.
   - A hosted `black_hole` orbit is accepted.
 - **`test_objects_static.py`**
   - A hosted `black_hole` is tiled by `host_radec`.
@@ -2108,6 +2159,8 @@ These replace the hypothetical black-hole example in §10.
   - the size rule (IC 1396 takes Sharpless's 170′);
   - the PN cuts (each cut drops its row);
   - Russeil linking (numeric join, 1° filter, stellar only, never on SNR/PN/RfN/DrkN; the Crab stays direction-only);
+  - the 1° filter on known regions: Orion 350–500 pc, M8 (`S25`) 1.0–1.8 kpc, the Rosette (Sh2-275) 1.3–1.8 kpc, and the report's count of dropped links;
+  - the licence: `LICENSE.md` exists in both nebula folders, and `manifest.provenance` has `credit`, `licence_name: "CC BY-SA 4.0"` and the licence URL;
   - the §17.12 records equal the built ones;
   - byte-identical rebuild and `--check`;
   - the build report counts.
@@ -2116,7 +2169,9 @@ These replace the hypothetical black-hole example in §10.
   - r_s from the mass.
   - The Ω + 180° conversion: the BH's sky offset from the §16.6 formula equals minus the star's offset from the Thiele–Innes formulas (BH2's eqs. 3–6) at 5 epochs.
   - BH3 is `derived`; the X-ray binaries are `illustrative`.
-  - The companion records carry `prefer_record`.
+  - Exactly the seven companions carry `prefer_record`, all in `PREFER_RECORD_IDS`; each has `gaia_parallax` and a reason.
+  - No hosted black hole has a distance of its own (one stored distance per system).
+  - BH2's companion: curated distance ≈ 1,164 pc, and `1000 / gaia_parallax` ≈ 1.49 kpc (not used).
   - Gaia BH1 and Sgr A* equal §17.12.
   - `--check`.
 - **`test_objects_api.py`**
@@ -2144,12 +2199,16 @@ These replace the hypothetical black-hole example in §10.
     - `look` per type.
   - `lensingItems`: true size against `LENS_MIN_PX`, the `enlarged` factor, `disc` by state, and marker-only in the Evidence view.
   - Hosted BH placement through the orbit branch, grouping with its host ("Gaia BH1 companion · 1 black hole"), and `childrenOf`.
-  - `prefer_record` resolution (the store side: `resolveStarAliases` reports which loaded keys to re-place).
+  - `preferredStarDistance`: BH2's companion gives ≈ 1,164 pc and `notUsed.pc` ≈ 1.49 kpc; a record without `prefer_record` gives null; only the distance changes (the Gaia row's direction is kept).
+  - The hosted black hole and its companion are at the same distance from the Sun (within the orbit offset), whether or not the Gaia star is loaded.
+  - The credits line: datasets with a `credit` that returned records are listed; datasets without one, or with no records in the cone, are not.
   - HUD kind list from group `beyond`.
 - **`scene3d-registry.test.mjs`**
   - The `nebulae` and `blackHoles` layers in group `beyond`, and persistence.
   - Nebula card rows for placed, derived and direction-only records, with tiers, and the illustrative look row dropped in the Evidence view.
   - Black-hole card rows: mass, r_s inferred, the enlargement note, and the orbit rows with their evidence.
+  - Nebula card `Data` row (credit and licence).
+  - The star card for a `prefer_record` star: the curated distance with its paper, and the "not used" Gaia row with the reason.
   - The host card's generic child headings.
 
 **By hand** (the real app, backend restarted, headless Chromium as in Step 0). Patches:
@@ -2175,12 +2234,12 @@ In each, check:
 
 | Slice | Model | Files (exclusive) | Depends on |
 |---|---|---|---|
-| A. Schema and nebula build | Sonnet | `objects.py`, `objects_static.py`, `backend/scripts/build_objects_nebulae.py`, `backend/data/sources/nebulae/**`, `frontend/data/objects/nebulae/**`, `test_objects_schema.py`, `test_objects_static.py`, `test_build_nebulae.py`, `backend/tests/fixtures/objects/**` (nebula examples) | this section |
+| A. Schema and nebula build | Sonnet | `objects.py`, `objects_static.py`, `backend/scripts/build_objects_nebulae.py`, `backend/data/sources/nebulae/**` and `frontend/data/objects/nebulae/**` (both with `LICENSE.md`), `test_objects_schema.py`, `test_objects_static.py`, `test_build_nebulae.py`, `backend/tests/fixtures/objects/**` (nebula examples) | this section |
 | H. Black-hole build | Sonnet, after A's schema commit (in parallel with A's build work) | `backend/scripts/build_objects_bh.py`, `backend/data/sources/bh-curated/**` (I write `black_holes.json`), `frontend/data/objects/bh-curated/**`, `test_build_bh.py`, BH example fixtures | A's `objects.py` |
 | B. Frontend pure modules | Sonnet, in parallel with A and H | `scene3d-objects.js`, `scene3d-registry.js`, `scene3d-orbits.js` (export `hashUnit` if not already), their tests | this section |
 | C1. Renderer: direction-only, nebula billboards, "Turn to it", card fixes, HUD | Sonnet, after B | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d-card.js`, `scene3d.html`, `scene3d.css` | B, A's data |
 | C2. Renderer: lensing, hosted black holes, `prefer_record` | Sonnet, after C1 | the same files | C1, H's data |
-| D. Docs, mock server, integration, review | me | this doc, `docs/technical-reference.md`, `frontend/dev/mock_server.py`, `test_objects_api.py` | all |
+| D. Docs, mock server, Sesame mirrors, integration, review | me | this doc, `docs/technical-reference.md`, `frontend/dev/mock_server.py`, `test_objects_api.py`, the repository `LICENSE` paragraph, `config.py` and `catalogs.py` (§17.17) with their tests | all |
 
 Haiku runs both suites after each slice, and `--check` on all four datasets.
 
@@ -2210,12 +2269,38 @@ Commits:
   - [ ] the cluster member-star highlight (§16.12);
   - [ ] orbit animation over time;
   - [ ] migrating "Turn back the sky" onto the shared catalogues;
-  - [ ] a SIMBAD cross-check of the companion identifications (§17.8; SIMBAD was unreachable).
+  - [ ] **a general evidence rule for all hosted kinds**, exoplanets included (approval condition 2): at galaxy scale, a marker on the host star takes the host's evidence level; inside the system view, the orbit placement keeps its own level. Phase 2 keeps today's rule with no special case;
+  - [ ] **Gaia-parallax-based HII-region distances**, to replace Russeil 2003's photometric ones where they overlap (§17.4);
+  - [ ] real images: prefer tiled sky surveys with proper sky alignment over press images, licence permitting (§17.6.4).
 
-### 17.16 Open questions
+### 17.16 Decisions at approval (2026-11-18)
 
-- **Q1. Data licence.** OpenNGC is CC BY-SA 4.0, so the derived `nebulae` tiles (and the Phase 3 galaxy tiles) must be CC BY-SA 4.0 with the OpenNGC credit and acknowledgements in the manifest and `SOURCE.json`. This affects only those data files, not the code. OK?
-- **Q2. X-ray-binary black holes in the Evidence view.** Their orbital placement is illustrative (Ω unknown), so the framework rule hides them there, as it hides exoplanets, while their host card still counts them. They sit within 0.2 AU of a star whose position is measured, so a galaxy-frame marker would be honest at pc scale. Keep the rule (my recommendation, for consistency), or add an exception that keeps their galaxy-frame marker as `measured` at the host's position?
-- **Q3. `prefer_record`.** OK for the seven curated companions' orbit-corrected or VLBI distances to replace the Gaia single-star position when the star is in the Gaia cone? It moves BH2's companion from ~1.5 kpc to 1.16 kpc. The star card then says "distance from El-Badry et al. 2023 (orbit-corrected), not the single-star Gaia solution".
-- **Q4. Images.** Keep real images as a follow-up (my recommendation), or pull a small curated ESA/Hubble set into Phase 2?
-- **Q5. HII distances.** Adopt Russeil 2003's stellar distances (derived, about 155 regions with the 1° link filter) and reject its kinematic ones, as argued in §17.4?
+The open questions Q1–Q5 were answered as follows, and each condition is folded into the section named.
+
+1. **Data licence: yes, CC BY-SA 4.0** for the OpenNGC-derived data files; the code stays MIT. Conditions: a licence notice in the nebula dataset folder, a line in the main `LICENSE`, and the OpenNGC credit and licence **where users see the data** (nebula cards and a credits line in the 3D view), not only in the manifest. The Phase 3 galaxy files do the same (§17.2).
+2. **X-ray binaries in the Evidence view: keep the rule.** Illustrative placements are hidden there and counted on the host card, with no special case. A general rule for all hosted kinds is a follow-up (§17.15).
+3. **`prefer_record`: yes, with conditions** (§17.7 item 5, §17.8):
+   - only the seven curated companions, listed explicitly, not a general override mechanism;
+   - it replaces the distance only, never the sky position or the Gaia identity;
+   - the star card shows the curated distance and its paper, and lists the Gaia single-star value as "not used", with the reason;
+   - the black hole and its companion use the same distance;
+   - tests cover BH2 (≈ 1.16 kpc, not ≈ 1.5).
+4. **Real images: a follow-up.** A later version prefers images with proper sky alignment (tiled sky surveys) over press images, licence permitting (§17.6.4).
+5. **HII distances: Russeil 2003 stellar distances (derived), kinematic ones rejected.** The 1° link filter is tested on Orion, M8 = S25 and the Rosette = Sh2-275; the build report states how many links it drops; Gaia-parallax-based HII catalogues are a follow-up (§17.4).
+6. **SIMBAD mirrors.** The name resolver (`/api/resolve`) falls back to SIMBAD's Harvard and South African mirrors when CDS is down (§17.17). Those mirrors were used for the companion cross-check in §17.8.
+
+### 17.17 Name resolution: SIMBAD/Sesame mirrors
+
+`catalogs.resolve` asks Sesame for a name. Today that is CDS only (`config.SESAME_URL`). Phase 2 tries, in order:
+
+| Order | Host | URL |
+|---|---|---|
+| 1 | CDS Strasbourg | `https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/S` |
+| 2 | Harvard (CfA) | `https://vizier.cfa.harvard.edu/viz-bin/nph-sesame/-oxp/S` |
+| 3 | IDIA, South Africa | `https://vizier.idia.ac.za/viz-bin/nph-sesame/-oxp/S` |
+
+- All three were checked live on 2026-11-18 and return the same Sesame XML (`parse_sesame` reads it unchanged). The SIMBAD mirrors' own hosts (`simbad.cfa.harvard.edu`, `simbad.idia.ac.za`) serve SIMBAD queries but not the Sesame CGI, so the Sesame URLs above are the VizieR hosts at the same sites.
+- `config.SESAME_URLS` holds the list. `SPHEREX_SESAME_URL` still overrides the first entry, and `SPHEREX_SESAME_MIRRORS` (comma-separated) replaces the fallbacks; an empty value disables them.
+- A mirror is tried only after an **upstream** failure of the one before (timeout, connection error or 5xx). "Not found" from a working Sesame is an answer, not a failure, so it is not retried elsewhere.
+- The response's `source` stays `"sesame"`; a new optional `mirror` field names the host that answered.
+- Tests (offline, with stubbed `get_text`): CDS down → CfA answers; CDS and CfA down → IDIA answers; "not found" from CDS → no further requests; all down → the same upstream error as today.

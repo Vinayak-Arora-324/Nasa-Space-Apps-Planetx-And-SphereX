@@ -1,0 +1,19 @@
+{
+  "id": "comet:29P", "kind": "comet", "name": "29P/Schwassmann-Wachmann", "designations": ["29P"],
+  "host": "ss:sun", "parent": "ss:sun",
+  "position": { "model": "state", "mjd": 61000.0, "xyz_au": [-5.902113, 1.331087, 1.120554],
+    "geo": { "ra": 150.4, "dec": 1.7, "dist_au": 5.31 },
+    "method": "orbit-propagation", "src": "IMCCE SkyBoT, geocentric RA/Dec and distance; heliocentric xyz = Earth + dg·û (light-time ignored)", "tier": "catalogue" },
+  "in_cone": true,
+  "size": null,
+  "props": {
+    "class":      { "v": "Comet", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "vmag":       { "v": 15.8, "unit": "mag", "src": "IMCCE SkyBoT (total magnitude)", "tier": "catalogue" },
+    "dist_sun":   { "v": 6.15, "unit": "au", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "dist_earth": { "v": 5.31, "unit": "au", "src": "IMCCE SkyBoT", "tier": "catalogue" }
+  },
+  "provenance": { "source": "skybot", "catalogue": "IMCCE SkyBoT", "version": null,
+    "citation": "Berthier et al. 2006, ASP Conf. Ser. 351, 367", "url": "https://ssp.imcce.fr/webservices/skybot/" },
+  "evidence": "measured",
+  "render": { "mag": 15.8 }
+}

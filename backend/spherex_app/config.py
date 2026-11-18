@@ -15,6 +15,8 @@ def _env(name: str, default: str) -> str:
 # --- Locations -------------------------------------------------------------
 CACHE_DIR = Path(_env("SPHEREX_CACHE_DIR", str(REPO_ROOT / ".cache")))
 FRONTEND_DIR = Path(_env("SPHEREX_FRONTEND_DIR", str(REPO_ROOT / "frontend")))
+# Prebuilt object datasets (manifest.json + tiles/), one subdirectory each; may not exist.
+OBJECTS_DIR = Path(_env("SPHEREX_OBJECTS_DIR", str(FRONTEND_DIR / "data" / "objects")))
 
 # --- Remote services -------------------------------------------------------
 IRSA_BASE = _env("SPHEREX_IRSA_BASE", "https://irsa.ipac.caltech.edu")
@@ -189,3 +191,8 @@ PRIOR_MAX = 3000
 PRIOR_PAD_PX = 2.0  # keep priors up to this far outside the grid edge
 # SPHEREx detector size (px): cutouts are clipped to it
 DETECTOR_NPIX = 2040
+
+# --- Object framework (/api/objects) ----------------------------------------------
+# Each source (ephemeris, SkyBoT, static datasets) gets this long before its kinds report an error;
+# a slow source keeps running in the background so its cache is warm for the next request.
+OBJECTS_SOURCE_TIMEOUT_S = float(_env("SPHEREX_OBJECTS_SOURCE_TIMEOUT", "25"))

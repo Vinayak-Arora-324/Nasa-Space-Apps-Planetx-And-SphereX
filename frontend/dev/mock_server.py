@@ -296,6 +296,32 @@ def _ecl_to_icrs(X, Y, Z):
     """Ecliptic to ICRS equatorial: rotate about x by the obliquity."""
     return (X, Y * math.cos(OBLIQ) - Z * math.sin(OBLIQ), Y * math.sin(OBLIQ) + Z * math.cos(OBLIQ))
 
+def mock_solar(ra, dec, radius, mjd):
+    """Synthetic solar system: circular orbits with phases from mjd (Kepler periods), ecliptic -> ICRS,
+    plus 3 small bodies near the line of sight. Returns (earth xyz, planets incl. Earth and the Moon, bodies)."""
+    rng = random.Random(f"solar/{ra:.4f}/{dec:.4f}/{radius:.3f}")
+    a0, d0 = math.radians(ra), math.radians(dec)
+    t = 2 * math.pi * (mjd - 51544.5) / 365.25
+    planets, earth = [], None
+    for k, (name, au) in enumerate(PLANETS_AU):
+        th = t / (au ** 1.5) + 2 * math.pi * k / 9.0
+        x, y, z = _ecl_to_icrs(au * math.cos(th), au * math.sin(th), 0.0)
+        planets.append(dict(name=name, x=round(x, 6), y=round(y, 6), z=round(z, 6)))
+        if name == "Earth": earth = (x, y, z)
+    th_m = t * 13.37 / 1.0
+    mx, my, mz = _ecl_to_icrs(0.00257 * math.cos(th_m), 0.00257 * math.sin(th_m), 0.0)
+    planets.append(dict(name="Moon", x=round(earth[0] + mx, 6), y=round(earth[1] + my, 6), z=round(earth[2] + mz, 6)))
+    u = (math.cos(d0) * math.cos(a0), math.cos(d0) * math.sin(a0), math.sin(d0))
+    bodies = []
+    for j, (name, cls, vmag, dl) in enumerate([("Mock Asteroid A", "MBA", 14.1, 2.6), ("Mock Asteroid B", "NEO", 16.3, 3.3), ("C/2099 A1 (Mock)", "Comet", 12.2, 3.9)]):
+        wob = 0.5 * math.radians(radius) * dl   # keeps the body inside the cone (|offset| < 0.87 * radius)
+        jitter = [rng.uniform(-wob, wob) for _ in range(3)]
+        p = [earth[k] + u[k] * dl + jitter[k] for k in range(3)]
+        dg = math.dist(p, earth); dh = math.sqrt(sum(q * q for q in p))
+        bodies.append(dict(name=name, number=990001 + j if j < 2 else None, **{"class": cls}, vmag=vmag,
+                           x=round(p[0], 6), y=round(p[1], 6), z=round(p[2], 6), dg_au=round(dg, 6), dh_au=round(dh, 6)))
+    return earth, planets, bodies
+
 def scene3d_payload(ra, dec, radius, limit, mjd):
     rng = random.Random(f"scene3d/{ra:.4f}/{dec:.4f}/{radius:.3f}")
     a0, d0 = math.radians(ra), math.radians(dec)
@@ -315,29 +341,89 @@ def scene3d_payload(ra, dec, radius, limit, mjd):
                      round(absg, 3), bprp, round(d * (1 - f), 3), round(d * (1 + f), 3)])
     truncated = len(rows) > limit
     rows = rows[:limit]
-    # Solar system: circular orbits with phases from mjd (Kepler periods), ecliptic -> ICRS.
-    t = 2 * math.pi * (mjd - 51544.5) / 365.25
-    planets, earth = [], None
-    for k, (name, au) in enumerate(PLANETS_AU):
-        th = t / (au ** 1.5) + 2 * math.pi * k / 9.0
-        x, y, z = _ecl_to_icrs(au * math.cos(th), au * math.sin(th), 0.0)
-        planets.append(dict(name=name, x=round(x, 6), y=round(y, 6), z=round(z, 6)))
-        if name == "Earth": earth = (x, y, z)
-    th_m = t * 13.37 / 1.0
-    mx, my, mz = _ecl_to_icrs(0.00257 * math.cos(th_m), 0.00257 * math.sin(th_m), 0.0)
-    planets.append(dict(name="Moon", x=round(earth[0] + mx, 6), y=round(earth[1] + my, 6), z=round(earth[2] + mz, 6)))
-    u = (math.cos(d0) * math.cos(a0), math.cos(d0) * math.sin(a0), math.sin(d0))
-    bodies = []
-    for j, (name, cls, vmag, dl) in enumerate([("Mock Asteroid A", "MBA", 14.1, 2.6), ("Mock Asteroid B", "NEO", 16.3, 3.3), ("Mock Comet C", "COM", 12.2, 3.9)]):
-        jitter = [rng.uniform(-0.3, 0.3) for _ in range(3)]
-        p = [earth[k] + u[k] * dl + jitter[k] for k in range(3)]
-        dg = math.dist(p, earth); dh = math.sqrt(sum(q * q for q in p))
-        bodies.append(dict(name=name, number=990001 + j, **{"class": cls}, vmag=vmag,
-                           x=round(p[0], 6), y=round(p[1], 6), z=round(p[2], 6), dg_au=round(dg, 6), dh_au=round(dh, 6)))
+    earth, planets, bodies = mock_solar(ra, dec, radius, mjd)
     return dict(ra=ra, dec=dec, radius=radius, mjd=mjd,
                 stars=dict(epoch=2016.0, source="mock (synthetic)", fields=["id", "x", "y", "z", "abs_g", "bp_rp", "d_lo", "d_hi"],
                            rows=rows, truncated=truncated),
                 solar=dict(earth=[round(e, 6) for e in earth], sun=[0, 0, 0], planets=planets, bodies=bodies, bodies_error=None))
+
+# ---- /api/objects: the space-maps.objects/1 contract, from the mock solar system above ----
+OBJ_SCHEMA = "space-maps.objects/1"
+OBJ_KINDS = ["sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "star", "exoplanet", "cluster", "nebula", "black_hole", "galaxy"]
+OBJ_SERVED = ["sun", "planet", "moon", "dwarf_planet", "asteroid", "comet"]
+OBJ_RADII_KM = dict(Sun=695700, Mercury=2440, Venus=6052, Earth=6378, Moon=1737, Mars=3396, Jupiter=71492, Saturn=60268, Uranus=25559, Neptune=24764)
+MOCK_PROV = {"catalogue": "Space Maps dev mock (synthetic, not a real ephemeris)", "version": None, "citation": "none", "url": None}
+
+def _oq(v, src, tier, unit=None):
+    q = {"v": v}
+    if unit: q["unit"] = unit
+    q.update(src=src, tier=tier)
+    return q
+
+def _radec(x, y, z):
+    d = math.sqrt(x * x + y * y + z * z)
+    return math.degrees(math.atan2(y, x)) % 360.0, math.degrees(math.asin(max(-1.0, min(1.0, z / d)))), d
+
+def _angsep(ra1, dec1, ra2, dec2):
+    r1, d1, r2, d2 = map(math.radians, (ra1, dec1, ra2, dec2))
+    h = math.sin((d2 - d1) / 2) ** 2 + math.cos(d1) * math.cos(d2) * math.sin((r2 - r1) / 2) ** 2
+    return math.degrees(2 * math.asin(min(1.0, math.sqrt(h))))
+
+def objects_payload(ra, dec, radius, mjd, kinds, limit):
+    earth, planets, bodies = mock_solar(ra, dec, radius, mjd)
+    ephem_prov = dict(MOCK_PROV, source="ephem")
+    sky_prov = dict(MOCK_PROV, source="skybot")
+
+    def state(xyz, with_geo, method, src, tier):
+        pos = {"model": "state", "mjd": mjd, "xyz_au": list(xyz), "method": method, "src": src, "tier": tier}
+        if with_geo:
+            g = _radec(xyz[0] - earth[0], xyz[1] - earth[1], xyz[2] - earth[2])
+            pos["geo"] = {"ra": round(g[0], 5), "dec": round(g[1], 5), "dist_au": round(g[2], 6)}
+        return pos
+
+    def rec(id, kind, name, desig, parent, pos, size, props, prov, mag=None):
+        r = {"id": id, "kind": kind, "name": name, "designations": desig, "host": "ss:sun", "parent": parent,
+             "position": pos, "size": size, "props": props, "provenance": prov, "evidence": "measured",
+             "render": {} if mag is None else {"mag": mag}}
+        g = pos.get("geo")
+        r["in_cone"] = bool(g) and _angsep(ra, dec, g["ra"], g["dec"]) <= radius
+        return r
+
+    out = []
+    sun_pos = state([0.0, 0.0, 0.0], True, "ephemeris", "mock ephemeris", "measured")
+    out.append(rec("ss:sun", "sun", "Sun", [], None, sun_pos, {"radius": _oq(OBJ_RADII_KM["Sun"], "IAU 2015 nominal solar radius", "measured", "km"), "angular": None},
+                   {"dist_earth": _oq(sun_pos["geo"]["dist_au"], "mock ephemeris", "measured", "au")}, ephem_prov))
+    for p in planets:
+        xyz = [p["x"], p["y"], p["z"]]
+        is_earth, is_moon = p["name"] == "Earth", p["name"] == "Moon"
+        pos = state(xyz, not is_earth, "ephemeris", "mock ephemeris", "measured")
+        props = {"dist_sun": _oq(round(math.sqrt(sum(c * c for c in xyz)), 6), "mock ephemeris", "measured", "au")}
+        if not is_earth: props["dist_earth"] = _oq(pos["geo"]["dist_au"], "mock ephemeris", "measured", "au")
+        out.append(rec("ss:" + p["name"].lower(), "moon" if is_moon else "planet", p["name"], [], "ss:earth" if is_moon else "ss:sun", pos,
+                       {"radius": _oq(OBJ_RADII_KM[p["name"]], "IAU WGCCRE 2015 equatorial radius", "measured", "km"), "angular": None}, props, ephem_prov))
+    for b in bodies:
+        comet = b["class"] == "Comet"
+        xyz = [b["x"], b["y"], b["z"]]
+        pos = state(xyz, False, "orbit-propagation", "mock SkyBoT", "catalogue")
+        g = _radec(xyz[0] - earth[0], xyz[1] - earth[1], xyz[2] - earth[2])
+        pos["geo"] = {"ra": round(g[0], 5), "dec": round(g[1], 5), "dist_au": round(g[2], 6)}
+        rid = "comet:" + b["name"].split(" (")[0] if comet else f"mp:{b['number']}"
+        props = {"class": _oq(b["class"], "mock SkyBoT", "catalogue"), "vmag": _oq(b["vmag"], "mock SkyBoT", "catalogue", "mag"),
+                 "dist_sun": _oq(b["dh_au"], "mock SkyBoT", "catalogue", "au"), "dist_earth": _oq(b["dg_au"], "mock SkyBoT", "catalogue", "au")}
+        out.append(rec(rid, "comet" if comet else "asteroid", b["name"], [rid.split(":", 1)[1]] if comet else [str(b["number"])], "ss:sun", pos, None, props, sky_prov, b["vmag"]))
+    by_kind, info = {}, {}
+    for k in kinds:
+        items = sorted((r for r in out if r["kind"] == k and (k in ("sun", "planet", "moon") or r["in_cone"])),
+                       key=lambda r: (r["render"].get("mag") is None, r["render"].get("mag") or 0.0, r["id"]))
+        by_kind[k] = items[:limit]
+        info[k] = ({"status": "ok", "source": "ephem" if k in ("sun", "planet", "moon") else "skybot", "count": len(by_kind[k]), "truncated": len(items) > limit}
+                   if k in OBJ_SERVED else {"status": "unavailable", "source": None, "count": 0, "truncated": False})
+    objs = [r for k in kinds for r in by_kind[k]]
+    n = lambda src: sum(1 for r in objs if r["provenance"]["source"] == src)
+    return {"schema": OBJ_SCHEMA, "query": {"ra": ra, "dec": dec, "radius": radius, "mjd": mjd, "kinds": kinds}, "objects": objs, "kinds": info,
+            "sources": [{"id": "ephem", "status": "ok", "ms": 1, "count": n("ephem"), "dropped": 0, "provenance": ephem_prov},
+                        {"id": "skybot", "status": "ok", "ms": 1, "count": n("skybot"), "dropped": 0, "provenance": sky_prov}]}
+
 
 
 # ---- /api/system/<id>: deterministic synthetic stellar parameters (hash of the id) ----
@@ -485,6 +571,22 @@ class H(BaseHTTPRequestHandler):
             if not (0 < radius <= 30): return self.send_json({"detail": "radius must be in (0, 30] degrees"}, 400)
             if limit < 1: return self.send_json({"detail": "limit must be at least 1"}, 400)
             return self.send_json(scene3d_payload(ra, dec, radius, limit, mjd))
+        if ep == 'objects':
+            try:
+                ra, dec = float(p['ra']), float(p['dec'])
+                radius = float(p.get('radius', 3)); limit = int(p.get('limit', 2000))
+                mjd = float(p['mjd']) if 'mjd' in p else 61000.0
+            except (KeyError, ValueError):
+                return self.send_json({"detail": "ra and dec are required numbers; radius, limit and mjd must be numbers"}, 400)
+            if not (0 <= ra < 360 and -90 <= dec <= 90): return self.send_json({"detail": "ra must be in [0, 360) and dec in [-90, 90]"}, 400)
+            if not (0.1 <= radius <= 5.0): return self.send_json({"detail": "radius must be between 0.1 and 5.0 deg"}, 400)
+            if not (1 <= limit <= 10000): return self.send_json({"detail": "limit must be between 1 and 10000"}, 400)
+            if not (15020.0 <= mjd <= 88069.0): return self.send_json({"detail": "mjd must be between 15020 (1900) and 88069 (2100)"}, 400)
+            want = [k.strip() for k in p.get('kinds', '').split(',') if k.strip()]
+            bad = [k for k in want if k not in OBJ_KINDS]
+            if bad: return self.send_json({"detail": f"unknown kind(s): {', '.join(bad)}; valid kinds: {', '.join(OBJ_KINDS)}"}, 400)
+            kinds = [k for k in OBJ_KINDS if k in want] if want else list(OBJ_SERVED)
+            return self.send_json(objects_payload(ra, dec, radius, mjd, kinds, limit))
         if ep.startswith('system/'):
             sid = ep[7:].strip('/')
             if sid != 'sun' and not sid.isdigit(): return self.send_json({"detail": "source_id must be a Gaia source id (digits) or 'sun'"}, 400)

@@ -1,0 +1,21 @@
+{
+  "id": "mp:2019 YB21", "kind": "asteroid", "name": "2019 YB21", "designations": [],
+  "host": "ss:sun", "parent": "ss:sun",
+  "position": { "model": "state", "mjd": 61000.0, "xyz_au": [-2.110482, 1.402931, 0.611207],
+    "geo": { "ra": 149.98072, "dec": 2.00882, "dist_au": 2.40787 },
+    "method": "orbit-propagation", "src": "IMCCE SkyBoT, geocentric RA/Dec and distance; heliocentric xyz = Earth + dg·û (light-time ignored)", "tier": "catalogue" },
+  "in_cone": true,
+  "size": null,
+  "props": {
+    "class":      { "v": "MB>Middle", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "vmag":       { "v": 22.5, "unit": "mag", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "dist_sun":   { "v": 2.6213, "unit": "au", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "dist_earth": { "v": 2.40787, "unit": "au", "src": "IMCCE SkyBoT", "tier": "catalogue" },
+    "pos_err":    { "v": 0.11, "unit": "arcsec", "src": "IMCCE SkyBoT", "tier": "catalogue" }
+  },
+  "provenance": { "source": "skybot", "catalogue": "IMCCE SkyBoT", "version": null,
+    "citation": "Berthier et al. 2006, ASP Conf. Ser. 351, 367", "url": "https://ssp.imcce.fr/webservices/skybot/",
+    "query": { "epoch_jd": 2461000.5, "observer": "500" } },
+  "evidence": "measured",
+  "render": { "mag": 22.5 }
+}

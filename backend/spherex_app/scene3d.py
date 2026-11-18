@@ -19,12 +19,12 @@ import logging
 import math
 import time
 
-from astropy import units as u
-from astropy.coordinates import get_body_barycentric
 from astropy.time import Time
 
 from . import cache, catalogs, config, movers
 from .archive import UpstreamError
+# the solar helpers moved to objects_live; re-exported so `scene3d.X` keeps resolving
+from .objects_live import PLANETS, bodies_xyz, radec_to_xyz, solar_positions  # noqa: F401
 
 log = logging.getLogger(__name__)
 
@@ -48,12 +48,6 @@ _HEX_SPACING_FACTOR = math.sqrt(3.0) * 0.97
 # holds about limit * tile_area / cone_area of the final stars, so the cap leaves a margin.
 TILE_CAP_FACTOR = 2.5
 
-# (display name, astropy body id); Earth is returned separately, Sun is the origin
-PLANETS = (
-    ("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter"),
-    ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Moon", "moon"),
-)
-
 
 def _f(v) -> float | None:
     try:
@@ -61,13 +55,6 @@ def _f(v) -> float | None:
     except (TypeError, ValueError):
         return None
     return x if math.isfinite(x) else None
-
-
-def radec_to_xyz(ra: float, dec: float, d: float = 1.0) -> tuple[float, float, float]:
-    """Equatorial (ICRS) RA/Dec in degrees at distance d -> Cartesian (x toward RA=0, z toward pole)."""
-    r, dd = math.radians(ra), math.radians(dec)
-    cd = math.cos(dd)
-    return (d * cd * math.cos(r), d * cd * math.sin(r), d * math.sin(dd))
 
 
 def angsep_deg(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
@@ -151,43 +138,6 @@ def _output_row(rec: list) -> list:
 def star_rows_from_csv(rows: list[dict]) -> list[list]:
     """Gaia/Bailer-Jones TAP rows (ESA or ARI column names) -> output star rows."""
     return [_output_row(rec) for rec in (_record(r) for r in rows) if rec is not None]
-
-
-def solar_positions(mjd: float) -> dict:
-    """Earth and the planets/Moon relative to the Sun, AU, ICRS axes (built-in ephemeris)."""
-    t = Time(mjd, format="mjd", scale="tdb")
-    sun = get_body_barycentric("sun", t)
-
-    def rel(body: str) -> list[float]:
-        xyz = (get_body_barycentric(body, t) - sun).xyz.to_value(u.au)
-        return [round(float(v), 6) for v in xyz]
-
-    planets = []
-    for name, body in PLANETS:
-        x, y, z = rel(body)
-        planets.append({"name": name, "x": x, "y": y, "z": z})
-    return {"earth": rel("earth"), "planets": planets}
-
-
-def bodies_xyz(earth: list[float], objs: list[dict]) -> list[dict]:
-    """SkyBoT objects -> heliocentric positions: earth + dg * unit(geocentric RA/Dec).
-
-    Light-time is ignored. Objects without a geocentric distance are skipped."""
-    ex, ey, ez = earth
-    out = []
-    for o in objs:
-        dg = _f(o.get("dg_au"))
-        if dg is None or dg <= 0:
-            continue
-        ux, uy, uz = radec_to_xyz(o["ra"], o["dec"], 1.0)
-        dh = _f(o.get("dh_au"))
-        out.append({
-            "name": o.get("name") or "", "number": o.get("number"), "class": o.get("class"),
-            "vmag": _f(o.get("vmag")),
-            "x": round(ex + dg * ux, 6), "y": round(ey + dg * uy, 6), "z": round(ez + dg * uz, 6),
-            "dg_au": round(dg, 6), "dh_au": None if dh is None else round(dh, 6),
-        })
-    return out
 
 
 # --- per-source fetchers: each returns raw rows already carrying the ESA/ARI column names ---

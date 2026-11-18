@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved 2026-11-18 (decisions in §16.18).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -780,13 +780,13 @@ Commits, in logical steps:
 
 Phase 1's design and status are in §16; the boxes below are ticked when it lands.
 
-- [ ] `backend/scripts/build_objects_nea.py` and `build_objects_hr23.py` (pinned sources), producing `frontend/data/objects/{nea-exoplanets,hr23-clusters}/`.
-- [ ] Allow hosted static kinds in tiles (`position.host_radec`, §10 note).
-- [ ] Map Exoplanet Archive hosts to `gdr3:` ids from the archive's Gaia DR3 cross-id column. Fall back to `hip:`, and for hosts missing from the star payload, send `star` records.
-- [ ] `registerLayer` for `exoplanets` and `clusters`. `registerKind` for `exoplanet` (`frames: {system: 'sphere'|'point', galaxy: 'marker'}`, `go: 'host-frame'`) and `cluster` (`frames: {galaxy: 'billboard'}`).
-- [ ] Implement the `billboard` renderer (the first kind to need it), plus client-side `orbit` evaluation.
-- [ ] Derived-placement marker style (the hook already exists).
-- [ ] Cards: list a host star's planets in its star card (via `parent`).
+- [x] `backend/scripts/build_objects_nea.py` and `build_objects_hr23.py` (pinned sources), producing `frontend/data/objects/{nea-exoplanets,hr23-clusters}/`.
+- [x] Allow hosted static kinds in tiles (`position.host_radec`, §10 note).
+- [x] Map Exoplanet Archive hosts to `gdr3:` ids from the archive's Gaia DR3 cross-id column. Fall back to `hip:`, and for hosts missing from the star payload, send `star` records.
+- [x] `registerLayer` for `exoplanets` and `clusters`. `registerKind` for `exoplanet` (`frames: {system: 'sphere'|'point', galaxy: 'marker'}`, `go: 'host-frame'`) and `cluster` (`frames: {galaxy: 'billboard'}`).
+- [x] Implement the `billboard` renderer (the first kind to need it), plus client-side `orbit` evaluation.
+- [x] Derived-placement marker style (the hook already exists).
+- [x] Cards: list a host star's planets in its star card (via `parent`).
 
 Follow-ups outside Phase 1:
 - [ ] Evidence view: set `EVIDENCE_HIDES_FEATURES = true`, which hides planet bands, atmospheres and rings (all tagged illustrative in Phase 0).
@@ -815,7 +815,7 @@ These were settled while building Phase 0. Where they differ from the sections a
 
 ## 16. Phase 1: exoplanets and star clusters (design)
 
-Status: **approved 2026-11-18** with the decisions in §16.18, which take precedence over the text above them. Phase 0 sections that Phase 1 changes carry a "Phase 1 change"
+Status: **approved and implemented 2026-11-18**. The decisions in §16.18 and the implementation notes in §16.19 take precedence over the text above them. Phase 0 sections that Phase 1 changes carry a "Phase 1 change"
 note pointing here. Where this section and an earlier one disagree, this one wins.
 
 Facts below about the NASA Exoplanet Archive and Gaia were checked against the live services on 2026-11-18. **CDS

@@ -1523,3 +1523,28 @@ al. 2021).
 `flag: -1`. That was parsed as an empty sky and cached for 7 days, so a patch near the ecliptic showed "0 small bodies".
 It now raises, which reports the kinds as `error` and caches nothing. The cache key moved to `skybot-3` so that entries
 cached that way are no longer read.
+
+**Cluster catalogue (D1 resolved).** HR24 (`J/A+A/686/A42`) is **pinned alone**.
+- It holds the same 7,167 clusters as HR23, matched by catalogue `ID`, with identical values in every shared column
+  (RA, Dec, parallax, distances, ages, radii, N, CST).
+- It adds masses (`MassTot`, `MassJ`), Jacobi radii and a `Type` of `o` bound open cluster (5,647), `m` moving group
+  (1,309), `g` globular (132), `d` too distant, d ≥ 15 kpc (62; HR24 Table 3), and `r` rejected (17).
+- **68 names differ from HR23.** They are corrections, such as a Dec sign in a Teutsch name and `FoF_2309` →
+  `LP_2309`. Ids use the HR24 names (`hr23:<Name>`).
+- Facts were checked through the CfA VizieR mirror on 2026-11-18, while CDS was down. The pinned file's sha256 (`#`
+  lines stripped) is in `SOURCE.json`.
+
+**Cluster quality (D4).** The HR23 cut (CST ≥ 5 and median CMD class ≥ 0.5) gives the paper's 4,105. Five of them
+are HR24-rejected and are not counted as reliable, which leaves **4,100 reliable** and 3,067 candidates.
+
+**Cluster distances.** The tier is `measured` when `Plx/e_Plx ≥ 5` (`e_Plx` is the standard error of the mean, not
+the member spread `s_Plx`). Otherwise it is `inferred`, which makes the record `derived` with a hollow marker: 97
+clusters, mostly distant globulars.
+
+**Cluster extent** (changes §16.9). `size.angular.major` is 2 × r50, so the cone test and `max_extent_deg` (22.7°)
+follow the half-member radius that the billboard draws. The total radius reaches 73° for nearby moving groups and
+would have put them in almost every patch.
+
+**Cluster glow** (§16.10, tuned in the hand check). The glow's peak is a distance-independent surface brightness
+∝ N / r50², so a diffuse moving group is nearly invisible next to a compact cluster. The glow also fades out as the
+camera comes within a few r50, where the member stars show the cluster. The Evidence-view r50 ring has no close fade.

@@ -275,8 +275,18 @@ uv run python backend/scripts/build_objects_hr23.py [--check | --refresh]   # st
 - Cite NASA Exoplanet Archive (Christiansen et al. 2025) with the archive's acknowledgement (in `SOURCE.json`); Gaia
   Collaboration, Vallenari et al. 2023; Torra et al. 2021 for the DR2–DR3 neighbourhood.
 
-**`hr23-clusters`** (`frontend/data/objects/hr23-clusters/`): Hunt & Reffert star clusters from VizieR. See
-`docs/object-framework.md` §16.9 and §16.18 for the version pinned and why.
+**`hr23-clusters`** (`frontend/data/objects/hr23-clusters/`, 9.3 MB in 300 tiles)
+- Source: Hunt & Reffert 2024, VizieR `J/A+A/686/A42/clusters` (7,167 clusters). It is the same census as Hunt &
+  Reffert 2023 (`J/A+A/673/A114`), with identical astrometry and distances, plus masses and the bound-cluster /
+  moving-group class. Pinned by VizieR id and sha256.
+- The download tries CDS first, then the CfA mirror, and rejects anything that isn't 7,167 rows with the pinned hash.
+- Every cluster is included:
+  - 4,100 pass the Hunt & Reffert 2023 quality cut and are shown by default;
+  - the rest are candidates, behind the Layers panel's "Include candidates".
+- 97 clusters whose parallax S/N is under 5 have `derived` distances and hollow markers.
+- Cite Hunt & Reffert 2024, A&A 686, A42, and 2023, A&A 673, A114. VizieR licence:
+  https://cds.unistra.fr/vizier-org/licences_vizier.html.
+- The members table (1.29 M rows) is not used; the member-star highlight is a follow-up.
 
 `build_rewind_sky.py` reads the same XHIP table (`--tsv` takes a local copy) and the pinned d3-celestial files. It prints a note for the 4 boundary segments near the north pole (Cepheus and Ursa Minor) that run along neither a B1875 meridian nor a parallel; those are kept as given.
 

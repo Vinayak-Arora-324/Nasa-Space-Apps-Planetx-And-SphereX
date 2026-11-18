@@ -260,6 +260,12 @@ def parse_skybot(text: str) -> list[dict]:
     if isinstance(data, dict):
         if data.get("error") or data.get("Error"):
             raise ValueError(f"SkyBoT error: {data.get('error') or data.get('Error')}")
+        # A failed computation comes back as HTTP 200 with a negative flag and a message (seen live
+        # 2026-11-18: {"flag": -1, "message": "... cannot read init file ..."}). It is a failure, not
+        # an empty sky: raising keeps it out of the disk cache and reports the kinds as `error`.
+        flag = data.get("flag")
+        if isinstance(flag, (int, float)) and not isinstance(flag, bool) and flag < 0:
+            raise ValueError(f"SkyBoT error: {str(data.get('message') or 'flag ' + str(flag)).strip()[:200]}")
         data = data.get("data") or data.get("results") or []
     out = []
     for r in data:
@@ -292,7 +298,8 @@ async def _skybot_fetch(ra: float, dec: float, radius: float, jd: float) -> str:
 
 async def skybot_cone(ra: float, dec: float, radius: float, jd: float) -> list[dict]:
     """Cone search at one epoch (disk-cached).  Raises on service failure."""
-    key = cache.key_hash("skybot-2", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
+    # skybot-3: entries cached before failed computations (flag -1) were rejected may hold a false empty sky
+    key = cache.key_hash("skybot-3", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
     hit = cache.get_json("skybot", key, ttl=SKYBOT_TTL_S)
     if hit is not None:
         return hit

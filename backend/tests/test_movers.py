@@ -99,6 +99,9 @@ def test_parse_skybot_empty_and_errors():
         movers.parse_skybot("<html>503 Service Unavailable</html>")
     with pytest.raises(ValueError):
         movers.parse_skybot('{"error": "bad request"}')
+    # a failed computation is HTTP 200 with a negative flag: an error, never an empty (cacheable) sky
+    with pytest.raises(ValueError, match="cannot read init file"):
+        movers.parse_skybot('{"flag":-1,"ticket":1,"status":200,"message":"numint_comet2p: cannot read init file (code 5010)\\n"}')
 
 
 def test_predict_positions_linear_motion():

@@ -137,8 +137,12 @@ const NEO_RE = /NEO|PHA|Apollo|Aten|Amor/i;
 const prop = (o, key) => (o.props ? o.props[key] : undefined) || null;
 const srcOf = (q) => (q && q.src) || null;
 /** A row for a quantity with a unit: [label, text, tier, src]; 'n/a' when the record lacks it. */
+// Unit labels for values the catalogue gives only as a bound (a string v such as '< 0.12'), shown verbatim.
+const LIMIT_UNIT = { Mjup: 'Mj', Mearth: 'M⊕', Rjup: 'Rj', Rearth: 'R⊕', Msun: 'M☉', Rsun: 'R☉', au: 'AU', pc: 'pc', d: 'd', K: 'K', mag: 'mag', deg: '°' };
+/** A catalogue bound ('< 0.12 Mj') from a Quantity whose v is a string, else null. Never turned into a number. */
+const limitText = (q) => (q && typeof q.v === 'string' && /^[<>]/.test(q.v.trim()) ? `${q.v.trim()}${q.unit && LIMIT_UNIT[q.unit] ? ' ' + LIMIT_UNIT[q.unit] : ''}` : null);
 function qtyRow(label, q, fmt, fallbackTier) {
-  return [label, q && Number.isFinite(q.v) ? fmt(q) : 'n/a', (q && q.tier) || fallbackTier, srcOf(q)];
+  return [label, q && Number.isFinite(q.v) ? fmt(q) : limitText(q) || 'n/a', (q && q.tier) || fallbackTier, srcOf(q)];
 }
 const hypot3 = (a) => Math.hypot(a[0], a[1], a[2]);
 const sunDistAu = (o) => {
@@ -232,8 +236,9 @@ export function planetLine(o, fmt = fmtNum) {
   const el = (o.position && o.position.elements) || {}, parts = [], tiers = [];
   const P = el.period_d, a = el.a_au, r = o.size && o.size.radius, m = prop(o, 'mass'), ms = prop(o, 'msini');
   if (hasV(P)) { parts.push(`${fmt(P.v)} d`); tiers.push(P.tier); } else if (hasV(a)) { parts.push(`${fmt(a.v)} AU`); tiers.push(a.tier); }
-  if (hasV(r)) { parts.push(radiusText(r, fmt)); tiers.push(r.tier); }
-  if (hasV(m)) { parts.push(massText(m, fmt)); tiers.push(m.tier); } else if (hasV(ms)) { parts.push(`${massText(ms, fmt)} min`); tiers.push(ms.tier); }
+  if (hasV(r)) { parts.push(radiusText(r, fmt)); tiers.push(r.tier); } else if (limitText(r)) { parts.push(limitText(r)); tiers.push(r.tier); }
+  if (hasV(m)) { parts.push(massText(m, fmt)); tiers.push(m.tier); } else if (limitText(m)) { parts.push(limitText(m)); tiers.push(m.tier); }
+  else if (hasV(ms)) { parts.push(`${massText(ms, fmt)} min`); tiers.push(ms.tier); } else if (limitText(ms)) { parts.push(`${limitText(ms)} min`); tiers.push(ms.tier); }
   return { line: parts.join(' · '), tier: worstTier(tiers) };
 }
 
@@ -247,7 +252,7 @@ function exoplanetCard(o, ctx) {
   rows.push(assumedE ? ['Eccentricity', `${hasV(e) ? f(e.v) : '0'} (assumed)`, 'illustrative', (e && e.src) || 'assumed circular (no eccentricity in the archive)']
     : qtyRow('Eccentricity', e, (q) => f(q.v), 'measured'));
   rows.push(hasV(inc) ? qtyRow('Inclination', inc, (q) => `${f(q.v)}°`, 'measured')
-    : ['Inclination', orb ? `unknown · drawn at ${Math.round(orb.used.incl)}°` : 'unknown', 'illustrative', 'assumed: 90° if it transits, else a per-planet random draw']);
+    : ['Inclination', orb ? `unknown · drawn at ${Math.round(orb.used.incl)}°` : 'unknown', 'illustrative', 'assumed: 90° if it transits, else one random draw shared by the planets of this system']);
   const mass = prop(o, 'mass'), msini = prop(o, 'msini');
   if (hasV(msini) && !hasV(mass)) rows.push(qtyRow('Minimum mass (M sin i)', msini, (q) => massText(q, f), 'measured'));
   else {

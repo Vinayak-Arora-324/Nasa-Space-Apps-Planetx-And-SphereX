@@ -339,3 +339,18 @@ test('valueWithRange: more digits (up to 5) until lo and hi differ, else no inte
   assert.equal(R.valueWithRange({ v: 134.84, lo: 134.84, hi: 134.84 }, 'pc'), '135 pc');
   assert.equal(R.valueWithRange({ v: 12.4 }, 'pc'), '12.4 pc');
 });
+
+test('a catalogue bound is shown as the bound, never as a value or n/a', async () => {
+  const { kindSpec, planetLine } = await import('../js/blink/scene3d-registry.js');
+  const o = { id: 'nea:x b', kind: 'exoplanet', name: 'x b', host: 'gdr3:1', parent: 'gdr3:1', evidence: 'illustrative',
+    position: { model: 'orbit', host_radec: [10, 10], phase_known: false, tier: 'illustrative', src: 't',
+      elements: { period_d: { v: 3, unit: 'd', src: 't', tier: 'measured' }, a_au: { v: 0.04, unit: 'au', src: 't', tier: 'catalogue' },
+        e: { v: 0, src: 'assumed', tier: 'illustrative' }, i_deg: null, omega_deg: null, t_peri_mjd: null, t_conj_mjd: null, node_deg: null } },
+    size: { radius: { v: '> 3.1', unit: 'Rearth', src: 'NEA pscomppars: X 2020', tier: 'measured' }, angular: null },
+    props: { mass: { v: '< 0.12', unit: 'Mjup', src: 'NEA pscomppars: X 2020', tier: 'measured' } }, provenance: {}, render: {} };
+  const rows = kindSpec('exoplanet').card(o, { evidence: false, fmtNum: (v) => String(v) }).rows;
+  assert.deepEqual(rows.find((r) => r[0] === 'Mass').slice(0, 2), ['Mass', '< 0.12 Mj']);
+  assert.deepEqual(rows.find((r) => r[0] === 'Radius').slice(0, 2), ['Radius', '> 3.1 R⊕']);
+  assert.equal(planetLine(o).line, '3 d · > 3.1 R⊕ · < 0.12 Mj');
+  assert.equal(kindSpec('exoplanet').frames.system(o), 'point');   // a bound is no size to draw a sphere with
+});

@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14), Phase 0 in progress.
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation.
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -785,3 +785,15 @@ Follow-ups outside Phase 1:
 4. **No visible Evidence-view change in Phase 0.** Planet bands, atmospheres and rings are tagged illustrative in the registry, so hiding them later is one line. This is noted as a follow-up.
 
 **Commit consequence of 2.** Slice A adds `/api/objects` next to the unchanged `/api/scene3d`; `scene3d.py` imports the moved solar helpers from `objects_live.py`. The `solar` removal (`scene3d.py`, `main.py`, `test_scene3d.py`, and the mock's `/api/scene3d`) lands in the same commit as slice C's frontend switch.
+
+## 15. Implementation notes (Phase 0)
+
+These were settled while building Phase 0. Where they differ from the sections above, they take precedence.
+
+- **Pick priority of markers.** In the Stars scene every small-body marker sits among the cone's Gaia stars, so "stars beat small bodies" would make them unpickable. Kind specs therefore take `pick.marker`, the priority while drawn as a galaxy-frame marker. Small bodies use 15, ahead of stars at 20. In the Solar system scene their priority stays 30, as before.
+- **The Sun's marker.** It is selected as kind `sun` and positioned where the marker is drawn (the Sun as seen from Earth). It shows the star-0 card, and its button is "Show in the Solar system". In the Solar system scene the Sun is star 0 and is picked as a star, as before.
+- **Earth** has no `position.geo` and is never `in_cone`. Its geocentric direction is undefined.
+- **Precision.** Heliocentric positions are served to 1e-9 AU (`objects_live.XYZ_DP`). At the old 1e-6 AU the Moon's direction from Earth was off by up to an arcminute, because the Moon is only 0.0026 AU away.
+- **Partial failure of a kind.** If one of two sources serving a kind fails, the kind stays `ok` and carries an `error` string naming the failed source. `count` counts the records kept after dedupe and `limit`.
+- **Frame levels** carry a `hosted` flag. `system` levels are entered by distance to a host star; unhosted outer levels by distance from the Sun.
+- **Not yet verified live:** the exact SkyBoT `Class` string for comets. The classifier also accepts comet designations in the name, so either form works.

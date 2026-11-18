@@ -1,21 +1,114 @@
 {
-  "id": "nea:51 Peg b", "kind": "exoplanet", "name": "51 Peg b", "designations": ["HD 217014 b", "Dimidium"],
-  "host": "hip:113357", "parent": "hip:113357",
-  "position": { "model": "orbit", "phase_known": false, "tier": "illustrative",
-    "src": "NASA Exoplanet Archive pscomppars (placeholder values)",
-    "elements": {
-      "a_au":     { "v": 0.0527, "unit": "au", "src": "placeholder", "tier": "catalogue" },
-      "e":        { "v": 0.0, "src": "placeholder", "tier": "catalogue" },
-      "period_d": { "v": 4.2308, "unit": "d", "src": "placeholder", "tier": "measured" },
-      "i_deg": null, "t_peri_mjd": null, "omega_deg": null, "node_deg": null } },
-  "size": null,
-  "props": {
-    "mass":        { "v": 0.46, "unit": "Mjup", "src": "placeholder (M sin i)", "tier": "measured" },
-    "disc_method": { "v": "Radial Velocity", "src": "placeholder", "tier": "catalogue" },
-    "disc_year":   { "v": 1995, "src": "placeholder", "tier": "catalogue" }
-  },
-  "provenance": { "source": "static:nea-exoplanets", "dataset": "nea-exoplanets", "catalogue": "NASA Exoplanet Archive",
-    "version": "pscomppars <pinned date>", "citation": "NASA Exoplanet Archive (Christiansen et al. 2025)", "url": "https://exoplanetarchive.ipac.caltech.edu/" },
+  "designations": [],
   "evidence": "illustrative",
-  "render": {}
+  "host": "gdr3:2635476908753563008",
+  "id": "nea:TRAPPIST-1 b",
+  "kind": "exoplanet",
+  "name": "TRAPPIST-1 b",
+  "parent": "gdr3:2635476908753563008",
+  "position": {
+    "elements": {
+      "a_au": {
+        "hi": 0.01164,
+        "lo": 0.01144,
+        "src": "NEA pscomppars: Agol et al. 2021",
+        "tier": "catalogue",
+        "unit": "au",
+        "v": 0.01154
+      },
+      "e": {
+        "hi": 0.00926,
+        "lo": 0.00318,
+        "src": "NEA pscomppars: Grimm et al. 2018",
+        "tier": "measured",
+        "v": 0.00622
+      },
+      "i_deg": {
+        "hi": 89.893,
+        "lo": 89.563,
+        "src": "NEA pscomppars: Agol et al. 2021",
+        "tier": "measured",
+        "unit": "deg",
+        "v": 89.728
+      },
+      "node_deg": null,
+      "omega_deg": {
+        "hi": 371.1,
+        "lo": 302.62,
+        "src": "NEA pscomppars: Grimm et al. 2018",
+        "tier": "measured",
+        "unit": "deg",
+        "v": 336.86
+      },
+      "period_d": {
+        "hi": 1.510832,
+        "lo": 1.51082,
+        "src": "NEA pscomppars: Agol et al. 2021",
+        "tier": "measured",
+        "unit": "d",
+        "v": 1.510826
+      },
+      "t_conj_mjd": {
+        "hi": 57322.014196,
+        "lo": 57322.01419,
+        "src": "NEA pscomppars: Ducrot et al. 2020",
+        "tier": "measured",
+        "v": 57322.014193
+      },
+      "t_peri_mjd": null
+    },
+    "host_radec": [
+      346.6263919,
+      -5.0434618
+    ],
+    "model": "orbit",
+    "phase_known": true,
+    "src": "NASA Exoplanet Archive pscomppars; orientation on the sky (node) unknown",
+    "tier": "illustrative"
+  },
+  "props": {
+    "disc_facility": {
+      "src": "NEA pscomppars",
+      "tier": "catalogue",
+      "v": "La Silla Observatory"
+    },
+    "disc_method": {
+      "src": "NEA pscomppars",
+      "tier": "catalogue",
+      "v": "Transit"
+    },
+    "disc_year": {
+      "src": "NEA pscomppars",
+      "tier": "catalogue",
+      "v": 2016
+    },
+    "mass": {
+      "hi": 0.00454019,
+      "lo": 0.00410599,
+      "src": "NEA pscomppars: Agol et al. 2021",
+      "tier": "measured",
+      "unit": "Mjup",
+      "v": 0.00432309
+    }
+  },
+  "provenance": {
+    "catalogue": "NASA Exoplanet Archive pscomppars",
+    "dataset": "nea-exoplanets",
+    "source": "static:nea-exoplanets",
+    "version": "snapshot 2026-11-18"
+  },
+  "render": {
+    "mag": 17.02
+  },
+  "size": {
+    "angular": null,
+    "radius": {
+      "hi": 1.13,
+      "lo": 1.104,
+      "src": "NEA pscomppars: Agol et al. 2021",
+      "tier": "measured",
+      "unit": "Rearth",
+      "v": 1.116
+    }
+  }
 }

@@ -1,0 +1,53 @@
+{
+  "dataset": "hr23-clusters",
+  "files": [
+    {
+      "citation": "Hunt & Reffert 2024, A&A 686, A42 (2024A&A...686A..42H), doi:10.26093/cds/vizier.36860042; Hunt & Reffert 2023, A&A 673, A114 (2023A&A...673A.114H) for the cluster census and the quality cut",
+      "columns": [
+        "Name",
+        "ID",
+        "AllNames",
+        "Type",
+        "CST",
+        "N",
+        "RA_ICRS",
+        "DE_ICRS",
+        "r50",
+        "r50pc",
+        "Plx",
+        "e_Plx",
+        "dist16",
+        "dist50",
+        "dist84",
+        "globalPlx",
+        "CMDCl50",
+        "logAge16",
+        "logAge50",
+        "logAge84",
+        "AV16",
+        "AV50",
+        "AV84",
+        "rJpc",
+        "probJ",
+        "MassJ",
+        "e_MassJ",
+        "MassTot",
+        "e_MassTot",
+        "Note"
+      ],
+      "file": "clusters-hr24-2026-11-18.csv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "query_url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J/A%2BA/686/A42/clusters&-out.max=unlimited&-out.all",
+      "retrieved": "2026-11-18",
+      "role": "clusters",
+      "rows": 7167,
+      "sha256": "cd3f9d400e6f58b31ffde860271eca9140bfb84058f8a3e67d73781e10c1a0eb",
+      "source_bytes": 8439187,
+      "source_sha256": "0469c5baec7ccf0431aeb129fb0b06507eee55d499453717a759c8e0ab55d579",
+      "table": "J/A+A/686/A42/clusters",
+      "vizier_id": "J/A+A/686/A42"
+    }
+  ],
+  "note": "Pinned input of backend/scripts/build_objects_hr23.py. Regenerate with --refresh. `sha256` is of the uncompressed committed bytes (the columns used, rows sorted by ID); `source_sha256` is of the full original download with its # comment lines stripped."
+}

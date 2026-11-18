@@ -259,9 +259,10 @@ def test_write_rejects_bad_records(tmp_path, mutate, msg):
 
 
 def test_write_rejects_non_fixed_positions_and_duplicates(tmp_path):
-    orbit = json.loads((FIXTURES / "examples" / "exoplanet.json").read_text())
-    with pytest.raises(ValueError):
-        st.write_dataset([orbit], tmp_path / "x", dataset="t", kinds=["exoplanet"],
+    orbit = _planet("a", 10.0, 5.0)
+    orbit["kind"] = "cluster"   # an orbit position is only for hosted kinds
+    with pytest.raises(ValueError, match="fixed"):
+        st.write_dataset([orbit], tmp_path / "x", dataset="t", kinds=["cluster"],
                          provenance={}, build={})
     with pytest.raises(ValueError, match="duplicate"):
         _write(tmp_path / "y", [_cluster("a", 1.0, 1.0), _cluster("a", 2.0, 2.0)])
@@ -320,3 +321,213 @@ def test_a_broken_dataset_registers_a_source_that_raises(tmp_path):
     assert srcs["static:bad"].kinds == ("cluster",) and srcs["static:worse"].kinds == ()
     with pytest.raises(st.DatasetError):
         asyncio.run(srcs["static:bad"].fetch(objects.Query(0, 0, 1, 60000.0, ("cluster",), 10)))
+
+
+# --- hosted records (exoplanets): tiled by their host's direction -----------------------------
+
+def _planet(i: str, ra: float, dec: float, host: str = "gdr3:1") -> dict:
+    r = json.loads((FIXTURES / "examples" / "exoplanet.json").read_text())
+    r.update(id=f"nea:{i}", name=i, host=host, parent=host)
+    r["position"]["host_radec"] = [ra, dec]
+    return r
+
+
+def _write_hosted(tmp: Path, recs: list[dict], **kw) -> Path:
+    st.write_dataset(recs, tmp, dataset="h", kinds=["exoplanet", "star"], provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, band_deg=10, **kw)
+    return tmp
+
+
+def test_a_hosted_record_is_tiled_by_host_radec(tmp_path):
+    d = _write_hosted(tmp_path / "h", [_planet("x b", 346.63, -5.04), _planet("y b", 0.5, 89.9)])
+    m = json.loads((d / "manifest.json").read_text())
+    assert sorted(m["tiles"]) == sorted([st.tile_of(346.63, -5.04), st.tile_of(0.5, 89.9)])
+    assert m["max_extent_deg"] == 0.0 and m["count"] == 2
+    assert st.verify_dataset(d) == []
+
+
+def test_a_cone_at_the_host_finds_it_and_a_cone_one_degree_away_does_not(tmp_path):
+    ds = st.load_dataset(_write_hosted(tmp_path / "h", [_planet("x b", 346.63, -5.04),
+                                                      _planet("z b", 100.0, 30.0)]))
+    assert [r["id"] for r in st.cone_query(ds, 346.63, -5.04, 0.1)] == ["nea:x b"]
+    assert [r["id"] for r in st.cone_query(ds, 346.63, -4.04, 0.5)] == []     # 1 deg away
+    assert [r["id"] for r in st.cone_query(ds, 346.63, -4.04, 1.5)] == ["nea:x b"]
+    assert [r["id"] for r in st.cone_query(ds, 0.0, -5.0, 14.0)] == ["nea:x b"]  # across the RA wrap
+
+
+def test_hosted_and_fixed_records_mix_in_one_dataset(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    ds = st.load_dataset(_write_hosted(tmp_path / "h", [star, _planet("x b", star["position"]["ra"],
+                                                                      star["position"]["dec"])]))
+    got = st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 0.1)
+    assert sorted(r["id"] for r in got) == sorted([star["id"], "nea:x b"])
+
+
+def test_write_refuses_bad_hosted_records(tmp_path):
+    no_radec = _planet("a b", 10.0, 5.0)
+    del no_radec["position"]["host_radec"]
+    no_host = _planet("c b", 10.0, 5.0)
+    no_host["host"] = None
+    fixed_planet = _planet("d b", 10.0, 5.0)
+    fixed_planet["position"] = {"model": "fixed", "ra": 10.0, "dec": 5.0, "method": "assumed",
+                                "dist": objects.quantity(10, "x", "illustrative", "pc")}
+    for bad, msg in ((no_radec, "host_radec"), (no_host, "host"), (fixed_planet, "orbit")):
+        with pytest.raises(ValueError, match=msg):
+            _write_hosted(tmp_path / "x", [bad])
+        assert not (tmp_path / "x" / "manifest.json").exists()
+    # an orbit position of a kind that is not hosted, and a hosted kind with host null in a fixed position
+    other = _planet("e b", 10.0, 5.0)
+    other["kind"] = "cluster"
+    with pytest.raises(ValueError, match="fixed"):
+        _write_hosted(tmp_path / "x", [other])
+
+
+def test_verify_catches_a_hosted_record_in_the_wrong_tile(tmp_path):
+    d = _write_hosted(tmp_path / "h", [_planet("x b", 346.63, -5.04)])
+    m = json.loads((d / "manifest.json").read_text())
+    (tile,) = m["tiles"]
+    other = "9-1"
+    (d / "tiles" / f"{other}.json").write_bytes((d / "tiles" / f"{tile}.json").read_bytes())
+    (d / "tiles" / f"{tile}.json").unlink()
+    m["tiles"] = {other: m["tiles"][tile]}
+    (d / "manifest.json").write_text(json.dumps(m))
+    assert any("wrong tile" in p for p in st.verify_dataset(d))
+
+
+# --- the string table (section 16.18 D2) ------------------------------------------------------
+
+def _srcs(rec: dict) -> list:
+    return [h["src"] for h in st._src_holders(rec) if "src" in h]
+
+
+def _tile_records(d: Path) -> list[dict]:
+    return [r for p in sorted((d / "tiles").glob("*.json")) for r in json.loads(p.read_text())["objects"]]
+
+
+def test_src_table_stores_sorted_distinct_strings_and_integer_indices(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    recs = [star, _planet("x b", 346.63, -5.04), _planet("y b", 100.0, 30.0)]
+    d = _write_hosted(tmp_path / "h", recs, src_table=True)
+    m = json.loads((d / "manifest.json").read_text())
+    table = m["src_table"]
+    assert table == sorted(set(table)) and "NEA pscomppars: Agol et al. 2021" in table
+    assert set(table) == {s for r in recs for s in _srcs(r)}
+    raw = _tile_records(d)
+    for r in raw:
+        assert all(isinstance(s, int) for s in _srcs(r))
+        assert all(isinstance(s, str) for s in _srcs(st._expand_src(json.loads(json.dumps(r)), table)))
+    assert "Agol" not in "".join(p.read_text() for p in (d / "tiles").glob("*.json"))
+    assert st.verify_dataset(d) == []
+
+
+def test_src_table_round_trip_serves_string_src_and_the_original_records(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    recs = [star, _planet("x b", star["position"]["ra"], star["position"]["dec"])]
+    ds = st.load_dataset(_write_hosted(tmp_path / "h", recs, src_table=True))
+    got = {r["id"]: r for r in st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 0.5)}
+    assert set(got) == {r["id"] for r in recs}
+    for r in recs:
+        assert got[r["id"]] == r
+        assert all(isinstance(s, str) for s in _srcs(got[r["id"]]))
+    again = st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 0.5)   # from the cache
+    assert all(isinstance(s, str) for r in again for s in _srcs(r))
+    assert objects.validate_record(got["nea:x b"]) == []
+
+
+def test_src_table_covers_size_and_angular_quantities(tmp_path):
+    c = _cluster("a", 10.0, 5.0, 2.0)
+    d = tmp_path / "t"
+    st.write_dataset([c], d, dataset="t", kinds=["cluster"], provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, src_table=True)
+    assert json.loads((d / "manifest.json").read_text())["src_table"] == ["synthetic"]
+    (rec,) = st.cone_query(st.load_dataset(d), 10.0, 5.0, 1.0)
+    assert rec == c
+
+
+def test_an_out_of_range_src_index_is_a_dataset_error(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    d = _write_hosted(tmp_path / "h", [star], src_table=True)
+    (tp,) = (d / "tiles").glob("*.json")
+    doc = json.loads(tp.read_text())
+    doc["objects"][0]["position"]["dist"]["src"] = 9999
+    tp.write_text(json.dumps(doc))
+    ds = st.load_dataset(d)
+    with pytest.raises(st.DatasetError, match="string table"):
+        st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 1.0)
+    assert any("string table" in p for p in st.verify_dataset(d))   # (the sha256 also differs)
+
+
+def test_an_integer_src_without_a_table_is_refused(tmp_path):
+    d = _write(tmp_path / "t", [_cluster("a", 10.0, 5.0)])
+    tp = d / "tiles" / "9-1.json"
+    doc = json.loads(tp.read_text())
+    doc["objects"][0]["position"]["dist"]["src"] = 0
+    tp.write_text(json.dumps(doc))
+    with pytest.raises(st.DatasetError):
+        st.cone_query(st.load_dataset(d), 10.0, 5.0, 1.0)
+
+
+def test_a_bad_src_table_in_the_manifest_is_refused(tmp_path):
+    d = _write(tmp_path / "t", [_cluster("a", 10.0, 5.0)])
+    m = json.loads((d / "manifest.json").read_text())
+    m["src_table"] = "nope"
+    (d / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(st.DatasetError, match="src_table"):
+        st.load_dataset(d)
+
+
+def test_src_table_output_is_byte_deterministic_and_default_has_no_table(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    recs = [star, _planet("x b", 346.63, -5.04), _planet("y b", 100.0, 30.0)]
+    a = _write_hosted(tmp_path / "a", recs, src_table=True)
+    b = _write_hosted(tmp_path / "b", list(reversed(recs)), src_table=True)
+    files = lambda d: {str(p.relative_to(d)): p.read_bytes() for p in sorted(d.rglob("*")) if p.is_file()}  # noqa: E731
+    assert files(a) == files(b)
+    plain = _write_hosted(tmp_path / "c", recs)
+    assert "src_table" not in json.loads((plain / "manifest.json").read_text())
+    assert "Agol" in "".join(p.read_text() for p in (plain / "tiles").glob("*.json"))
+
+
+# --- record defaults ---------------------------------------------------------------------------
+
+def test_record_defaults_are_stored_once_and_restored_on_read(tmp_path):
+    star = json.loads((FIXTURES / "examples" / "star_host.json").read_text())
+    recs = [star, _planet("x b", star["position"]["ra"], star["position"]["dec"])]
+    prov = {"source": "static:t", "catalogue": "t"}
+    for r in recs:
+        r["provenance"] = dict(prov)
+    d = _write_hosted(tmp_path / "h", recs, src_table=True, record_defaults={"provenance": prov})
+    m = json.loads((d / "manifest.json").read_text())
+    assert m["record_defaults"] == {"provenance": prov}
+    assert all("provenance" not in r for r in _tile_records(d))
+    ds = st.load_dataset(d)
+    got = {r["id"]: r for r in st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 0.5)}
+    assert got == {r["id"]: r for r in recs}
+    got["nea:x b"]["provenance"]["catalogue"] = "mutated"   # a served record is its own copy
+    again = {r["id"]: r for r in st.cone_query(ds, star["position"]["ra"], star["position"]["dec"], 0.5)}
+    assert again["gdr3:2635476908753563008"]["provenance"] == prov
+    assert st.verify_dataset(d) == []
+
+
+def test_only_keys_equal_to_the_default_are_left_out(tmp_path):
+    a, c = _cluster("a", 10.0, 5.0), _cluster("c", 20.0, 5.0)
+    c["provenance"] = {"source": "static:t", "catalogue": "other"}
+    d = tmp_path / "t"
+    st.write_dataset([a, c], d, dataset="t", kinds=["cluster"], provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, record_defaults={"provenance": a["provenance"]})
+    stored = {r["id"]: r for r in _tile_records(d)}
+    assert "provenance" not in stored["test:a"] and stored["test:c"]["provenance"]["catalogue"] == "other"
+    ds = st.load_dataset(d)
+    assert {r["id"]: r["provenance"] for r in st.cone_query(ds, 15.0, 5.0, 10.0)} == \
+        {"test:a": a["provenance"], "test:c": c["provenance"]}
+
+
+def test_no_record_defaults_is_a_no_op_and_a_bad_value_is_refused(tmp_path):
+    d = _write(tmp_path / "t", [_cluster("a", 10.0, 5.0)])
+    assert "record_defaults" not in json.loads((d / "manifest.json").read_text())
+    assert all("provenance" in r for r in _tile_records(d))
+    m = json.loads((d / "manifest.json").read_text())
+    m["record_defaults"] = [1]
+    (d / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(st.DatasetError, match="record_defaults"):
+        st.load_dataset(d)

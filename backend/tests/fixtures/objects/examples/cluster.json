@@ -1,13 +1,128 @@
 {
-  "id": "hr23:Melotte_22", "kind": "cluster", "name": "Pleiades", "designations": ["Melotte 22", "M45"],
-  "host": null, "parent": null,
-  "position": { "model": "fixed", "ra": 56.6, "dec": 24.1, "epoch": 2016.0, "method": "cluster-parallax",
-    "dist": { "v": 135.0, "lo": 134.0, "hi": 136.0, "unit": "pc", "src": "placeholder", "tier": "measured" } },
-  "size": { "radius": { "v": 3.0, "unit": "pc", "src": "placeholder (r50)", "tier": "catalogue" },
-            "angular": { "major": { "v": 1.3, "unit": "deg", "src": "placeholder", "tier": "catalogue" }, "minor": null, "pa": null } },
-  "props": { "n_members": { "v": 900, "src": "placeholder", "tier": "catalogue" }, "age": { "v": 0.1, "unit": "Gyr", "src": "placeholder", "tier": "inferred" } },
-  "provenance": { "source": "static:hr23-clusters", "dataset": "hr23-clusters", "catalogue": "Hunt & Reffert 2023",
-    "version": "J/A+A/673/A114", "citation": "Hunt & Reffert 2023, A&A 673, A114", "url": "https://cdsarc.cds.unistra.fr/" },
-  "evidence": "measured",
-  "render": { "mag": 1.6 }
+ "designations": [
+  "Melotte 22",
+  "Collinder 42",
+  "Escorial 1",
+  "M45",
+  "MWSC 305",
+  "OCL 421",
+  "Pleiades",
+  "Theia 369"
+ ],
+ "evidence": "measured",
+ "host": null,
+ "id": "hr23:Melotte_22",
+ "kind": "cluster",
+ "name": "Pleiades",
+ "parent": null,
+ "position": {
+  "dec": 24.10845447,
+  "dist": {
+   "hi": 134.8597919,
+   "lo": 134.8228993,
+   "src": "Hunt & Reffert 2024 (maximum-likelihood distance from member parallaxes)",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 134.8413431
+  },
+  "epoch": 2016.0,
+  "method": "cluster-parallax",
+  "model": "fixed",
+  "ra": 56.67978318
+ },
+ "props": {
+  "age": {
+   "hi": 0.196578,
+   "lo": 0.0555003,
+   "src": "CMD fit (neural network), Hunt & Reffert 2023/2024",
+   "tier": "inferred",
+   "unit": "Gyr",
+   "v": 0.121611
+  },
+  "class": {
+   "src": "Hunt & Reffert 2024 (bound open cluster: Jacobi radius probability >= 0.5 and M_J >= 40 Msun)",
+   "tier": "catalogue",
+   "v": "bound cluster"
+  },
+  "common_name": {
+   "src": "curated common name",
+   "tier": "catalogue",
+   "v": "Pleiades"
+  },
+  "extinction": {
+   "hi": 0.16589311,
+   "lo": 3.54e-06,
+   "src": "CMD fit (neural network), Hunt & Reffert 2023/2024 (A_V)",
+   "tier": "inferred",
+   "unit": "mag",
+   "v": 0.1020945
+  },
+  "jacobi_radius": {
+   "src": "best-fitting Jacobi radius, Hunt & Reffert 2024",
+   "tier": "inferred",
+   "unit": "pc",
+   "v": 13.692135
+  },
+  "mass": {
+   "hi": 1076.905,
+   "lo": 892.18938,
+   "src": "total observed mass, Hunt & Reffert 2024",
+   "tier": "inferred",
+   "unit": "Msun",
+   "v": 984.54716
+  },
+  "mass_jacobi": {
+   "hi": 1033.275,
+   "lo": 859.74041,
+   "src": "mass within the Jacobi radius, Hunt & Reffert 2024",
+   "tier": "inferred",
+   "unit": "Msun",
+   "v": 946.50772
+  },
+  "n_members": {
+   "src": "Hunt & Reffert 2024 (number of member stars)",
+   "tier": "catalogue",
+   "v": 1721
+  },
+  "parallax_snr": {
+   "src": "mean parallax / its standard error, Hunt & Reffert 2024",
+   "tier": "catalogue",
+   "v": 1350.77
+  },
+  "quality": {
+   "src": "Hunt & Reffert 2023 quality cut: CST >= 5 and CMD class >= 0.5",
+   "tier": "catalogue",
+   "v": "reliable"
+  },
+  "type": {
+   "src": "Hunt & Reffert 2024 (object type)",
+   "tier": "catalogue",
+   "v": "open cluster"
+  }
+ },
+ "provenance": {
+  "catalogue": "Hunt & Reffert 2024 (open and globular clusters in Gaia DR3)",
+  "dataset": "hr23-clusters",
+  "source": "static:hr23-clusters",
+  "version": "J/A+A/686/A42, retrieved 2026-11-18"
+ },
+ "render": {},
+ "size": {
+  "angular": {
+   "major": {
+    "src": "twice the radius containing 50% of members (Hunt & Reffert 2024)",
+    "tier": "catalogue",
+    "unit": "deg",
+    "v": 2.2911061
+   },
+   "minor": null,
+   "pa": null
+  },
+  "radius": {
+   "src": "Hunt & Reffert 2024 (radius containing 50% of members)",
+   "tier": "catalogue",
+   "unit": "pc",
+   "v": 2.696333
+  }
+ }
 }

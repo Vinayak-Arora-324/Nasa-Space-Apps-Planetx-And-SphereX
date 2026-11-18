@@ -159,7 +159,8 @@ Moving-object endpoints. They take the same parameters: `ra`, `dec`, `fov` (defa
 3D fly-through endpoints (`frontend/scene3d.html`):
 
 - `GET /api/scene3d?ra&dec&radius=3&limit=20000` returns the Gaia star cone only: `{ra, dec, radius, stars}`. Positions are in parsecs from the Sun with Bailer-Jones distances. If every star source fails, the response is 502.
-- `GET /api/objects?ra&dec&radius=3&mjd&kinds&limit=2000` returns everything else in the 3D view as schema-versioned records (`space-maps.objects/1`). Today that is the Sun, planets and Moon from the built-in ephemeris, and dwarf planets, asteroids and comets from SkyBoT.
+- `GET /api/objects?ra&dec&radius=3&mjd&kinds&limit=2000` returns everything else in the 3D view as schema-versioned records (`space-maps.objects/1`). Today that is the Sun, planets and Moon from the built-in ephemeris, dwarf planets, asteroids and comets from SkyBoT, and the prebuilt datasets below: exoplanets with their host stars (`exoplanet`, `star`) and star clusters (`cluster`).
+  - Each kind is capped at `limit` records, brightest first. `kinds[k].truncated` says when the cap cut records, and the 3D page then says so ("2,000 brightest small bodies (more in this cone)").
   - Each source runs under its own deadline (`SPHEREX_OBJECTS_SOURCE_TIMEOUT`, 25 s). Failures are reported per kind in `kinds`, and the request itself does not fail.
   - Prebuilt static datasets are read from `SPHEREX_OBJECTS_DIR` (default `frontend/data/objects/`).
   - The schema, evidence rules, tile format and frontend registry are specified in `docs/object-framework.md`.
@@ -188,7 +189,8 @@ The 3D fly-through (`frontend/scene3d.html`, controller `scene3d-main.js`) is bu
 - `scene3d.js`: the WebGL2 renderer.
 - `scene3d-frames.js`: frame levels (AU, pc, and later Mpc).
 - `scene3d-registry.js`: object kinds and the persisted layer toggles.
-- `scene3d-objects.js`: the object store, Earth-view placement, picking, labels, group markers and autopilot plans.
+- `scene3d-objects.js`: the object store, Earth-view placement, host-star resolution, picking, labels, group markers, cluster billboards and autopilot plans.
+- `scene3d-orbits.js`: Keplerian orbits of exoplanets, evaluated in the browser on the host's sky plane, with unknown orientation filled in deterministically and flagged as assumed.
 - `scene3d-physics.js`, `scene3d-nav.js`, `scene3d-math.js`, `scene3d-card.js`, `scene3d-gl.js` and `scene3d-shaders.js`.
 
 Adding a kind of object is one data source on the backend plus one `registerKind` call. See `docs/object-framework.md`.
@@ -226,7 +228,65 @@ uv run python backend/scripts/build_rewind_stars.py
 uv run python backend/scripts/build_rewind_sky.py     # constellations, boundaries and deep-sky labels
 ```
 
-Static object datasets for the 3D view follow the same build-script pattern and the tile format in `docs/object-framework.md` §6. `backend/scripts/build_objects_fixture.py` is the template. It writes the synthetic test dataset, and its `--check` option verifies that a rebuild is byte-identical.
+Static object datasets for the 3D view follow the same build-script pattern and the tile format in `docs/object-framework.md` §6 and §16. `backend/scripts/build_objects_fixture.py` is the template. It writes the synthetic test dataset, and its `--check` option verifies that a rebuild is byte-identical.
+
+### 3D object datasets
+
+Each dataset is built from a **source snapshot committed under `backend/data/sources/<dataset>/`**. That directory is
+outside `frontend/`, so it is never served. Its `SOURCE.json` records, for each file:
+- the download date;
+- the exact query URL;
+- the sha256 of the uncompressed bytes and the row count;
+- the citation and licence or acknowledgement text.
+
+The scripts read the committed snapshot by default and download only with `--refresh`, so a rebuild is offline and
+byte-identical. `--check` rebuilds into a temporary directory, compares byte for byte with the committed dataset, and
+verifies every tile (sha256, counts, validity, tile placement). It exits 1 on any difference. Refresh a snapshot in a
+commit of its own, so the data change can be reviewed.
+
+```sh
+uv run python backend/scripts/build_objects_nea.py              # exoplanets + host stars from the committed snapshot
+uv run python backend/scripts/build_objects_nea.py --check      # byte-identical rebuild check
+uv run python backend/scripts/build_objects_nea.py --refresh    # new pscomppars snapshot + Gaia crossmatches (network)
+uv run python backend/scripts/build_objects_hr23.py [--check | --refresh]   # star clusters (Hunt & Reffert)
+```
+
+**`nea-exoplanets`** (`frontend/data/objects/nea-exoplanets/`, 11.6 MB in 404 tiles)
+- Source: the NASA Exoplanet Archive `pscomppars` table through TAP, snapshot of 2026-11-18. The archive has no dated
+  releases, so the committed snapshot is the pin.
+- Contents: 6,458 planets (12 excluded for having neither a period nor a semi-major axis) and 4,852 host-star records.
+- Hosts get Gaia DR3 ids where possible:
+
+  | Match | Hosts |
+  |---|---|
+  | the archive's `gaia_dr3_id` | 92.4 % |
+  | `gaia_dr2_id` through `gaiadr3.dr2_neighbourhood` (closest within 100 mas, \|ΔG\| ≤ 1) | 26 |
+  | Hipparcos | 12 |
+  | a positional Gaia DR3 match (not for microlensing hosts) | 25 |
+  | `neahost:<name>` (mostly microlensing) | the remaining 308 |
+
+- The Gaia side inputs come from ESA's Gaia archive, falling back to ARI Heidelberg, and are committed with the snapshot.
+- Values are tiered:
+  - archive-calculated masses and radii (Chen & Kipping 2017) are `inferred`;
+  - M sin i stays `msini`;
+  - limit-flagged values are never shown as measurements.
+- Orbits are evaluated in the browser. The archive has no node, so every drawn planet position is illustrative and is
+  hidden in the Evidence view.
+- Cite NASA Exoplanet Archive (Christiansen et al. 2025) with the archive's acknowledgement (in `SOURCE.json`); Gaia
+  Collaboration, Vallenari et al. 2023; Torra et al. 2021 for the DR2–DR3 neighbourhood.
+
+**`hr23-clusters`** (`frontend/data/objects/hr23-clusters/`, 9.3 MB in 300 tiles)
+- Source: Hunt & Reffert 2024, VizieR `J/A+A/686/A42/clusters` (7,167 clusters). It is the same census as Hunt &
+  Reffert 2023 (`J/A+A/673/A114`), with identical astrometry and distances, plus masses and the bound-cluster /
+  moving-group class. Pinned by VizieR id and sha256.
+- The download tries CDS first, then the CfA mirror, and rejects anything that isn't 7,167 rows with the pinned hash.
+- Every cluster is included:
+  - 4,100 pass the Hunt & Reffert 2023 quality cut and are shown by default;
+  - the rest are candidates, behind the Layers panel's "Include candidates".
+- 97 clusters whose parallax S/N is under 5 have `derived` distances and hollow markers.
+- Cite Hunt & Reffert 2024, A&A 686, A42, and 2023, A&A 673, A114. VizieR licence:
+  https://cds.unistra.fr/vizier-org/licences_vizier.html.
+- The members table (1.29 M rows) is not used; the member-star highlight is a follow-up.
 
 `build_rewind_sky.py` reads the same XHIP table (`--tsv` takes a local copy) and the pinned d3-celestial files. It prints a note for the 4 boundary segments near the north pole (Cepheus and Ursa Minor) that run along neither a B1875 meridian nor a parallel; those are kept as given.
 

@@ -21,13 +21,13 @@ const ctx = (o = {}) => ({ fromYou: '1.5 pc · 4.9 ly', evidence: false, fmtNum:
 
 test('the Phase 0 kinds and layers are registered and every kind points at a real layer', () => {
   for (const k of ['sun', 'planet', 'moon', 'dwarf_planet', 'asteroid', 'comet', 'star']) assert.ok(R.kindSpec(k), k);
-  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets']);
-  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar']);
+  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets', 'exoplanets', 'clusters', 'clusterCandidates']);
+  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar', 'beyond', 'beyond', 'beyond']);
   const ids = new Set(R.layers().map((l) => l.id));
   for (const s of R.kinds()) assert.ok(s.layer === null || ids.has(s.layer), `${s.kind} layer`);
   assert.equal(R.kindSpec('star').builtin, true); assert.equal(R.kindSpec('star').layer, null); assert.equal(R.kindSpec('star').pick.priority, 20);
   assert.equal(R.layerOf('comet'), 'comets'); assert.equal(R.layerOf('nope'), null); assert.equal(R.kindSpec('nope'), null);
-  assert.deepEqual(R.defaultLayers(), Object.fromEntries([...ids].map((i) => [i, true])));
+  assert.deepEqual(R.defaultLayers(), Object.fromEntries([...ids].map((i) => [i, i !== 'clusterCandidates'])));   // candidates are off by default (section 16.18 D4)
 });
 
 test('kind specs: frames, scope, priorities, labels, collide', () => {
@@ -161,4 +161,196 @@ test('registerKind adds a kind with defaults, and kindsPhrase-style nouns', () =
   assert.equal(s.go, 'host-frame'); assert.equal(s.pick.priority, 30); assert.equal(s.galaxyScope, 'sky'); assert.equal(s.collide, false);
   assert.equal(s.markerStyle({ evidence: 'derived' }), 'hollow');
   assert.throws(() => R.registerKind({}));
+});
+
+// ------------------------------------------------------------------ Phase 1: exoplanets and star clusters
+import { orbitPlacement } from '../js/blink/scene3d-orbits.js';
+const NEA = 'NEA pscomppars: ';
+const exoRec = (o = {}, el = {}) => ({
+  id: 'nea:TRAPPIST-1 b', kind: 'exoplanet', name: 'TRAPPIST-1 b', host: 'gdr3:1', parent: 'gdr3:1', evidence: 'illustrative', render: { mag: 17 },
+  position: { model: 'orbit', host_radec: [346.6263919, -5.0434618], phase_known: true, tier: 'illustrative', elements: {
+    period_d: { ...q(1.510826, 'd', 'measured', NEA + 'Agol et al. 2021'), lo: 1.51082, hi: 1.510832 }, a_au: q(0.01154, 'au', 'catalogue', NEA + 'Agol et al. 2021'), e: q(0.00622, undefined, 'measured', NEA + 'Grimm et al. 2018'),
+    i_deg: q(89.728, 'deg', 'measured', NEA + 'Agol'), omega_deg: q(336.86, 'deg'), t_conj_mjd: q(57322.014193, undefined), t_peri_mjd: null, node_deg: null, ...el } },
+  size: { radius: q(1.116, 'Rearth', 'measured', NEA + 'Agol et al. 2021') },
+  props: { mass: q(0.00432309, 'Mjup', 'measured', NEA + 'Agol et al. 2021'), disc_method: q('Transit', undefined, 'catalogue'), disc_year: q(2016, undefined, 'catalogue'), disc_facility: q('La Silla Observatory', undefined, 'catalogue') },
+  provenance: { catalogue: 'NASA Exoplanet Archive pscomppars' }, ...o,
+});
+const placeOf = (o) => { const orb = orbitPlacement(o, 61000); return { sysAu: orb.xyzAu, galPc: null, dir: null, orbit: orb }; };
+const rowOf = (card, label) => card.rows.find((r) => r[0] === label);
+const cl = (o = {}, pr = {}) => ({
+  id: 'hr23:Melotte_22', kind: 'cluster', name: 'Pleiades', host: null, evidence: 'measured', render: {}, in_cone: true,
+  position: { model: 'fixed', ra: 56.75, dec: 24.12, method: 'cluster-parallax', dist: q(135.2, 'pc', 'measured', 'HR23', ) },
+  size: { radius: q(3.1, 'pc', 'catalogue', 'HR23'), angular: { major: 6 } },
+  props: { n_members: q(1245, undefined, 'catalogue', 'HR23'), age: q(0.05, 'Gyr', 'inferred', 'CMD fit'), extinction: q(0.2, 'mag', 'inferred', 'CMD fit'), type: q('open', undefined, 'catalogue'),
+    quality: q('reliable', undefined, 'catalogue', 'CST > 5'), ...pr }, ...o,
+});
+
+test('Phase 1 layers: exoplanets, clusters and the clusterCandidates sub-switch in group beyond, persisted like the rest', () => {
+  const by = Object.fromEntries(R.layers().map((l) => [l.id, l]));
+  assert.deepEqual([by.exoplanets, by.clusters], [{ id: 'exoplanets', label: 'Exoplanets', group: 'beyond', on: true, parent: null }, { id: 'clusters', label: 'Star clusters', group: 'beyond', on: true, parent: null }]);
+  assert.deepEqual(by.clusterCandidates, { id: 'clusterCandidates', label: 'Include candidates', group: 'beyond', on: false, parent: 'clusters' });
+  assert.equal(by.planets.parent, null);
+  assert.equal(R.layerOf('exoplanet'), 'exoplanets'); assert.equal(R.layerOf('cluster'), 'clusters');
+  const st = stub(); const m = R.loadLayers(st); assert.equal(m.clusterCandidates, false); assert.equal(m.exoplanets, true);
+  R.saveLayers({ ...m, clusterCandidates: true, exoplanets: false }, st);
+  assert.deepEqual([R.loadLayers(st).clusterCandidates, R.loadLayers(st).exoplanets, R.loadLayers(st).clusters], [true, false, true]);
+  assert.equal(R.loadLayers(stub('{"clusterCandidates":"yes"}')).clusterCandidates, false);
+});
+
+test('exoplanet and cluster specs; rendererOf resolves a per-record renderer', () => {
+  const E = R.kindSpec('exoplanet'), C = R.kindSpec('cluster');
+  assert.equal(E.hosted, true); assert.equal(R.kindSpec('planet').hosted, false); assert.equal(C.hosted, false);
+  assert.deepEqual(E.noun, ['exoplanet', 'exoplanets']); assert.deepEqual(C.noun, ['star cluster', 'star clusters']);
+  assert.equal(R.rendererOf(E, 'system', exoRec()), 'sphere');
+  assert.equal(R.rendererOf(E, 'system', exoRec({ size: null })), 'point');
+  assert.equal(R.rendererOf(E, 'system', exoRec({ size: { radius: null } })), 'point');
+  assert.equal(R.rendererOf(E, 'galaxy', exoRec()), 'marker');
+  assert.equal(R.rendererOf(C, 'galaxy', cl()), 'billboard'); assert.equal(R.rendererOf(C, 'system', cl()), null);
+  assert.equal(R.rendererOf(R.kindSpec('planet'), 'system', {}), 'sphere'); assert.equal(R.rendererOf(R.kindSpec('sun'), 'system', {}), null); assert.equal(R.rendererOf(null, 'system', {}), null);
+  assert.equal(E.galaxyScope, 'cone'); assert.deepEqual(E.pick, { priority: 10, marker: 15 }); assert.equal(E.collide, true); assert.equal(E.pointSize(), 4); assert.equal(E.markerPx(), 4);
+  assert.equal(E.label.max, 12); assert.equal(E.label.hideOverDiscPx, 30);
+  assert.deepEqual(C.pick, { priority: 25, marker: 16 }); assert.equal(C.go, 'fly-galaxy'); assert.equal(C.galaxyScope, 'cone');
+  assert.ok(Math.abs(C.arrivePc(cl()) - 6.2) < 1e-9); assert.equal(R.kindSpec('planet').arrivePc({}), 0);
+  assert.ok(C.label.key(cl({}, { n_members: q(5000) })) < C.label.key(cl()), 'more members sort first');
+  assert.ok(Math.abs(E.arriveAu(exoRec()) - 1.116 * 6371 / M.KM_PER_AU) < 1e-12);
+  assert.equal(R.kindSpec('exoplanet').sphere(exoRec()).features.band, 0); assert.equal(R.kindSpec('exoplanet').sphere(exoRec()).pole, null);
+  const rgb = (r) => R.kindSpec('exoplanet').color(exoRec({ size: { radius: q(r, 'Rearth') } })).join();
+  assert.equal(new Set([0.9, 1.5, 3, 5, 12].map(rgb)).size, 5, 'a colour per size class');
+});
+
+test('layer map reaches visible(): cluster candidates are hidden unless clusterCandidates is true; evidence does not hide clusters', () => {
+  const C = R.kindSpec('cluster'), cand = cl({}, { quality: q('candidate', undefined, 'catalogue') });
+  assert.equal(C.visible(cl(), { evidence: true, layers: {} }), true); assert.equal(C.visible(cl({ evidence: 'derived' }), { evidence: true, layers: {} }), true);
+  assert.equal(C.visible(cand, { evidence: false, layers: {} }), false); assert.equal(C.visible(cand, { layers: { clusterCandidates: false } }), false);
+  assert.equal(C.visible(cand, { evidence: true, layers: { clusterCandidates: true } }), true); assert.equal(C.visible(cand), false);
+  assert.equal(R.kindSpec('exoplanet').visible(exoRec(), { evidence: true, layers: {} }), false); assert.equal(R.kindSpec('exoplanet').visible(exoRec(), { evidence: false }), true);
+  assert.equal(R.kindSpec('planet').visible(planet('Mars'), { evidence: true, layers: {} }), true);
+});
+
+test('exoplanet card: rows with tiers and sources, in the section 16.7 order', () => {
+  const o = exoRec(), c = R.kindSpec('exoplanet').card(o, ctx({ place: placeOf(o), hostName: 'TRAPPIST-1' }));
+  assert.equal(c.title, 'TRAPPIST-1 b'); assert.equal(c.subtitle, 'Exoplanet');
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Host star', 'Orbital period', 'Semi-major axis', 'Eccentricity', 'Inclination', 'Mass', 'Radius', 'Discovered', 'From its star now', 'From you']);
+  assert.deepEqual(rowOf(c, 'Host star'), ['Host star', 'TRAPPIST-1', 'catalogue', 'NASA Exoplanet Archive pscomppars']);
+  assert.deepEqual(rowOf(c, 'Orbital period'), ['Orbital period', '1.51 d', 'measured', NEA + 'Agol et al. 2021']);
+  assert.deepEqual(rowOf(c, 'Semi-major axis').slice(1, 3), ['0.0115 AU', 'catalogue']);
+  assert.deepEqual(rowOf(c, 'Eccentricity').slice(1, 3), ['0.00622', 'measured']);
+  assert.deepEqual(rowOf(c, 'Inclination').slice(1, 3), ['89.7°', 'measured']);
+  assert.deepEqual(rowOf(c, 'Mass').slice(1, 3), ['1.37 M⊕', 'measured']);                       // 0.00432 Mjup < 0.1 Mjup: Earth masses
+  assert.deepEqual(rowOf(c, 'Radius').slice(1, 3), ['1.12 R⊕', 'measured']);
+  assert.deepEqual(rowOf(c, 'Discovered').slice(1, 3), ['Transit, 2016, La Silla Observatory', 'catalogue']);
+  const from = rowOf(c, 'From its star now'); assert.equal(from[2], 'illustrative'); assert.match(from[1], /AU$/);
+  assert.equal(rowOf(c, 'From you')[2], 'illustrative');
+  assert.equal(c.notes[0], 'Where it is drawn on its orbit is illustrative: the orbit\'s orientation on the sky is not known.');
+  assert.match(c.notes[1], /^Phase from the 2016 transit time, ±\d+(\.\d+)?° today\.$/); assert.equal(c.notes.length, 2);
+  assert.equal(R.kindSpec('exoplanet').card(o, ctx()).rows.find((r) => r[0] === 'Host star')[1], 'gdr3:1');       // no hostName: the id; no place: no row
+  assert.equal(R.kindSpec('exoplanet').card(o, ctx()).rows.some((r) => r[0] === 'From its star now'), false);
+});
+
+test('exoplanet card: M sin i is a minimum mass, inferred radius and mass name their relation, large values change unit', () => {
+  const ms = exoRec({ props: { msini: q(0.47, 'Mjup', 'measured', NEA + 'x'), disc_method: q('Radial Velocity', undefined, 'catalogue') }, size: { radius: q(14.1, 'Rearth', 'inferred', NEA + 'archive-calculated from mass (Chen & Kipping 2017)') } });
+  const c = R.kindSpec('exoplanet').card(ms, ctx({ place: placeOf(ms) }));
+  assert.deepEqual(rowOf(c, 'Minimum mass (M sin i)').slice(1, 3), ['0.47 Mj', 'measured']); assert.equal(rowOf(c, 'Mass'), undefined);
+  const r = rowOf(c, 'Radius (from mass, Chen & Kipping 2017)'); assert.deepEqual(r.slice(1, 3), ['1.26 Rj', 'inferred']); assert.match(r[3], /Chen & Kipping/);
+  const mr = exoRec({ props: { mass: q(0.02, 'Mjup', 'inferred', NEA + 'archive-calculated from radius (Chen & Kipping 2017)') } });
+  const m = R.kindSpec('exoplanet').card(mr, ctx({ place: placeOf(mr) })), row = rowOf(m, 'Mass (from radius, Chen & Kipping 2017)');
+  assert.deepEqual(row.slice(1, 3), ['6.36 M⊕', 'inferred']);
+  assert.deepEqual(rowOf(R.kindSpec('exoplanet').card(exoRec({ props: { mass: q(2.5, 'Mjup') } }), ctx()), 'Mass').slice(1), ['2.5 Mj', 'measured', 'test']);
+  const bare = R.kindSpec('exoplanet').card(exoRec({ props: {}, size: null }), ctx());
+  assert.equal(rowOf(bare, 'Mass')[1], 'n/a'); assert.equal(rowOf(bare, 'Radius')[1], 'n/a'); assert.equal(rowOf(bare, 'Discovered')[1], 'n/a');
+});
+
+test('exoplanet card: assumed eccentricity and inclination are labelled, illustrative, and dropped in the Evidence view', () => {
+  const o = exoRec({}, { e: q(0, undefined, 'illustrative', 'assumed circular (no eccentricity in the archive)'), i_deg: null, t_conj_mjd: null, t_peri_mjd: q(52496.5, undefined, 'measured', 'x') });
+  o.props.disc_method = q('Radial Velocity', undefined, 'catalogue');
+  const place = placeOf(o), c = R.kindSpec('exoplanet').card(o, ctx({ place }));
+  assert.deepEqual(rowOf(c, 'Eccentricity').slice(1, 3), ['0 (assumed)', 'illustrative']);
+  const inc = rowOf(c, 'Inclination'); assert.equal(inc[2], 'illustrative'); assert.equal(inc[1], `unknown · drawn at ${Math.round(place.orbit.used.incl)}°`);
+  assert.match(c.notes[1], /^Phase from the 2003 periastron time/);
+  const ev = R.kindSpec('exoplanet').card(o, ctx({ place, evidence: true }));
+  for (const l of ['Eccentricity', 'Inclination', 'From its star now', 'From you']) assert.equal(rowOf(ev, l), undefined, l);
+  assert.ok(rowOf(ev, 'Orbital period') && rowOf(ev, 'Radius'));
+  const noPlace = R.kindSpec('exoplanet').card(o, ctx()); assert.equal(rowOf(noPlace, 'Inclination')[1], 'unknown'); assert.equal(rowOf(noPlace, 'Eccentricity')[1], '0 (assumed)');
+});
+
+test('exoplanet card notes: unknown phase, phase effectively unknown, and the controversial flag', () => {
+  const o = exoRec({}, { t_conj_mjd: null }), card = (x, p) => R.kindSpec('exoplanet').card(x, ctx({ place: p || placeOf(x) }));
+  assert.equal(card(o).notes[1], 'Its place along the orbit is unknown, so an assumed phase is drawn.');
+  const far = exoRec({}, { period_d: q(1.510826, undefined, 'measured', 'x'), a_au: q(0.0115), t_conj_mjd: q(40000) });
+  far.position.elements.period_d.lo = 1.5; far.position.elements.period_d.hi = 1.52;
+  assert.match(card(far).notes[1], /effectively unknown at this date/);
+  const c = exoRec({}); c.props.controversial = q('yes', undefined, 'catalogue');
+  assert.match(card(c).notes.at(-1), /controvers/);
+  assert.equal(R.kindSpec('exoplanet').card(exoRec({}), ctx()).notes.length, 1, 'no place, no phase note');
+});
+
+test('planetLine: period, radius and mass with the weakest tier', () => {
+  assert.deepEqual(R.planetLine(exoRec()), { line: '1.51 d · 1.12 R⊕ · 1.37 M⊕', tier: 'measured' });
+  const rv = exoRec({ props: { msini: q(0.47, 'Mjup') }, size: null }, { period_d: q(4.2307966, 'd') });
+  assert.deepEqual(R.planetLine(rv), { line: '4.23 d · 0.47 Mj min', tier: 'measured' });
+  const inf = exoRec({ size: { radius: q(14.1, 'Rearth', 'inferred') } }); assert.deepEqual(R.planetLine(inf), { line: '1.51 d · 1.26 Rj · 1.37 M⊕', tier: 'inferred' });
+  assert.equal(R.planetLine(exoRec({ props: {}, size: null }, { period_d: null })).line, '0.0115 AU');
+  assert.equal(R.planetLine(exoRec({ props: {}, size: null }, { period_d: null, a_au: null })).line, '');
+});
+
+test('cluster card: distance with interval and method, members, r50, age, extinction, type, quality, class and mass', () => {
+  const o = cl(); o.position.dist = { ...o.position.dist, lo: 133.9, hi: 136.6 };
+  const c = R.kindSpec('cluster').card(o, ctx());
+  assert.equal(c.title, 'Pleiades'); assert.equal(c.subtitle, 'Star cluster');
+  assert.deepEqual(rowOf(c, 'Distance (cluster parallax)'), ['Distance (cluster parallax)', '135 pc (134–137)', 'measured', 'HR23']);
+  assert.deepEqual(rowOf(c, 'Members').slice(1, 3), ['1,250', 'catalogue']);
+  assert.deepEqual(rowOf(c, 'Radius (r50)').slice(1, 3), ['3.1 pc', 'catalogue']);
+  assert.deepEqual(rowOf(c, 'Age').slice(1, 3), ['50 Myr', 'inferred']);
+  assert.deepEqual(rowOf(c, 'Extinction (A_V)').slice(1, 3), ['0.2 mag', 'inferred']);
+  assert.deepEqual(rowOf(c, 'Type').slice(1, 3), ['open', 'catalogue']);
+  assert.deepEqual(rowOf(c, 'Quality').slice(1, 4), ['reliable', 'catalogue', 'CST > 5']);
+  assert.equal(c.notes, null); assert.equal(rowOf(c, 'Class'), undefined); assert.equal(rowOf(c, 'Mass'), undefined);
+  assert.deepEqual(R.kindSpec('cluster').card(cl({}, { age: q(2.5, 'Gyr', 'inferred') }), ctx()).rows.find((r) => r[0] === 'Age').slice(1, 3), ['2.5 Gyr', 'inferred']);
+  const hr24 = R.kindSpec('cluster').card(cl({}, { mass: q(800, 'Msun', 'inferred', 'HR24'), class: q('bound cluster', undefined, 'catalogue', 'HR24') }), ctx());
+  assert.deepEqual(rowOf(hr24, 'Class').slice(1, 3), ['bound cluster', 'catalogue']); assert.deepEqual(rowOf(hr24, 'Mass').slice(1, 3), ['800 M☉', 'inferred']);
+  assert.equal(rowOf(R.kindSpec('cluster').card(cl({}, { bound: q(false, undefined, 'catalogue') }), ctx()), 'Class')[1], 'moving group');
+});
+
+test('cluster card: derived distance is prior-dominated, candidates say so, and the Evidence view keeps these rows', () => {
+  const d = cl({ evidence: 'derived' }); d.position.dist = q(1800, 'pc', 'inferred', 'HR23 prior');
+  const c = R.kindSpec('cluster').card(d, ctx({ evidence: true }));
+  assert.equal(rowOf(c, 'Distance (cluster parallax)')[2], 'inferred'); assert.match(c.notes[0], /prior-dominated \(parallax S\/N < 5\)/);
+  assert.ok(rowOf(c, 'Age') && rowOf(c, 'Members'));
+  const cand = R.kindSpec('cluster').card(cl({}, { quality: q('candidate', undefined, 'catalogue', 'CST < 5') }), ctx());
+  assert.equal(rowOf(cand, 'Quality')[1], 'candidate'); assert.match(cand.notes[0], /^Candidate/);
+});
+
+test('clusterRgb: blue when young, white near 300 Myr, warm when old, grey without an age', () => {
+  const at = (g) => R.clusterRgb(cl({}, { age: q(g, 'Gyr') }));
+  const [r1, , b1] = at(0.005), [r2, g2, b2] = at(0.3), [r3, , b3] = at(5);
+  assert.ok(b1 > r1); assert.deepEqual([r2, g2, b2], [1, 1, 1]); assert.ok(r3 > b3);
+  const mid = at(0.1); assert.ok(mid[0] > at(0.03)[0] && mid[0] < 1);
+  assert.deepEqual(R.clusterRgb(cl({}, { age: undefined })), [0.9, 0.9, 0.95]);
+  assert.deepEqual(R.kindSpec('cluster').color(cl()), R.clusterRgb(cl()));
+});
+
+test('units: exoplanet radii convert to AU', () => {
+  assert.ok(Math.abs(R.toAu(q(1, 'Rearth')) - 6371 / M.KM_PER_AU) < 1e-15); assert.equal(R.toAu(q(1, 'Parsnip')), null);
+});
+
+test('valueWithRange: more digits (up to 5) until lo and hi differ, else no interval', () => {
+  assert.equal(R.valueWithRange({ v: 135.2, lo: 134.2, hi: 137.1 }, 'pc'), '135 pc (134–137)');
+  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.6, hi: 135.2 }, 'pc'), '134.8 pc (134.6–135.2)');   // 3 digits: 135 and 135
+  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.84, hi: 134.84 }, 'pc'), '135 pc');
+  assert.equal(R.valueWithRange({ v: 12.4 }, 'pc'), '12.4 pc');
+});
+
+test('a catalogue bound is shown as the bound, never as a value or n/a', async () => {
+  const { kindSpec, planetLine } = await import('../js/blink/scene3d-registry.js');
+  const o = { id: 'nea:x b', kind: 'exoplanet', name: 'x b', host: 'gdr3:1', parent: 'gdr3:1', evidence: 'illustrative',
+    position: { model: 'orbit', host_radec: [10, 10], phase_known: false, tier: 'illustrative', src: 't',
+      elements: { period_d: { v: 3, unit: 'd', src: 't', tier: 'measured' }, a_au: { v: 0.04, unit: 'au', src: 't', tier: 'catalogue' },
+        e: { v: 0, src: 'assumed', tier: 'illustrative' }, i_deg: null, omega_deg: null, t_peri_mjd: null, t_conj_mjd: null, node_deg: null } },
+    size: { radius: { v: '> 3.1', unit: 'Rearth', src: 'NEA pscomppars: X 2020', tier: 'measured' }, angular: null },
+    props: { mass: { v: '< 0.12', unit: 'Mjup', src: 'NEA pscomppars: X 2020', tier: 'measured' } }, provenance: {}, render: {} };
+  const rows = kindSpec('exoplanet').card(o, { evidence: false, fmtNum: (v) => String(v) }).rows;
+  assert.deepEqual(rows.find((r) => r[0] === 'Mass').slice(0, 2), ['Mass', '< 0.12 Mj']);
+  assert.deepEqual(rows.find((r) => r[0] === 'Radius').slice(0, 2), ['Radius', '> 3.1 R⊕']);
+  assert.equal(planetLine(o).line, '3 d · > 3.1 R⊕ · < 0.12 Mj');
+  assert.equal(kindSpec('exoplanet').frames.system(o), 'point');   // a bound is no size to draw a sphere with
 });

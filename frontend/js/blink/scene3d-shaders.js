@@ -60,7 +60,8 @@ void main(){
   v_psf = vec4(u_sig, rw, rad, gl_PointSize);
   v_col = a_col; v_amp = x;
 }`;
-// Planets and small bodies: x y z, CSS px size, alpha, r g b. Positions are relative to u_eye.
+// Planets and small bodies: x y z, CSS px size, alpha, r g b. Positions are relative to u_eye. A NEGATIVE size marks a hollow
+// marker (a derived record, section 7.1): the sprite is |size| px wide and the fragment shader draws a ring instead of a dot.
 export const POINT_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_pos;
@@ -71,16 +72,18 @@ uniform vec3 u_eye;
 uniform float u_dpr;
 out vec3 v_col;
 out float v_head;
+out float v_ring;
 void main(){
   gl_Position = u_vp * vec4(a_pos - u_eye, 1.0);
-  gl_PointSize = a_style.x * u_dpr;
-  v_col = a_col * a_style.y; v_head = 0.0;
+  gl_PointSize = abs(a_style.x) * u_dpr;
+  v_col = a_col * a_style.y; v_head = 0.0; v_ring = a_style.x < 0.0 ? 1.0 : 0.0;
 }`;
 // A gaussian core with a faint halo that reaches zero at the sprite edge.
 export const SPRITE_FS = `#version 300 es
 precision highp float;
 in vec3 v_col;
 in float v_head;
+in float v_ring;
 out vec4 o;
 ${INVT}
 void main(){
@@ -88,6 +91,8 @@ void main(){
   float r2 = dot(p, p);
   if (r2 >= 1.0) discard;
   float k = (exp(-4.0*r2) + 0.12*exp(-1.2*r2)) * (1.0 - r2*r2);
+  // Hollow marker: a ring (peak at 0.72 of the radius, about 0.4 wide) instead of the filled core; solid markers are unchanged.
+  if (v_ring > 0.5) k = clamp(1.0 - abs(sqrt(r2) - 0.72)/0.2, 0.0, 1.0);
   // The profile is applied in display space, as tier 1 did, then mapped to linear: gaussian tails stay as thin as before.
   o = vec4(invT3(v_col * k) + (v_col / max(max(v_col.r, max(v_col.g, v_col.b)), 1e-4)) * (v_head * k * k * 0.5), 1.0);
 }`;
@@ -315,6 +320,59 @@ void main(){
   vec3 w = normalize(u_v2w*v_dir);
   float ra = atan(w.y, w.x), dec = asin(clamp(w.z, -1.0, 1.0));
   vec3 c = texture(u_sky, vec2(fract(0.5 - ra*0.15915494), 0.5 - dec*0.31830989)).rgb*u_k;
+#ifdef LDR
+  c = srgb(tonemap(c));
+#endif
+  o = vec4(c, 1.0);
+}`;
+
+// Cluster billboards (section 16.10): one camera-facing quad per cluster, built on the CPU each frame (camera-relative doubles cast
+// to float32, like the markers). Vertex: x y z (camera-relative corner), u v (position in the quad in units of r50, so +-4 at the
+// edges), r g b, a (alpha, fade included), mode (0 glow, 1 outline, 2 dashed outline). Drawn additively with no depth write.
+//  glow     surface brightness a * rgb * (1 + (rho/r50)^2)^-2 (a Plummer profile), scaled by u_k (kept faint: it is an illustration)
+//  outline  no glow, an antialiased ring at rho = r50 about 1.5 CSS px wide (fwidth), dashed when mode is 2
+export const BB_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec2 a_uv;
+layout(location=2) in vec4 a_col;
+layout(location=3) in float a_mode;
+uniform mat4 u_vp;
+out vec2 v_uv;
+out vec4 v_col;
+out float v_mode;
+void main(){
+  gl_Position = u_vp * vec4(a_pos, 1.0);
+  v_uv = a_uv; v_col = a_col; v_mode = a_mode;
+}`;
+export const BB_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec4 v_col;
+in float v_mode;
+out vec4 o;
+uniform float u_k, u_dpr;
+${TONE_GLSL}
+void main(){
+  float rho = length(v_uv);
+  vec3 c;
+  if (v_mode < 0.5) {
+    // Plummer profile with its value at the quad edge (rho = 4) subtracted and rescaled, so it is exactly 0 there, times a taper
+    // over rho 3..4: no visible square, whatever the brightness
+    float q = 1.0 + rho*rho;
+    float f = max((1.0/(q*q) - 0.00346) / (1.0 - 0.00346), 0.0) * (1.0 - smoothstep(3.0, 4.0, rho));
+    c = v_col.rgb * (v_col.a * u_k * f);
+  } else {
+    float w = fwidth(rho);                                           // rho change per device px
+    float hw = 0.75*u_dpr*w;                                     // half of ~1.5 CSS px, in rho units
+    float ring = 1.0 - smoothstep(hw - w, hw + w, abs(rho - 1.0));
+    if (v_mode > 1.5) {                                              // dashed: 24 dashes around the ring, half on
+      float ang = atan(v_uv.y, v_uv.x);
+      ring *= step(0.5, fract(ang * 3.8197186));
+    }
+    c = v_col.rgb * (v_col.a * u_k * ring);
+  }
+  if (max(c.r, max(c.g, c.b)) < 1e-5) discard;
 #ifdef LDR
   c = srgb(tonemap(c));
 #endif

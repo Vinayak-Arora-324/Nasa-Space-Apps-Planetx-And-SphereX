@@ -15,12 +15,27 @@ whose box comes within radius + max_extent_deg of the cone centre, then filters 
 Writing is reproducible: sorted keys, records ordered by id, compact separators, no timestamps, and a
 sha256 per tile in the manifest. The same input gives byte-identical output.
 
-Tile records are `fixed` positions with `host: null` and must pass `objects.validate_record`.
+Tile records are `fixed` positions with `host: null`, or (Phase 1) records of a hosted kind
+(`objects.HOSTED_KINDS`, the exoplanets) with an `orbit` position, a non-null `host` and
+`position.host_radec`; a hosted record is tiled by that direction (`objects.sky_position`). Every record
+must pass `objects.validate_record`.
+
+String table (`write_dataset(..., src_table=True)`): the manifest gets `src_table`, the sorted distinct
+`src` strings of every Quantity and every position, and tile files hold the integer index in place of the
+string. `_read_tile` and `verify_dataset` expand the indices before validating or caching, so records in
+memory and in /api/objects always carry string `src`. Tile format stays 1: a reader that does not expand
+fails validation on an integer `src` instead of misreading it.
+
+Record defaults (`write_dataset(..., record_defaults={...})`): top-level keys that are identical in every
+record (the compact `provenance` of a dataset) are stored once in `manifest["record_defaults"]` and left
+out of the tile records. `_read_tile` and `verify_dataset` put a missing key back (a copy of the default)
+before validating or caching, so served records are unchanged. Opt-in and generic: any top-level key.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -29,8 +44,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from .objects import (KINDS, SCHEMA, TILE_FORMAT, Query, Source, angsep_deg, angular_radius_deg,
-                      cone_contains, validate_record)
+from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, Query, Source, angsep_deg,
+                      angular_radius_deg, cone_contains, sky_position, validate_record)
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +182,11 @@ def _check_manifest(m: object, where: str) -> dict:
         problems.append("provenance must be an object")
     if not isinstance(m.get("build"), dict):
         problems.append("build must be an object")
+    if m.get("record_defaults") is not None and not isinstance(m["record_defaults"], dict):
+        problems.append("record_defaults must be an object")
+    tab = m.get("src_table")
+    if tab is not None and not (isinstance(tab, list) and all(isinstance(x, str) for x in tab)):
+        problems.append("src_table must be a list of strings")
     tiles = m.get("tiles")
     if not (isinstance(tiles, dict) and all(
             isinstance(v, dict) and isinstance(v.get("count"), int) and isinstance(v.get("sha256"), str)
@@ -200,6 +220,70 @@ def load_dataset(path: str | Path) -> Dataset:
     return ds
 
 
+# --- the string table ------------------------------------------------------------------------
+
+def _src_holders(rec: dict):
+    """Every dict of a record that carries a `src` string: the position, its distance and orbital
+    elements, the size quantities, and the props."""
+    pos = rec.get("position")
+    if isinstance(pos, dict):
+        yield pos
+        if isinstance(pos.get("dist"), dict):
+            yield pos["dist"]
+        if isinstance(pos.get("elements"), dict):
+            yield from (q for q in pos["elements"].values() if isinstance(q, dict))
+    size = rec.get("size")
+    if isinstance(size, dict):
+        if isinstance(size.get("radius"), dict):
+            yield size["radius"]
+        if isinstance(size.get("angular"), dict):
+            yield from (q for q in size["angular"].values() if isinstance(q, dict))
+    if isinstance(rec.get("props"), dict):
+        yield from (q for q in rec["props"].values() if isinstance(q, dict))
+
+
+def _is_index(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _compress_src(rec: dict, index: dict[str, int]) -> dict:
+    """A copy of `rec` with every `src` string replaced by its index in the string table."""
+    out = copy.deepcopy(rec)
+    for h in _src_holders(out):
+        if isinstance(h.get("src"), str):
+            h["src"] = index[h["src"]]
+    return out
+
+
+def _expand_src(rec: dict, table: list[str]) -> dict:
+    """Replace integer `src` values of `rec` (in place) by their strings. An index outside the
+    table raises DatasetError."""
+    for h in _src_holders(rec):
+        v = h.get("src")
+        if _is_index(v):
+            if not 0 <= v < len(table):
+                raise DatasetError(f"{rec.get('id')}: src index {v} is outside the string table "
+                                   f"({len(table)} entries)")
+            h["src"] = table[v]
+    return rec
+
+
+def _fill_defaults(rec: dict, defaults: dict) -> dict:
+    """Put the manifest's `record_defaults` back into a tile record (in place) where a key is missing."""
+    if not isinstance(rec, dict):
+        raise DatasetError("a tile record is not an object")
+    for k, v in defaults.items():
+        if k not in rec:
+            rec[k] = copy.deepcopy(v)
+    return rec
+
+
+def _expand(rec: dict, manifest: dict) -> dict:
+    """A tile record as stored -> the record as served (defaults and string table restored)."""
+    return _expand_src(_fill_defaults(rec, manifest.get("record_defaults") or {}),
+                       manifest.get("src_table") or [])
+
+
 def _read_tile(ds: Dataset, tile: str) -> list[dict]:
     """Records of one tile, through the in-memory cache keyed by path and mtime."""
     tp = ds.root / "tiles" / f"{tile}.json"
@@ -216,7 +300,10 @@ def _read_tile(ds: Dataset, tile: str) -> list[dict]:
         recs = doc["objects"]
         if doc.get("format") != TILE_FORMAT or not isinstance(recs, list):
             raise ValueError("not a tile file")
-    except (OSError, ValueError, KeyError, TypeError) as e:
+        recs = [_expand(r, ds.manifest) for r in recs]
+    except (OSError, ValueError, KeyError, TypeError) as e:  # DatasetError is a ValueError
+        if isinstance(e, DatasetError):
+            raise DatasetError(f"{tp}: {e}") from e
         raise DatasetError(f"{tp}: invalid tile ({e})") from e
     with _lock:
         _tiles[str(tp)] = (mtime, recs)
@@ -241,22 +328,36 @@ def _dumps(obj: object) -> str:
 
 
 def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kinds: list[str],
-                  provenance: dict, build: dict, band_deg: float = 10, precedence: int = 50) -> dict:
+                  provenance: dict, build: dict, band_deg: float = 10, precedence: int = 50,
+                  src_table: bool = False, record_defaults: dict | None = None) -> dict:
     """Write `records` as a tiled dataset under `out_dir` and return the manifest.
 
-    Every record is validated and must be a `fixed` position with `host: None`, a kind listed in
-    `kinds`, a unique id and no stored `in_cone`; otherwise ValueError lists the problems and nothing
-    is written. Output is deterministic (sorted keys, records ordered by id, no timestamps)."""
+    Every record is validated and must be either a `fixed` position with `host: None`, or a record of
+    a hosted kind (`objects.HOSTED_KINDS`) with an `orbit` position, a host and `host_radec`. Its kind
+    must be listed in `kinds`, its id unique and `in_cone` not stored; otherwise ValueError lists the
+    problems and nothing is written. With `record_defaults`, each top-level key whose value equals the
+    default is left out of the tile records and stored once in the manifest. With `src_table=True` the distinct `src` strings go to
+    `manifest["src_table"]` and tiles hold their indices. Output is deterministic (sorted keys,
+    records ordered by id, no timestamps)."""
     problems = []
     seen: set[str] = set()
     for r in records:
         rid = r.get("id") if isinstance(r, dict) else None
         probs = validate_record(r)
         if not probs:
-            if r["position"]["model"] != "fixed":
-                probs.append("tile records must have a 'fixed' position")
-            if r["host"] is not None:
-                probs.append("tile records must have host null")
+            pos = r["position"]
+            if r["kind"] in HOSTED_KINDS:
+                if pos["model"] != "orbit":
+                    probs.append(f"{r['kind']} tile records must have an 'orbit' position")
+                elif r["host"] is None:
+                    probs.append(f"{r['kind']} tile records must have a host")
+                elif sky_position(r) is None:
+                    probs.append(f"{r['kind']} tile records must have position.host_radec")
+            else:
+                if pos["model"] != "fixed":
+                    probs.append("tile records must have a 'fixed' position")
+                if r["host"] is not None:
+                    probs.append("tile records must have host null")
             if r["kind"] not in kinds:
                 probs.append(f"kind {r['kind']!r} is not in the dataset kinds {kinds}")
             if "in_cone" in r:
@@ -268,10 +369,19 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     if problems:
         raise ValueError("invalid records:\n  " + "\n  ".join(problems))
 
+    table: list[str] = []
+    index: dict[str, int] = {}
+    if src_table:
+        table = sorted({h["src"] for r in records for h in _src_holders(r)
+                        if isinstance(h.get("src"), str)})
+        index = {t: i for i, t in enumerate(table)}
     by_tile: dict[str, list[dict]] = {}
     for r in sorted(records, key=lambda r: r["id"]):
-        p = r["position"]
-        by_tile.setdefault(tile_of(p["ra"], p["dec"], band_deg), []).append(r)
+        ra, dec = sky_position(r)  # type: ignore[misc]  (validated above)
+        out_rec = _compress_src(r, index) if src_table else r
+        if record_defaults:
+            out_rec = {k: v for k, v in out_rec.items() if not (k in record_defaults and v == record_defaults[k])}
+        by_tile.setdefault(tile_of(ra, dec, band_deg), []).append(out_rec)
 
     out = Path(out_dir)
     tdir = out / "tiles"
@@ -289,6 +399,10 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
         "max_extent_deg": max((angular_radius_deg(r) for r in records), default=0.0),
         "count": len(records), "provenance": provenance, "build": build, "tiles": tiles,
     }
+    if src_table:
+        manifest["src_table"] = table
+    if record_defaults:
+        manifest["record_defaults"] = record_defaults
     (out / MANIFEST).write_bytes(_dumps(manifest).encode("utf-8"))
     return manifest
 
@@ -313,8 +427,11 @@ def verify_dataset(path: str | Path) -> list[str]:
         if hashlib.sha256(data).hexdigest() != info["sha256"]:
             out.append(f"{name}: sha256 does not match the manifest")
         try:
-            recs = json.loads(data)["objects"]
-        except (ValueError, KeyError, TypeError):
+            recs = [_expand(r, ds.manifest) for r in json.loads(data)["objects"]]
+        except DatasetError as e:
+            out.append(f"{name}: {e}")
+            continue
+        except (ValueError, KeyError, TypeError, AttributeError):
             out.append(f"{name}: not a tile file")
             continue
         total += len(recs)
@@ -322,8 +439,8 @@ def verify_dataset(path: str | Path) -> list[str]:
             out.append(f"{name}: {len(recs)} records, manifest says {info['count']}")
         for r in recs:
             out += [f"{name}: {r.get('id')}: {p}" for p in validate_record(r)]
-            if r.get("position", {}).get("model") == "fixed" and \
-                    tile_of(r["position"]["ra"], r["position"]["dec"], ds.band_deg) != name:
+            sp = sky_position(r)
+            if sp is not None and tile_of(sp[0], sp[1], ds.band_deg) != name:
                 out.append(f"{name}: {r.get('id')}: record is in the wrong tile")
     if total != ds.manifest["count"]:
         out.append(f"manifest count {ds.manifest['count']} but tiles hold {total}")

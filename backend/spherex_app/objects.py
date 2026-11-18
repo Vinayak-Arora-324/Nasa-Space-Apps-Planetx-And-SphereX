@@ -9,7 +9,9 @@ Evidence rule (validated here): the evidence of a record may never be stronger t
 The governing tier is the position's own tier for `state` and `orbit` positions and the distance tier for
 `fixed` positions (the position tier when the distance is unknown). A `measured` or `catalogue` tier
 allows at most `measured`, `inferred` allows at most `derived`, `illustrative` allows only `illustrative`.
-An orbit whose phase is unknown is always `illustrative`.
+An orbit whose phase is unknown is always `illustrative`. Phase 1 adds three rules: an orbit whose
+inclination or node is unknown, or that has an `illustrative` element, must have an `illustrative`
+position tier; and a `fixed` position with method `assumed` must have an `illustrative` distance.
 
 Data comes from sources (`Source`): live ones (`objects_live`: ephemeris, SkyBoT) and prebuilt static
 datasets (`objects_static`: tiled JSON under config.OBJECTS_DIR). `build_objects` runs every source that
@@ -47,10 +49,13 @@ UNITS = ("km", "au", "pc", "Mpc", "deg", "arcmin", "arcsec", "mag", "K", "d", "y
          "Mjup", "Mearth", "Rsun", "Rjup", "Rearth", "arcsec/h")
 # `fixed` positions: how the distance was obtained. `state` positions use STATE_METHODS.
 METHODS = ("parallax", "bailer-jones", "cluster-parallax", "photometric", "kinematic", "cepheid",
-           "trgb", "sbf", "tully-fisher", "redshift", "orbit-fit", "assumed")
+           "trgb", "sbf", "tully-fisher", "redshift", "orbit-fit", "lens-model", "assumed")
 STATE_METHODS = ("ephemeris", "orbit-propagation")
-NAMESPACES = ("ss", "mp", "comet", "gdr3", "hip", "nea", "hr23", "ongc", "sh2", "ungc", "bh", "gal",
-              "test")
+NAMESPACES = ("ss", "mp", "comet", "gdr3", "hip", "nea", "neahost", "hr23", "ongc", "sh2", "ungc", "bh",
+              "gal", "test")
+# Kinds that live in a host's system frame but are stored in static tiles (as `orbit` positions that
+# carry the host's direction in `host_radec`). Backend mirror of the frontend registry's `hosted: true`.
+HOSTED_KINDS = ("exoplanet",)
 POSITION_MODELS = ("fixed", "state", "orbit")
 DIST_UNITS = ("pc", "Mpc")
 
@@ -177,6 +182,8 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
                 return None
             return pos["tier"]
         _check_quantity(dist, "position.dist", out, DIST_UNITS)
+        if method == "assumed" and isinstance(dist, dict) and dist.get("tier") != "illustrative":
+            out.append("position.dist.tier: a distance with method 'assumed' must be 'illustrative'")
         if isinstance(dist, dict) and not _is_num(dist.get("v")):
             out.append("position.dist.v: must be a finite number")
         if method is None:
@@ -196,19 +203,34 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
             out.append(f"position.method: must be one of {', '.join(STATE_METHODS)}")
         return pos.get("tier") if pos.get("tier") in TIERS else None
     # orbit
+    hr = pos.get("host_radec")
+    if hr is not None:
+        if not (isinstance(hr, list) and len(hr) == 2 and _is_num(hr[0]) and _is_num(hr[1])
+                and 0 <= hr[0] < 360 and -90 <= hr[1] <= 90):
+            out.append("position.host_radec: must be [ra in [0, 360), dec in [-90, 90]]")
+    must_be_illustrative: list[str] = []
     el = pos.get("elements")
     if not isinstance(el, dict):
         out.append("position.elements: must be an object")
     else:
         for k in ("a_au", "e", "period_d"):
             _check_quantity(el.get(k), f"position.elements.{k}", out)
-        for k in ("i_deg", "t_peri_mjd", "omega_deg", "node_deg"):
+        for k in ("i_deg", "t_peri_mjd", "t_conj_mjd", "omega_deg", "node_deg"):
             if el.get(k) is not None:
                 _check_quantity(el[k], f"position.elements.{k}", out)
+        for k in ("i_deg", "node_deg"):
+            if el.get(k) is None:
+                must_be_illustrative.append(f"{k} is unknown")
+        for k, q in el.items():
+            if isinstance(q, dict) and q.get("tier") == "illustrative":
+                must_be_illustrative.append(f"element {k} is illustrative")
     if not isinstance(pos.get("phase_known"), bool):
         out.append("position.phase_known: must be a boolean")
-    elif not pos["phase_known"] and pos.get("tier") != "illustrative":
-        out.append("position.tier: an orbit with an unknown phase must be 'illustrative'")
+    elif not pos["phase_known"]:
+        must_be_illustrative.append("the phase is unknown")
+    if must_be_illustrative and pos.get("tier") != "illustrative":
+        out.append("position.tier: an orbit must be 'illustrative' when "
+                   + "; ".join(must_be_illustrative))
     return pos.get("tier") if pos.get("tier") in TIERS else None
 
 
@@ -238,6 +260,12 @@ def _validate(rec: Any) -> list[str]:
             out.append(f"{k}: required (use null for none)")
         elif rec[k] is not None:
             _check_id(rec[k], k, out)
+    if rec.get("same_as") is not None:
+        if not isinstance(rec["same_as"], list):
+            out.append("same_as: must be a list of ids")
+        else:
+            for i, sid in enumerate(rec["same_as"]):
+                _check_id(sid, f"same_as[{i}]", out)
     if "in_cone" in rec and not isinstance(rec["in_cone"], bool):
         out.append("in_cone: must be a boolean")
 
@@ -302,11 +330,15 @@ def _validate(rec: Any) -> list[str]:
 # --- cone test -------------------------------------------------------------------------------
 
 def sky_position(rec: dict) -> tuple[float, float] | None:
-    """The (ra, dec) a record is seen at from the geocentre, or None (orbit positions, and state
-    positions without a `geo`, such as Earth itself)."""
+    """The (ra, dec) a record is seen at from the geocentre, or None (orbit positions without a
+    `host_radec`, and state positions without a `geo`, such as Earth itself). An orbit position is
+    seen where its host is."""
     pos = rec.get("position") or {}
     if pos.get("model") == "fixed":
         return float(pos["ra"]), float(pos["dec"])
+    if pos.get("model") == "orbit" and isinstance(pos.get("host_radec"), list) \
+            and len(pos["host_radec"]) == 2:
+        return float(pos["host_radec"][0]), float(pos["host_radec"][1])
     if pos.get("model") == "state" and isinstance(pos.get("geo"), dict):
         return float(pos["geo"]["ra"]), float(pos["geo"]["dec"])
     return None

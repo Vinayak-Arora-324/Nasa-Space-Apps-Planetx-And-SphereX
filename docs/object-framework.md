@@ -892,7 +892,7 @@ Both are counted in the build report.
 |---|---|---|
 | 1 | `gaia_dr3_id` present (strip `"Gaia DR3 "`) → `gdr3:<id>` | 4,491 (92.4 %) |
 | 2 | only `gaia_dr2_id` → `gaiadr3.dr2_neighbourhood`, the closest neighbour within 100 mas with \|ΔG\| ≤ 1 mag (Torra et al. 2021). Note: DR2 and DR3 ids differ for 13 of these 28, and also for Proxima Cen, so a DR2 id is never reused as DR3. | 26 of 28 (787 mas and 126 mas rejected; those go on down the ladder) |
-| 3 | `hip_name` → `hip:<n>`. The scene's bright context stars are keyed `hip:`. | 14 |
+| 3 | `hip_name` → `hip:<n>`. The scene's bright context stars are keyed `hip:`. | 14 (12 in the build: two are caught by step 2 or 4 first) |
 | 4 | positional: a Gaia DR3 source within 1.5″ of the archive position, with \|G − `sy_gaiamag`\| ≤ 0.5 when known, unique within 1.5″. **Skipped for microlensing hosts**, whose lenses Gaia does not see (a match would be the blended source star). | ≤ 47 (the non-microlensing coordinate-only hosts) |
 | 5 | `neahost:<hostname>` (new namespace) | ~282 microlensing + leftovers |
 
@@ -1237,7 +1237,7 @@ reachable. It is then replaced by the real Melotte_22 row, and the same test cov
       "a_au":        { "v": 0.01154, "lo": 0.01144, "hi": 0.01164, "unit": "au", "src": "NEA pscomppars: Agol et al. 2021", "tier": "catalogue" },
       "e":           { "v": 0.00622, "lo": 0.00318, "hi": 0.00926, "src": "NEA pscomppars: Grimm et al. 2018", "tier": "measured" },
       "i_deg":       { "v": 89.728, "lo": 89.563, "hi": 89.893, "unit": "deg", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" },
-      "omega_deg":   { "v": 336.86, "unit": "deg", "src": "NEA pscomppars: Grimm et al. 2018", "tier": "measured" },
+      "omega_deg":   { "v": 336.86, "lo": 302.62, "hi": 371.1, "unit": "deg", "src": "NEA pscomppars: Grimm et al. 2018", "tier": "measured" },
       "t_conj_mjd":  { "v": 57322.014193, "lo": 57322.01419, "hi": 57322.014196, "src": "NEA pscomppars: Ducrot et al. 2020", "tier": "measured" },
       "t_peri_mjd": null, "node_deg": null } },
   "size": { "radius": { "v": 1.116, "lo": 1.104, "hi": 1.13, "unit": "Rearth", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" }, "angular": null },
@@ -1254,12 +1254,13 @@ reachable. It is then replaced by the real Melotte_22 row, and the same test cov
 }
 ```
 
-**51 Peg b** (radial velocity; inclination measured, Cont et al. 2026; **radius archive-calculated → `inferred`**).
+**51 Peg b** (radial velocity; inclination measured, Cont et al. 2026; **radius archive-calculated → `inferred`**; the archive flags its eccentricity as an upper limit, so it is drawn circular and `illustrative`, §16.19).
 Only the parts that differ from the shape above are shown:
 ```json
 { "id": "nea:51 Peg b", "designations": ["HD 217014 b", "HIP 113357 b"],
   "host": "gdr3:2835207319109249920",
-  "elements": { "period_d": { "v": 4.2307966, "…": "Cont et al. 2026" }, "a_au": { "v": 0.052 }, "e": { "v": 0.0063 },
+  "elements": { "period_d": { "v": 4.2307966, "…": "Cont et al. 2026" }, "a_au": { "v": 0.052 },
+    "e": { "v": 0, "hi": 0.0063, "src": "NEA pscomppars: upper limit e < 0.0063 (Cont et al. 2026); drawn circular", "tier": "illustrative" },
     "i_deg": { "v": 49.8, "lo": 44.1, "hi": 55.6 }, "omega_deg": { "v": 0.0, "src": "NEA pscomppars: Naef et al. 2004" },
     "t_peri_mjd": { "v": 52496.5 }, "t_conj_mjd": { "v": 56326.4323 }, "node_deg": null },
   "size": { "radius": { "v": 14.1, "unit": "Rearth", "src": "NEA pscomppars: archive-calculated from mass (Chen & Kipping 2017)", "tier": "inferred" } },
@@ -1475,3 +1476,50 @@ These answer Q1–Q4 and take precedence over §16.1–§16.17.
   - it is saved in the same `blink.scene3d.layers` map.
 - Kind specs' `visible(o, { evidence, layers })` now also receives the layer map (**change to §7.1**).
 - Shown candidates are drawn at half glow and half marker alpha, and labelled "candidate" on the card.
+
+### 16.19 Implementation notes (Phase 1)
+
+These were settled while building Phase 1. Where they differ from the sections above, they take precedence.
+
+**Archive limit flags.** A value the archive flags as a limit (`*lim` = 1 upper, −1 lower) is never shown as a
+measurement.
+- An eccentricity limit becomes `v: 0`, `illustrative` (drawn circular), with the bound in `hi`.
+- An inclination or ω limit leaves the element `null`, so the client assumes it.
+- A period, semi-major axis or epoch limit counts as missing.
+- Card-only values (mass, M sin i, radius, star props) keep the bound as a string `v` such as `"< 0.12"`, so a client
+  that does arithmetic skips them.
+- Counts in the 2026-11-18 build:
+  - eccentricity: 288 upper, 11 lower;
+  - mass: 225 upper, 13 lower;
+  - inclination: 6 upper, 37 lower;
+  - planet radius: 5 lower.
+- 64 negative lower bounds on positive-only quantities are clamped to 0.
+
+**Dataset size (D2).**
+- `nea-exoplanets` is **11.6 MB in 404 tiles** (largest `13-20`, the Kepler field, 2.7 MB), with every interval kept.
+- Lossless savings in the tile format:
+  - the `src_table`;
+  - **`record_defaults`**: top-level keys identical in every record (the compact `provenance`) are stored once in the
+    manifest and restored by the loader, like the string table. This is a further change to §6 within tile format 1.
+- The source snapshot is 1.2 MB.
+
+**Numbers** are written from the archive's decimal strings: at most 12 significant digits, Kepler-III derived values
+at 10.
+
+**Hosts.** Two pairs of host names resolve to one Gaia source (HD 41004 A/B, TOI-2267 A/B) and share one star record.
+28 hosts have no distance; they are direction-only `star` records and are not added to the star field.
+
+**Orbit orientation** (changes §16.6). The assumed node Ω, and the assumed inclination of non-transiting planets, are
+hashed per **host** (`hashUnit(host, …)`), so a system's unknown orientation is shared and a coplanar system such as
+TRAPPIST-1 is drawn as one plane instead of a starburst. ω and the phase stay per planet. It is still illustrative and
+labelled so.
+
+**Host star card** (changes §16.8). Per row, the strongest tier wins between the Gaia/Apsis value (or the page's own
+photometric estimate, tier `inferred`) and the archive star record. On a tie, Gaia wins. Example: TRAPPIST-1 showed
+"○ 2,500 K, 0.056 R☉" (estimated from photometry), whereas the archive gives 2,566 K and 0.1192 R☉ (catalogue, Agol et
+al. 2021).
+
+**SkyBoT failures** (a Phase 0 bug found in the hand check). SkyBoT answers a failed computation with HTTP 200 and
+`flag: -1`. That was parsed as an empty sky and cached for 7 days, so a patch near the ecliptic showed "0 small bodies".
+It now raises, which reports the kinds as `error` and caches nothing. The cache key moved to `skybot-3` so that entries
+cached that way are no longer read.

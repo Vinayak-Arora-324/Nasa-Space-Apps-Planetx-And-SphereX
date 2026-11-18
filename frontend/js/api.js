@@ -100,3 +100,5 @@ export async function streamFrames(params, { signal, onStart, onFrame, onEnd, on
 export const getScene3D = (params, signal) => getJSON('/api/scene3d', params, signal);
 export const getCoverage = (signal) => getJSON('/api/coverage', {}, signal);
 export const getSystem = (id, signal) => getJSON(`/api/system/${encodeURIComponent(id)}`, {}, signal);
+/** Objects (planets, the Moon, small bodies, later catalogues) for the 3D fly-through: schema space-maps.objects/1. */
+export const getObjects = (params, signal) => getJSON('/api/objects', params, signal);

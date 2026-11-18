@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -460,3 +462,109 @@ def test_response_is_json_serialisable_end_to_end(monkeypatch):
     monkeypatch.setattr(movers, "skybot_cone", _fake_skybot([CERES, COMET]))
     r = _get()
     json.loads(r.text)
+
+
+# --- hosted static kinds (exoplanets) and their stars, through the objects dir ----------------
+
+NEA_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build_objects_nea.py"
+
+
+def _nea_script():
+    spec = importlib.util.spec_from_file_location("build_objects_nea", NEA_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["build_objects_nea"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _nea_row(mod, name, host, ra, dec, vmag, dr3):
+    r = {c: "" for c in mod.COLUMNS}
+    r.update(pl_name=name, hostname=host, pl_letter=name.split()[-1], ra=str(ra), dec=str(dec),
+             discoverymethod="Transit", disc_year="2016", sy_pnum="2", gaia_dr3_id=f"Gaia DR3 {dr3}",
+             sy_dist="12.4", sy_plx="80.4", sy_vmag=str(vmag), pl_orbper="1.5", pl_orbsmax="0.0115",
+             pl_bmassj="0.004", pl_bmassprov="Mass", pl_rade="1.1", pl_radelim="0",
+             pl_tranmid="2457322.5", pl_bmassj_reflink="<a href=x>Agol et al. 2021</a>",
+             pl_orbper_reflink="<a href=x>Agol et al. 2021</a>")
+    return r
+
+
+@pytest.fixture
+def nea_dir(tmp_path, monkeypatch):
+    """A tiny exoplanet dataset (3 planets of 2 hosts, built by the real script code) as OBJECTS_DIR."""
+    mod = _nea_script()
+    rows = [_nea_row(mod, "Bright b", "Bright", 150.0, 2.0, 6.0, 1001),
+            _nea_row(mod, "Bright c", "Bright", 150.0, 2.0, 6.0, 1001),
+            _nea_row(mod, "Faint b", "Faint", 150.4, 2.2, 15.0, 1002),
+            _nea_row(mod, "Far b", "Far", 250.0, -40.0, 9.0, 1003)]
+    mod.build_from(rows, [], [], {"catalogue": "t", "version": "v"}, "2026-11-18", tmp_path / "objs" / "nea-exoplanets")
+    monkeypatch.setattr(config, "OBJECTS_DIR", tmp_path / "objs")
+    objects.reset_sources()
+    return tmp_path / "objs"
+
+
+def test_exoplanets_and_hosts_merge_cone_only_by_host_position(nea_dir):
+    j = _get(ra=150.0, dec=2.0, radius=1.0, kinds="exoplanet,star").json()
+    assert j["query"]["kinds"] == ["star", "exoplanet"]
+    assert sorted(_ids(j, "exoplanet")) == ["nea:Bright b", "nea:Bright c", "nea:Faint b"]
+    assert sorted(_ids(j, "star")) == ["gdr3:1001", "gdr3:1002"]
+    assert all(o["in_cone"] is True for o in j["objects"])
+    for k in ("exoplanet", "star"):
+        assert j["kinds"][k] == {"status": "ok", "source": "static:nea-exoplanets",
+                                 "count": 3 if k == "exoplanet" else 2, "truncated": False}
+    row = next(s for s in j["sources"] if s["id"] == "static:nea-exoplanets")
+    assert row["status"] == "ok" and row["count"] == 5 and row["dropped"] == 0
+    assert row["provenance"]["catalogue"] == "t"
+
+
+def test_a_cone_away_from_the_host_does_not_return_its_planets(nea_dir):
+    j = _get(ra=150.0, dec=3.5, radius=0.5, kinds="exoplanet,star").json()   # 1.5 deg from Bright
+    assert _ids(j) == []
+    j = _get(ra=150.0, dec=3.0, radius=1.1, kinds="exoplanet").json()        # Bright is 1.0 deg away: inside
+    assert "nea:Bright b" in _ids(j)
+    j = _get(ra=250.0, dec=-40.0, radius=0.5, kinds="exoplanet").json()
+    assert _ids(j) == ["nea:Far b"]
+
+
+def test_in_cone_is_the_hosts_direction_not_a_file_property(nea_dir):
+    # Faint is 0.45 deg from (150, 2): the cone of 0.2 deg does not hold it, so it is filtered, not in_cone false
+    j = _get(ra=150.0, dec=2.0, radius=0.2, kinds="exoplanet").json()
+    assert sorted(_ids(j)) == ["nea:Bright b", "nea:Bright c"]
+
+
+def test_records_are_served_with_string_src_and_validate(nea_dir):
+    j = _get(ra=150.0, dec=2.0, radius=1.0, kinds="exoplanet,star").json()
+    for o in j["objects"]:
+        assert objects.validate_record(o) == []
+        srcs = [q["src"] for q in o["props"].values()]
+        assert all(isinstance(x, str) for x in srcs) and isinstance(o["position"].get("src", ""), str)
+    planet = next(o for o in j["objects"] if o["id"] == "nea:Bright b")
+    assert planet["position"]["elements"]["period_d"]["src"] == "NEA pscomppars: Agol et al. 2021"
+    assert planet["position"]["host_radec"] == [150.0, 2.0] and "in_cone" in planet
+
+
+def test_exoplanets_are_ordered_by_host_magnitude_and_truncated_per_kind(nea_dir):
+    j = _get(ra=150.0, dec=2.0, radius=1.0, kinds="exoplanet,star", limit=2).json()
+    assert _ids(j, "exoplanet") == ["nea:Bright b", "nea:Bright c"]          # the faint host's planet is cut
+    assert j["kinds"]["exoplanet"]["truncated"] is True and j["kinds"]["exoplanet"]["count"] == 2
+    assert _ids(j, "star") == ["gdr3:1001", "gdr3:1002"] and j["kinds"]["star"]["truncated"] is False
+    j = _get(ra=150.0, dec=2.0, radius=1.0, kinds="exoplanet,star", limit=1).json()
+    assert j["kinds"]["star"]["truncated"] is True and _ids(j, "star") == ["gdr3:1001"]
+    assert j["kinds"]["exoplanet"]["truncated"] is True
+
+
+def test_kinds_filter_skips_the_exoplanet_dataset(nea_dir):
+    j = _get(ra=150.0, dec=2.0, radius=1.0, kinds="planet").json()
+    assert "static:nea-exoplanets" not in [s["id"] for s in j["sources"]]
+    assert "exoplanet" not in j["kinds"]
+    assert "exoplanet" in objects.served_kinds() and "star" in objects.served_kinds()
+
+
+def test_the_real_committed_dataset_serves_trappist_1_through_the_route(monkeypatch):
+    monkeypatch.setattr(config, "OBJECTS_DIR", Path(__file__).resolve().parents[2] / "frontend" / "data" / "objects")
+    objects.reset_sources()
+    j = _get(ra=346.626, dec=-5.043, radius=0.5, kinds="exoplanet,star").json()
+    ids = _ids(j, "exoplanet")
+    assert [i for i in ids if i.startswith("nea:TRAPPIST-1 ")] == [f"nea:TRAPPIST-1 {c}" for c in "bcdefgh"]
+    assert "gdr3:2635476908753563008" in _ids(j, "star")
+    assert j["kinds"]["exoplanet"]["status"] == "ok" and all(o["in_cone"] for o in j["objects"])
+    assert next(s for s in j["sources"] if s["id"] == "static:nea-exoplanets")["dropped"] == 0

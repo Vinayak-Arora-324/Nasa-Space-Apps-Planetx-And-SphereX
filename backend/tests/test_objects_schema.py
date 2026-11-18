@@ -311,14 +311,14 @@ def test_cone_contains_state_uses_geo_and_fixed_uses_ra_dec():
     ast = load("asteroid")  # geo 149.98072, 2.00882
     assert objects.cone_contains(ast, 150.0, 2.0, 0.1)
     assert not objects.cone_contains(ast, 160.0, 2.0, 0.1)
-    cl = load("cluster")  # 56.6, 24.1, angular major 1.3 deg
-    assert objects.cone_contains(cl, 56.6, 24.1, 0.01)
+    cl = load("cluster")  # Pleiades, 56.68, 24.11
+    assert objects.cone_contains(cl, 56.68, 24.11, 0.01)
 
 
 def test_cone_contains_adds_the_angular_radius():
-    cl = load("cluster")  # radius 0.65 deg
-    assert objects.cone_contains(cl, 56.6, 25.0, 0.5)       # 0.9 deg away < 0.5 + 0.65
-    assert not objects.cone_contains(cl, 56.6, 25.0, 0.2)   # 0.9 deg away > 0.2 + 0.65
+    cl = load("cluster")  # Pleiades: angular major 2.29 deg, so a radius of 1.146 deg; 1.9 deg north of it at dec 26.0
+    assert objects.cone_contains(cl, 56.68, 26.0, 1.0)      # 1.9 deg away < 1.0 + 1.146
+    assert not objects.cone_contains(cl, 56.68, 26.0, 0.5)  # 1.9 deg away > 0.5 + 1.146
 
 
 def test_an_orbit_is_seen_where_its_host_is():

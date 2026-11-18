@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation.
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved 2026-11-18 (decisions in §16.18).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -89,6 +89,10 @@ Rsun Rjup Rearth arcsec/h`. `lo`/`hi` are a 1σ or 16–84 % interval, as `src` 
 If the phase or orientation is unknown (`phase_known: false`), the drawn point on the orbit is illustrative, and so is
 the record's `evidence` (§3).
 
+> **Phase 1 change (§16.3, §16.5, §16.6):** an `orbit` position may carry `host_radec` (the host's direction, used for
+> tiling and the cone test) and the element `t_conj_mjd`. An orbit whose `i_deg` or `node_deg` is `null` is
+> `illustrative` too, not only one with an unknown phase. The client evaluates it at the payload's `query.mjd`.
+
 ### 2.3 Provenance
 
 ```json
@@ -118,6 +122,7 @@ the record's `evidence` (§3).
 | `bh` | project-curated black-hole list (each record cites its paper) | 2 | `bh:Sgr A*`, `bh:Gaia BH1` |
 | `gal` | project-curated special galaxies with no catalogue id that fits (the Milky Way) | 2–3 | `gal:milky_way` |
 | `test` | fixtures only | 0 | `test:a` |
+| `neahost` | NASA Exoplanet Archive `hostname`, for hosts with no Gaia or Hipparcos id (**Phase 1 change**, §16.4) | 1 | `neahost:OGLE-2005-BLG-390L` |
 
 Every object has exactly one `id`, chosen by the source in a fixed precedence. All other names go in
 `designations`. For example, Pluto from SkyBoT is `mp:134340` with name `Pluto`. When two sources return the same
@@ -144,6 +149,11 @@ The star renderer uses the same ids as frame-host keys. `_starKey` changes from 
 
 Stars are kind `star`. It is used for ids and dispatch, but never sent as an object record in Phase 0. Phase 1 may
 send `star` records for exoplanet hosts missing from the star payload (§13).
+
+> **Phase 1 change (§16.4, §16.7):** exoplanet `props` are `mass` | `msini`, `disc_method`, `disc_year`,
+> `disc_facility` and `controversial`. Period and semi-major axis live in `position.elements` and the radius in
+> `size.radius`. The server sends a `star` record for **every** host in the cone, because it cannot know what the star
+> payload holds. The client uses one only when the star is missing, and matches through the new `same_as` field.
 
 The Sun is both star 0 of the star pipeline and the `sun` object record, and the two roles never overlap:
 - **Star 0** is the host sphere in the system frame and a star point seen from afar.
@@ -174,7 +184,7 @@ The record's `evidence` describes **where the object is drawn**:
 | `derived` | The object is real, but its placement rests on a relation with real assumptions. | photometric or kinematic nebula distances, redshift (Hubble-flow) galaxy distances |
 | `illustrative` | The drawn placement is a stand-in. | an exoplanet at an unknown orbital phase |
 
-- **Validator rule.** The record's evidence may not be stronger than its position allows. A position tier of `measured` or `catalogue` allows at most `measured`, `inferred` allows at most `derived`, and `illustrative` allows only `illustrative`. For `fixed` positions the governing tier is `dist.tier`. For `orbit` positions with `phase_known: false` the record must be `illustrative`. The backend rejects records that break the rule: the record is dropped, counted and logged, and the request does not fail. The rule is also tested.
+- **Validator rule.** The record's evidence may not be stronger than its position allows. A position tier of `measured` or `catalogue` allows at most `measured`, `inferred` allows at most `derived`, and `illustrative` allows only `illustrative`. For `fixed` positions the governing tier is `dist.tier`. For `orbit` positions with `phase_known: false` the record must be `illustrative`. **Phase 1 change (§16.5):** orbits with an unknown inclination or node, or with an `illustrative` element, must be `illustrative`, and `method: assumed` caps a `fixed` distance at `illustrative`. The backend rejects records that break the rule: the record is dropped, counted and logged, and the request does not fail. The rule is also tested.
 - **Evidence view.**
   - It hides records whose evidence is `illustrative`.
   - It draws every other record in its renderer's *evidence style*, with no illustrative appearance. Star glows already go today.
@@ -327,7 +337,7 @@ template for Phase 1 build scripts).
 ```
 **Tile** `tiles/11-14.json`: `{ "format": "space-maps.object-tiles/1", "tile": "11-14", "objects": [ records ] }`.
 
-Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`.
+Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`. **Phase 1 change (§16.3):** records of a hosted kind (`exoplanet`) may instead use an `orbit` position with a `host` and `position.host_radec`, and are tiled by that direction.
 
 **Reproducibility.**
 - `write_dataset()` writes sorted keys, a stable record order (by id), `separators=(",", ":")` and no timestamps (the build stamp is the script version plus `source_sha256`, not the build time).
@@ -368,6 +378,9 @@ registerKind({
 });
 ```
 Phase 0 registers `planet`, `moon`, `dwarf_planet`, `asteroid` and `comet`.
+
+> **Phase 1 change (§16.7, §16.10):** `frames[frame]` may be a function `(o) → renderer`. `billboard` is implemented
+> for clusters. Galaxy-frame markers honour `markerStyle` (hollow for derived records). Specs gain `hosted`.
 
 `star` is registered with the same fields, plus `builtin: true`. Its pick, position, card and go come from
 `scene3d.js`'s columnar star code, not the store, which keeps the special case explicit. Kinds the server sends that
@@ -505,7 +518,7 @@ observer: the intro hand-off already relies on this for stars, whose parallax be
 markers and labels are replaced by one group marker at the host, "Solar system · 14 objects in the patch".
 - The count includes only visible objects.
 - Picking the group shows a card with counts per kind and a "Go there" that opens the Solar system scene.
-- The group is generic over `host`. Phase 1 exoplanet systems get it for free ("Kepler-90 · 8 planets").
+- The group is generic over `host`. Phase 1 exoplanet systems get it for free ("Kepler-90 · 8 planets"). **Phase 1 change (§16.8):** a non-Sun host groups from one visible record, its label names the kind ("TRAPPIST-1 · 7 exoplanets"), and picking it selects the host star, whose card lists the planets.
 
 **Evidence view.** Markers are annotations of measured placements, as star labels are, so they stay. Illustrative
 records are hidden as everywhere else.
@@ -765,6 +778,8 @@ Commits, in logical steps:
 
 ## 13. What Phase 1 will plug in (checklist)
 
+Phase 1's design and status are in §16; the boxes below are ticked when it lands.
+
 - [ ] `backend/scripts/build_objects_nea.py` and `build_objects_hr23.py` (pinned sources), producing `frontend/data/objects/{nea-exoplanets,hr23-clusters}/`.
 - [ ] Allow hosted static kinds in tiles (`position.host_radec`, §10 note).
 - [ ] Map Exoplanet Archive hosts to `gdr3:` ids from the archive's Gaia DR3 cross-id column. Fall back to `hip:`, and for hosts missing from the star payload, send `star` records.
@@ -797,3 +812,666 @@ These were settled while building Phase 0. Where they differ from the sections a
 - **Partial failure of a kind.** If one of two sources serving a kind fails, the kind stays `ok` and carries an `error` string naming the failed source. `count` counts the records kept after dedupe and `limit`.
 - **Frame levels** carry a `hosted` flag. `system` levels are entered by distance to a host star; unhosted outer levels by distance from the Sun.
 - **Not yet verified live:** the exact SkyBoT `Class` string for comets. The classifier also accepts comet designations in the name, so either form works.
+
+## 16. Phase 1: exoplanets and star clusters (design)
+
+Status: **approved 2026-11-18** with the decisions in §16.18, which take precedence over the text above them. Phase 0 sections that Phase 1 changes carry a "Phase 1 change"
+note pointing here. Where this section and an earlier one disagree, this one wins.
+
+Facts below about the NASA Exoplanet Archive and Gaia were checked against the live services on 2026-11-18. **CDS
+(VizieR, cdsarc, TAPVizieR and every mirror tried) was down all day** ("Page unavailable — CDS"; the CfA mirror
+reports "database is not currently reachable"). The Hunt & Reffert column names, counts and sizes in §16.9 are
+therefore **unverified, from the papers as I remember them**. They are marked ⚠ and get checked against the ReadMe
+before the cluster build script is written. The build script also checks them itself and fails loudly on a mismatch.
+
+### 16.1 Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| Exoplanet source | NASA Exoplanet Archive `pscomppars` (6,470 planets, 4,862 hosts on 2026-11-18). TAP has no dated snapshots, so the **committed, gzipped CSV snapshot is the pin** (§16.2). |
+| Host ids | `gaia_dr3_id` (4,491 of 4,862 hosts, 92.4 %), then `gaia_dr2_id` → DR3 through `gaiadr3.dr2_neighbourhood` (26 of 28), then `hip:` (14), then a Gaia DR3 positional match (non-microlensing hosts only), then a new `neahost:<hostname>` id. Details and rates in §16.4. |
+| Tiles | Hosted kinds (`exoplanet`) may be stored in tiles as `orbit` positions with `position.host_radec`. Tiling, cone filtering and `in_cone` use that direction (§16.3). |
+| Positions | `orbit` model evaluated **once per payload, at the payload's `query.mjd` (TDB)**, the same instant as the solar system. No animation in Phase 1. The Kepler solver and sky-plane convention are in §16.6. |
+| Unknown orientation | The archive has no node (Ω) column, so **every exoplanet's drawn placement is `illustrative`**. Unknown Ω, i, ω and phase come from a documented per-id hash, and the card labels them as assumed. |
+| Mass and radius | `pl_bmassprov`: `Mass` → `mass` (measured); `Msini` → `msini`, **never `mass`**; `M-R relationship` → `mass` with tier `inferred`. A radius whose reflink is `Calculated Value` (1,544 rows) has tier `inferred`. |
+| Host stars | The `nea-exoplanets` dataset also holds one `star` record per host. The client uses one only when the star payload lacks that star (or an alias of it), and then adds it as a real star, so it can be picked, used as a frame host and flown to. |
+| Cluster source | Hunt & Reffert. Version: **HR24 (`J/A+A/686/A42`) if it re-releases all HR23 clusters with the same names plus masses, Jacobi radii and the bound/unbound `kind`; otherwise HR23 (`J/A+A/673/A114`)**. This depends on CDS (question Q1). Ids stay `hr23:<name>` either way. |
+| Billboard | A camera-facing quad with a Plummer-profile glow sized by `r50` (illustrative look). In the Evidence view it becomes a centre marker plus an `r50` outline ring, both measured placement. |
+| Member highlight (stretch) | **Deferred as a follow-up** (§16.12): the members table is about 1.3 M rows ⚠, far over the size budget. |
+| Hollow (derived) marker | **Implemented.** Clusters whose parallax distance is prior-dominated (parallax S/N < 5) get `evidence: derived` and use it (§16.9). |
+| Truncation UI | Per-kind `truncated` reaches the HUD counts and the warning line, e.g. "2,000 brightest small bodies (more in this cone)" (§16.11). |
+
+### 16.2 Build scripts, pins and reproducibility
+
+Both scripts follow `build_objects_fixture.py`: `ROOT/"frontend"/"data"/"objects"/<dataset>`, `httpx` with timeouts,
+usage in the docstring, `objects_static.write_dataset()` for tiling, hashing and validation, and `--check`.
+
+**Source snapshots are committed** under `backend/data/sources/<dataset>/` (§16.18 D3), written with `gzip -n` semantics
+(no name or mtime, so the bytes are deterministic). A rebuild needs no network, and `--check` is a true byte-for-byte
+test. This matters more than usual today, with both CDS and the ESA Gaia archive down.
+
+| | `build_objects_nea.py` | `build_objects_hr23.py` |
+|---|---|---|
+| Source | `https://exoplanetarchive.ipac.caltech.edu/TAP/sync`, `select <fixed column list> from pscomppars order by pl_name`, CSV | the CDS clusters table of the pinned catalogue (`.dat` + ReadMe byte-by-byte) ⚠ |
+| Pin | `pscomppars-2026-11-18.csv.gz` (expected ~1.3 MB; the 40-column raw CSV is 11.6 MB and 1.25 MB gzipped, the HTML reflinks being most of it). The query text, retrieval date and sha256 of the uncompressed CSV go in `manifest.provenance`. | VizieR id + sha256 of the `.dat` file. The ReadMe is checked by sha256 too, and the extracted columns are committed as `clusters.csv.gz` (expected < 1 MB ⚠). |
+| Side inputs (also committed) | `gaia-dr2-dr3.csv` (DR2→DR3 for DR2-only hosts) and `gaia-positional.csv` (positional fallback), both from Gaia TAP. ESA `gea.esac.esa.int` is tried first, then ARI `gaia.ari.uni-heidelberg.de/tap` (the same mirror order the star pipeline uses). | none |
+| Default run | builds from the committed snapshot | builds from the committed snapshot |
+| `--refresh` | downloads a new snapshot (today's date in the file name) and the side inputs, then builds | downloads the pinned file, verifies its sha256, re-extracts, then builds |
+| `--local FILE` | build from a given CSV | build from a given `.dat` |
+| `--check` | rebuild into a temp dir and byte-compare with the committed dataset; exit 1 on a difference. It also runs `verify_dataset` (tile hashes, counts, validity, tile placement). | same |
+| Report | prints and writes into `manifest.build.report`: rows read, records written, rows excluded by reason, host match rates per ladder step | rows read, written, excluded, and counts per type and per evidence |
+
+Pins are refreshed only by an explicit `--refresh` run in a commit of its own, so data changes are reviewable.
+
+### 16.3 Hosted records in tiles (changes §6)
+
+- `objects.HOSTED_KINDS = ("exoplanet",)`. This is the backend mirror of the registry's `hosted: true`.
+- An `orbit` position may carry `host_radec: [ra, dec]` (degrees, ICRS): the host's direction from the geocentre.
+  - It is optional in the schema.
+  - It is required for tile records.
+  - The validator checks ranges as for `fixed`.
+- `objects.sky_position()` returns `host_radec` for `orbit` positions. So `cone_contains`, the merge's cone filter and
+  `in_cone` treat an exoplanet as sitting on its host: cone-only, like Gaia stars.
+- `write_dataset()` accepts either kind of record:
+  - a `fixed` position with `host: null` (as before); or
+  - a kind in `HOSTED_KINDS` with an `orbit` position, a non-null `host` and `host_radec`.
+- Tiles are chosen by `sky_position()`, and `verify_dataset()`'s wrong-tile check uses the same function.
+- Hosted kinds have no angular extent, so `max_extent_deg` is unaffected.
+
+### 16.4 Exoplanet records (`nea-exoplanets`, kinds `exoplanet` and `star`)
+
+**Exclusions:**
+- 7 planets with neither period nor semi-major axis.
+- Planets of hosts with neither `ra`/`dec` (none today) nor any id.
+
+Both are counted in the build report.
+
+**Host id ladder** (one id per `hostname`; no host has inconsistent ids across its planets):
+
+| Step | Rule | Hosts (2026-11-18) |
+|---|---|---|
+| 1 | `gaia_dr3_id` present (strip `"Gaia DR3 "`) → `gdr3:<id>` | 4,491 (92.4 %) |
+| 2 | only `gaia_dr2_id` → `gaiadr3.dr2_neighbourhood`, the closest neighbour within 100 mas with \|ΔG\| ≤ 1 mag (Torra et al. 2021). Note: DR2 and DR3 ids differ for 13 of these 28, and also for Proxima Cen, so a DR2 id is never reused as DR3. | 26 of 28 (787 mas and 126 mas rejected; those go on down the ladder) |
+| 3 | `hip_name` → `hip:<n>`. The scene's bright context stars are keyed `hip:`. | 14 |
+| 4 | positional: a Gaia DR3 source within 1.5″ of the archive position, with \|G − `sy_gaiamag`\| ≤ 0.5 when known, unique within 1.5″. **Skipped for microlensing hosts**, whose lenses Gaia does not see (a match would be the blended source star). | ≤ 47 (the non-microlensing coordinate-only hosts) |
+| 5 | `neahost:<hostname>` (new namespace) | ~282 microlensing + leftovers |
+
+Steps 2–5 are expected to bring the share of hosts with a Gaia id to about 93 %. The real numbers come from the build
+report.
+
+**Exoplanet record fields:**
+
+| Field | From | Tier / rule |
+|---|---|---|
+| `id`, `name` | `nea:<pl_name>`, `pl_name` | |
+| `designations` | `<hd_name> <pl_letter>`, `<hip_name> <pl_letter>`, when they differ from the name | |
+| `host`, `parent` | the host id from the ladder | |
+| `position.model` | `orbit`, with `host_radec` = the archive `ra`, `dec` | |
+| `elements.period_d` | `pl_orbper`, with `lo`/`hi` from err1/err2 | `measured`. If missing (356 rows), from `a` and `st_mass` by Kepler III (342 rows): `inferred`, src "derived from a and M★ (Kepler III)". |
+| `elements.a_au` | `pl_orbsmax` (± errs) | `catalogue` (usually the authors' own Kepler III). If missing (498), from P and `st_mass` (490 rows): `inferred`. With no `st_mass` (1 row), M★ = 1 M☉ is assumed: `illustrative`. |
+| `elements.e` | `pl_orbeccen` (± errs) | `measured`. If missing (1,070), `v: 0`, `illustrative`, src "assumed circular (no eccentricity in the archive)". |
+| `elements.i_deg` | `pl_orbincl` (± errs) | `measured`; `null` when missing |
+| `elements.omega_deg` | `pl_orblper` | `measured`; `null` when missing |
+| `elements.t_peri_mjd` | `pl_orbtper − 2400000.5` | `measured`; `null` when missing |
+| `elements.t_conj_mjd` (**new optional element**) | `pl_tranmid − 2400000.5`: the time of inferior conjunction, which is the transit mid-time for transiting planets (51 Peg b has one without transiting) | `measured` (± err) |
+| `elements.node_deg` | always `null`: the archive has no Ω | |
+| `phase_known` | `true` when `t_conj_mjd` or `t_peri_mjd` is present (5,884 of 6,470) | |
+| `position.tier`, `evidence` | `illustrative` for every record, because Ω is unknown (validator rule, §16.5) | |
+| `size.radius` | `pl_rade` (± errs), unit `Rearth` | `measured`. If `pl_rade_reflink` is `Calculated Value`, `inferred`, src "archive-calculated from mass (Chen & Kipping 2017)". Limits (`pl_radelim ≠ 0`, 5 rows) and missing values (50) → `null`. |
+| `props.mass` | `pl_bmassj` (± errs), unit `Mjup`, when `pl_bmassprov` is `Mass` or `Msin(i)/sin(i)` | `measured` / `catalogue` |
+| `props.mass` | the same, when `pl_bmassprov` is `M-R relationship` (calculated reflink) | `inferred`, src "archive-calculated from radius (Chen & Kipping 2017)" |
+| `props.msini` | `pl_bmassj` when `pl_bmassprov` is `Msini` | `measured`; shown as "Minimum mass (M sin i)", never as mass |
+| `props.disc_method`, `disc_year`, `disc_facility` | as named | `catalogue` |
+| `props.controversial` | `pl_controv_flag = 1` (58 planets) → `v: "yes"` | `catalogue`. The card adds a note. |
+| `render.mag` | `sy_vmag` of the host | used for the per-kind limit order ("brightest" = brightest hosts) |
+| `provenance` | compact in tiles: `{source, dataset, catalogue, version}`. The full citation, acknowledgement and query are in the manifest and in `/api/objects` `sources[].provenance`. | |
+
+Quantity `src` strings are `"NEA pscomppars: <reference>"`, where the reference is the reflink's link text with HTML
+entities decoded (for example `NEA pscomppars: Agol et al. 2021`).
+
+**Change to §2.5:** `period`, `a` and `radius` live only in `position.elements` and `size.radius`, never duplicated
+in `props`. `msini`, `disc_facility` and `controversial` are added.
+
+**Host `star` records** (one per host; `kind: "star"`):
+- `fixed` at the archive `ra`/`dec`, with `dist` = `sy_dist` (± errs).
+- The distance method and tier depend on where the distance came from:
+
+  | Case | `method` | Tier |
+  |---|---|---|
+  | a parallax is given (`sy_plx`) | `parallax` | `measured` |
+  | a microlensing host without a parallax | `lens-model` (**new method**) | `inferred` → evidence `derived` |
+  | otherwise | `assumed` | `illustrative` |
+
+- `props`: `teff`, `radius` (Rsun), `mass` (Msun), `spectral_type`, `vmag`, `gmag`, `n_planets` (`sy_pnum`), all with
+  their reflinks as `src`.
+- **`same_as`** (a **new optional record field**, a list of ids): the host's other ids, such as `hip:113357` for
+  51 Peg.
+- `render.mag` is `sy_vmag`.
+- Star records are cone-filtered by their own position, like everything else.
+
+**Size.** Estimated at ~8.5 MB for the exoplanet records plus ~1.5 MB for the stars, so **~10 MB on disk and ~0.8 MB
+compressed in git**. That is at the ~10 MB line, so see question Q2. If it must be smaller, the levers are:
+- drop the `lo`/`hi` intervals on `a`, `e` and `i` (about −15 %);
+- shorten quantity `src` to the reference id (about −10 %).
+
+### 16.5 Schema and validator changes (changes §2.2–§2.4, §3)
+
+All of these are additive, so the schema stays at version 1.
+
+**Additions:**
+- `position.host_radec` (orbit positions).
+- `elements.t_conj_mjd`.
+- The record field `same_as` (a list of ids).
+- The namespace `neahost`.
+- The method `lens-model`.
+- Validator: `star` records and `same_as` ids are validated like `host`.
+
+**New evidence rules** (also tested):
+1. An `orbit` position whose `i_deg` or `node_deg` is `null`, or whose `phase_known` is false, must have
+   `position.tier: illustrative`. The record is then `illustrative` through the existing tier cap. An orbit is
+   placed in 3D only when its orientation and phase are both known.
+2. An `orbit` element with tier `illustrative` (assumed e, a from an assumed M★) forces `position.tier: illustrative`.
+3. `method: assumed` on a `fixed` position forces `dist.tier: illustrative`.
+
+The backend rejects records that break these rules, and the build scripts refuse to write them.
+
+### 16.6 Client-side orbit evaluation (`frontend/js/blink/scene3d-orbits.js`, new, pure)
+
+- **Time base.** `t` = the objects payload's `query.mjd` (TDB), the instant the solar system is drawn at.
+  - The archive epochs are BJD_TDB; minutes of difference are irrelevant here.
+  - Placement is computed once per ingest and again when host positions change (§16.7).
+- **Kepler solver.**
+  - Mean anomaly `M = n (t − t_peri)`, with `n = 2π / P`.
+  - Solve `E − e sin E = M` by Newton's method, starting from `E₀ = M + e sin M` (or `π` when `e > 0.8`), until
+    `|ΔE| < 1e-12`, at most 50 iterations.
+  - `e` is clamped to [0, 0.99].
+  - Then `ν = 2 atan2(√(1+e) sin(E/2), √(1−e) cos(E/2))` and `r = a (1 − e cos E)`.
+- **Sky-plane basis at the host** (from `host_radec`):
+  - `û` is the unit vector from Earth to the host.
+  - `N̂` (north) = `(−sin δ cos α, −sin δ sin α, cos δ)`; `Ê` (east) = `(−sin α, cos α, 0)`; `Ẑ = −û` (toward the observer).
+  - With `u = ω + ν`:
+    - `X_N = r (cos Ω cos u − sin Ω sin u cos i)`
+    - `Y_E = r (sin Ω cos u + cos Ω sin u cos i)`
+    - `Z = r sin u sin i`
+  - ICRS `xyz_au = X_N N̂ + Y_E Ê + Z Ẑ`.
+  - With this convention inferior conjunction (transit) is at `u = 90°`. The planet is then between its star and Earth,
+    which a test checks.
+- **Phase.**
+  - With `t_conj_mjd` (preferred: recent and precise), `ν_c = 90° − ω` → `E_c` → `M_c`, and `t_peri = t_conj − M_c / n`.
+  - Otherwise `t_peri_mjd` is used directly.
+  - Otherwise the mean anomaly at MJD 51544.5 (J2000) is assumed.
+  - The phase uncertainty at `t`, `σ_M = 360° · |t − T₀| · σ_P / P²`, is reported. Above 90° the card says the phase is
+    "effectively unknown at this date".
+- **Assumed values (illustrative, deterministic per id).**
+  - `h(id, salt)` is FNV-1a 32-bit over the UTF-8 bytes of `id + "#" + salt`, divided by 2³². It is documented with
+    test vectors.
+  - `Ω = 360° · h(id, "node")`, always (no archive value).
+  - `i` when unknown: 90° if the planet transits (`disc_method` Transit or `t_conj_mjd` present); otherwise
+    `acos(h(id, "incl"))`, an isotropic prograde draw.
+  - `ω` when unknown and `e > 0`: `360° · h(id, "omega")`; with `e = 0`, 0.
+  - `M₀` when the phase is unknown: `360° · h(id, "phase")` at J2000.
+- **API.**
+  - `orbitPlacement(rec, mjd) → { xyzAu, assumed: { node, incl, omega, phase, ecc }, phaseSigmaDeg }`
+  - `orbitPath(rec, n = 180) → [[x, y, z]…]`, in AU relative to the host, with the same orientation.
+  - Cards read `assumed` to label rows.
+- **Why not store the assumed values in the tiles?** The tiles then hold only catalogue values, with `null` meaning
+  unknown. The assumption is one documented client rule, and the 2D rewind (or any other client) can reproduce it from
+  the test vectors.
+
+### 16.7 Frontend: store, host resolution and kinds
+
+**`scene3d-objects.js` (store):**
+- `ingest` keeps `star` records in `store.stars` (id → record) instead of skipping them. They are not drawn by the store.
+- `_placeRecord` gains an `orbit` branch: `sysAu = orbitPlacement(o, query.mjd).xyzAu`, and `galPc = hostPc + sysAu / AU_PER_PC`.
+- `setHostResolver({ key(hostId) → starKey | null, pc(starKey) → [x, y, z] | null })` re-places hosted non-Sun
+  records. Entries carry `host` = the **resolved star key**, so `inHost`, `groupState`, `planGo` and the frame host
+  all compare against the key the star renderer uses.
+- `childrenOf(starKey) → records` whose resolved `parent` is that star. This ignores layers and evidence, because
+  existence is measured.
+
+**`scene3d.js` `_rebuildStars`:**
+- After the Gaia rows and context stars, it appends each `star` record whose id and `same_as` ids are all absent from
+  the loaded keys. Each appended star gets:
+  - `meta.kind: 'obj'` and key = its record id;
+  - position `radecToXyz(ra, dec, dist)`;
+  - absolute magnitude from `gmag` (else `vmag`) and the distance;
+  - colour from `teff` (illustrative), defaulting to a Sun-like BP−RP.
+- Star records without a distance are not appended. Their planets cannot be placed, but they still appear in cards.
+- It then builds the alias map (record id or `same_as` → loaded key) and calls `store.setHostResolver`.
+- `setObjects` reruns this when the set of star records changes.
+- `_starIdx` becomes a `Map` lookup: it is now called per hosted record, which with ~20k stars would be a linear scan
+  each time.
+- Appended stars with a `gdr3:` id still fetch `/api/system/<id>` for their card.
+
+**Registry:**
+- `frames[frame]` may be a function `(o) → renderer` (**change to §7.1**), so that an exoplanet with a radius is a
+  `sphere` and one without is a `point`. `rendererOf(spec, frame, o)` resolves it.
+- `registerLayer({ id: 'exoplanets', label: 'Exoplanets', group: 'beyond' })` and
+  `{ id: 'clusters', label: 'Star clusters', group: 'beyond' }`. The panel gains the group "Beyond the Solar system".
+  Persistence is unchanged: the same `blink.scene3d.layers` map, defaults on.
+- **`exoplanet`** spec:
+
+  | Field | Value |
+  |---|---|
+  | `layer` | `exoplanets` |
+  | `noun` | `exoplanet(s)` |
+  | `hosted` | `true` |
+  | `frames` | `{ system: (o) => (radius ? 'sphere' : 'point'), galaxy: 'marker' }` |
+  | `galaxyScope` | `'cone'` |
+  | `pick` | `{ priority: 10, marker: 15 }` |
+  | `label` | `{ key: () => 20, max: 12, hideOverDiscPx: 30 }` |
+  | `arriveAu` | the radius |
+  | `collide` | `true` |
+  | `sphere` | colour by radius class, no features, no pole (all illustrative) |
+  | `card` | below |
+
+- **`cluster`** spec:
+
+  | Field | Value |
+  |---|---|
+  | `layer` | `clusters` |
+  | `noun` | `star cluster(s)` |
+  | `frames` | `{ galaxy: 'billboard' }` |
+  | `galaxyScope` | `'cone'` (centre plus extent, via the server's `cone_contains`) |
+  | `pick` | `{ priority: 25, marker: 16 }`, and only within `PICK_PX` of the centre: the glow never steals clicks from member stars |
+  | `label` | key by member count, max 12 |
+  | `go` | a galaxy-frame trip stopping at 2 × `r50` from the centre (`fly-galaxy`, already a `planGo` branch, now implemented) |
+
+**Exoplanet card** (tiers on every row; illustrative rows drop in the Evidence view as now):
+- Host.
+- Orbital period.
+- Semi-major axis.
+- Eccentricity, or "0 (assumed)".
+- Inclination, or "unknown · drawn at 63°".
+- Mass, "Minimum mass (M sin i)", or "Mass (from radius, Chen & Kipping 2017)".
+- Radius, or "Radius (from mass, …)".
+- Discovered: method, year, facility.
+- From its star now (illustrative).
+- From you.
+- Notes:
+  - "Where it is drawn on its orbit is illustrative: the orbit's orientation on the sky is not known."
+  - The phase source, for example "phase from the 2020 transit time, ±3° today".
+  - The controversial flag, when set.
+
+### 16.8 Frames, rendering and cards for non-Sun hosts
+
+These are the fixes from the inventory (file:line as of `27a7518`):
+
+| Site | Today | Phase 1 |
+|---|---|---|
+| `scene3d.js:965,995,998` `_draw` gates orbits, cone and points on `_inSun()` | non-Sun frames draw only the host and stars | points and orbit lines come from per-host buffers for the camera's current host; the cone lines stay Sun-only |
+| `scene3d.js:245` `_rebuildPoints` uses `inHost: h === ss:sun` | | rebuilt for `cam.host.key`, and also on frame change |
+| `scene3d.js:221-228` orbit circles from every `planet` | latent bug (any non-Sun `planet` would orbit the Sun) | Sun circles only from Sun-hosted planets. For another host, `lineSys` holds the exoplanet ellipses from `orbitPath`. These need both the `orbits` and `exoplanets` layers on, and they are hidden in the Evidence view, since the orientation is illustrative. |
+| `scene3d.js:92` `new ObjectStore()` with no `hostPc` | non-Sun `galPc` is always null | `setHostResolver` (§16.7) |
+| `objects.js` `groupState` needs ≥ 2 records | | for non-Sun hosts ≥ 1, so a one-planet system still gets "51 Peg · 1 exoplanet" |
+| group pick for a non-Sun host | would open a group card | selects the **host star** instead, whose card lists the planets, so the star stays pickable under its own label |
+| group label | "Name · 14" | "TRAPPIST-1 · 7 exoplanets" when all of a group's records are one kind; the Sun keeps "Solar system · 14" |
+| `scene3d.js:642` via-host with an unloaded host | silently does nothing | resolved key; if still missing, the card's Go button is disabled with "host star not in this view" |
+| `registry.js:123` `sunDistAu` | needs `host === ss:sun` | exoplanet cards use "From its star", computed from `sysAu` |
+| HUD in a non-Sun system | Gaia counts | "Near TRAPPIST-1 · 7 exoplanets (positions illustrative)" via a `hostCountText` helper |
+| `get scene` | `'solar'` only in the Sun's frame | unchanged (the Solar system pill stays Sun-only) |
+
+**Host star card.** `renderStarCard` gains `children: { title: 'Exoplanets', items: [{ name, line, tier, onGo | null }], total, hiddenNote }`:
+- The list shows every record from `store.childrenOf(starKey)`, whatever the evidence or layer state.
+- Each line is short, for example "1.51 d · 1.12 R⊕ · 1.37 M⊕" or "4.23 d · 0.47 Mj min".
+- Each item has "Go there", which runs the existing `via-host` plan.
+- In the Evidence view, or with the layer off, the items stay listed with no Go button, and the note says why. For
+  example: "Their positions on their orbits are illustrative, so the Evidence view hides them". This is the §3
+  group-marker rule: "3 exoplanets" is still counted.
+- The title of an unnamed Gaia star becomes the archive host name ("TRAPPIST-1"). For appended (`obj`) stars, the
+  card's physical rows come from the star record's props (archive values, with their reflinks as `src`).
+- Gaia stars keep their Gaia/Apsis rows. The two are not mixed.
+
+**Autopilot.** From the Stars scene, Go on a planet is `via-host`:
+1. a star trip to the resolved host;
+2. arrival in the host's system frame;
+3. `_arrived` starts the AU trip (implemented in Phase 0).
+
+Planets are spheres when they have a radius, with the host as the light source (`_drawBody` already lights from the
+frame origin).
+
+### 16.9 Star clusters (`hr23-clusters`, kind `cluster`) ⚠
+
+**Version.** HR24 (Hunt & Reffert 2024, A&A 686, A42, "Improving the open cluster census. III") re-analyses the HR23
+clusters with Jacobi radii and masses and classifies each as a bound open cluster or a moving group. If its ReadMe
+confirms all 7,167 objects with the same names and the HR23 positions, distances and ages, HR24 is the better pin:
+- the bound/unbound `kind` is exactly what the card should say;
+- the masses are worth showing.
+
+Otherwise HR23 is pinned as the checklist says. **This is Q1, and it needs CDS to come back.**
+
+**Fields** (column names to be verified ⚠):
+
+| Field | From | Tier / rule |
+|---|---|---|
+| `id` / `name` | `hr23:<Name>` (e.g. `hr23:Melotte_22`). The name is shown with `_` → space. Famous clusters get a common name from a small curated map in the build script (Pleiades, Hyades, Praesepe, …; src "curated common name"). | |
+| `designations` | the catalogue's cross-match names | |
+| `position` | `fixed`, `RAdeg`/`DEdeg` (ICRS, epoch 2016), `epoch: 2016.0`, `method: "cluster-parallax"`, `dist` = `dist50` with `lo` `dist16`, `hi` `dist84` (pc) | `measured` when the cluster's mean parallax has S/N ≥ 5. Otherwise the distance is prior-dominated: `inferred` → **evidence `derived`, hollow marker**. |
+| `size.radius` | `r50` in pc | `catalogue` |
+| `size.angular.major` | 2 × the total radius in degrees, so that the cone query and `in_cone` include the cluster's extent (`max_extent_deg` follows) | `catalogue` |
+| `props.n_members` | the number of members | `catalogue` |
+| `props.age` | `10^logAge50` in Gyr (16/84 → lo/hi) | `inferred` (CMD neural-network fit) |
+| `props.extinction` | `AV50` (16/84) | `inferred` |
+| `props.type` | open / globular / moving group | `catalogue` |
+| `props.reliable` | the paper's own quality cut (CST and CMD class) | `catalogue` |
+| `props.mass`, `props.bound` | HR24 only | `inferred` / `catalogue` |
+| `render` | `{}`. Clusters have no integrated magnitude, so labels rank by `n_members`. | |
+
+All clusters are kept, candidates included. Unreliable ones are drawn at half glow and say so on their card.
+
+### 16.10 The `billboard` renderer
+
+- **Data.** `billboardItems(visible, cam, { evidence, pxPerRad }) → [{ rel, radiusUnits, rgb, alpha, mode, pxRadius }]`
+  is pure and tested, and lives in `scene3d-objects.js`.
+  - Positions are camera-relative in doubles, then cast to float32, as with markers.
+  - The radius is `r50` converted to frame units.
+- **GL** (`scene3d.js` + `scene3d-shaders.js`).
+  - One new program. Each visible cluster is a camera-facing quad of half-size 4 × `r50`, built on the CPU each frame
+    (a cone has tens of clusters, not thousands).
+  - Additive blending, no depth write, drawn after the Milky Way and before stars.
+- **Normal view** (`mode: glow`, illustrative look).
+  - The surface brightness is a Plummer profile `(1 + (ρ/r50)²)⁻²` times `alpha`.
+  - `alpha` comes from `log10(n_members)`, halved for unreliable clusters.
+  - The colour comes from age: blue under 30 Myr, white around 300 Myr, warm over 1 Gyr. This is illustrative.
+  - Fades:
+    - `smoothstep(0.5, 2)` in camera distance / `r50`, so there is no pop entering a member star's system frame, where
+      clusters are not drawn;
+    - out when the projected `r50` is under 2 px, where only the marker shows.
+  - A small centre marker is always drawn (pick and label anchor).
+- **Evidence view** (`mode: outline`).
+  - No glow.
+  - A 1.5 px ring at `r50` (antialiased with `fwidth`), plus the centre marker.
+  - Both are measured placement: catalogue centre, distance and `r50`.
+  - Derived clusters draw a hollow centre marker and a dashed ring.
+- **Hollow marker.** `_markerData` passes `markerStyle(o)` into the point shader's existing size/alpha attributes as a
+  ring mask (`gl_PointCoord` radius test). That is the §7.1 hook, which galaxy-frame markers of any kind now honour.
+
+### 16.11 Truncation UI (Phase 0 carry-over)
+
+`scene3d-objects.js` gains pure helpers.
+
+**`countPhrase(kinds, counts, kindStatus)`:**
+- It gives "2,000 brightest small bodies (more in this cone)" when any of the kinds is `truncated`, and
+  "23 small bodies" otherwise.
+- `solarCountText` uses it for the small-body group. `hostCountText` and the galaxy-frame HUD use it for exoplanets
+  and clusters.
+- For exoplanets the wording is "2,000 exoplanets of the brightest hosts (more in this cone)".
+
+**`capNotes(kindStatus)`:**
+- One sentence per capped kind group, in the style of the Gaia sentence: "Showing the 2,000 brightest small bodies in
+  the cone; fainter ones are left out."
+- `#warn` moves out of the `data-only="stars"` wrapper. It joins the Gaia parts (Stars scene only) with these (both
+  scenes).
+- Both loaders refresh it.
+
+Tests: helper unit tests, plus a backend test that `truncated` is set per kind (it exists already).
+
+### 16.12 Stretch goal: member-star highlight → follow-up
+
+- HR23's members table is about 1.3 M Gaia DR3 sources ⚠.
+- Even reduced to `source_id` + cluster index, that is about 10–13 MB binary (more as JSON), over the size budget for
+  one dataset.
+- A per-cone live VizieR query would make the feature depend on CDS. That CDS was down all day while I wrote this is
+  the argument against.
+- The lookup itself is cheap: a `Set` of the cone's ~20k payload ids, checked against the cone's members.
+
+Recorded as a follow-up with two viable designs:
+- (a) a per-cluster member tile in the cluster dataset, only for clusters within ~500 pc (expected < 1 MB ⚠);
+- (b) a backend `/api/objects` side table, queried only for clusters in the cone.
+
+### 16.13 Example records (from real rows of the 2026-11-18 snapshot)
+
+These replace `examples/exoplanet.json` and add `examples/star_host.json`. The build script's output for these ids
+must equal them (a test), so the doc cannot drift from the data. The cluster example stays hypothetical until CDS is
+reachable. It is then replaced by the real Melotte_22 row, and the same test covers it.
+
+**TRAPPIST-1 b** (transiting; mass and radius measured; Ω unknown → illustrative):
+```json
+{
+  "id": "nea:TRAPPIST-1 b", "kind": "exoplanet", "name": "TRAPPIST-1 b", "designations": [],
+  "host": "gdr3:2635476908753563008", "parent": "gdr3:2635476908753563008",
+  "position": { "model": "orbit", "host_radec": [346.6263919, -5.0434618], "phase_known": true, "tier": "illustrative",
+    "src": "NASA Exoplanet Archive pscomppars; orientation on the sky (node) unknown",
+    "elements": {
+      "period_d":    { "v": 1.510826, "lo": 1.51082, "hi": 1.510832, "unit": "d", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" },
+      "a_au":        { "v": 0.01154, "lo": 0.01144, "hi": 0.01164, "unit": "au", "src": "NEA pscomppars: Agol et al. 2021", "tier": "catalogue" },
+      "e":           { "v": 0.00622, "lo": 0.00318, "hi": 0.00926, "src": "NEA pscomppars: Grimm et al. 2018", "tier": "measured" },
+      "i_deg":       { "v": 89.728, "lo": 89.563, "hi": 89.893, "unit": "deg", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" },
+      "omega_deg":   { "v": 336.86, "unit": "deg", "src": "NEA pscomppars: Grimm et al. 2018", "tier": "measured" },
+      "t_conj_mjd":  { "v": 57322.014193, "lo": 57322.01419, "hi": 57322.014196, "src": "NEA pscomppars: Ducrot et al. 2020", "tier": "measured" },
+      "t_peri_mjd": null, "node_deg": null } },
+  "size": { "radius": { "v": 1.116, "lo": 1.104, "hi": 1.13, "unit": "Rearth", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" }, "angular": null },
+  "props": {
+    "mass":          { "v": 0.00432309, "lo": 0.00410599, "hi": 0.00454019, "unit": "Mjup", "src": "NEA pscomppars: Agol et al. 2021", "tier": "measured" },
+    "disc_method":   { "v": "Transit", "src": "NEA pscomppars", "tier": "catalogue" },
+    "disc_year":     { "v": 2016, "src": "NEA pscomppars", "tier": "catalogue" },
+    "disc_facility": { "v": "La Silla Observatory", "src": "NEA pscomppars", "tier": "catalogue" }
+  },
+  "provenance": { "source": "static:nea-exoplanets", "dataset": "nea-exoplanets", "catalogue": "NASA Exoplanet Archive pscomppars",
+    "version": "snapshot 2026-11-18" },
+  "evidence": "illustrative",
+  "render": { "mag": 17.02 }
+}
+```
+
+**51 Peg b** (radial velocity; inclination measured, Cont et al. 2026; **radius archive-calculated → `inferred`**).
+Only the parts that differ from the shape above are shown:
+```json
+{ "id": "nea:51 Peg b", "designations": ["HD 217014 b", "HIP 113357 b"],
+  "host": "gdr3:2835207319109249920",
+  "elements": { "period_d": { "v": 4.2307966, "…": "Cont et al. 2026" }, "a_au": { "v": 0.052 }, "e": { "v": 0.0063 },
+    "i_deg": { "v": 49.8, "lo": 44.1, "hi": 55.6 }, "omega_deg": { "v": 0.0, "src": "NEA pscomppars: Naef et al. 2004" },
+    "t_peri_mjd": { "v": 52496.5 }, "t_conj_mjd": { "v": 56326.4323 }, "node_deg": null },
+  "size": { "radius": { "v": 14.1, "unit": "Rearth", "src": "NEA pscomppars: archive-calculated from mass (Chen & Kipping 2017)", "tier": "inferred" } },
+  "props": { "mass": { "v": 0.61, "lo": 0.56, "hi": 0.67, "unit": "Mjup", "src": "NEA pscomppars: Cont et al. 2026", "tier": "measured" },
+             "disc_method": { "v": "Radial Velocity" }, "disc_year": { "v": 1995 } },
+  "render": { "mag": 5.45309 } }
+```
+
+**Host star TRAPPIST-1:**
+```json
+{
+  "id": "gdr3:2635476908753563008", "kind": "star", "name": "TRAPPIST-1", "designations": ["TIC 278892590", "Gaia DR3 2635476908753563008"],
+  "same_as": [], "host": null, "parent": null,
+  "position": { "model": "fixed", "ra": 346.6263919, "dec": -5.0434618, "epoch": null, "method": "parallax",
+    "dist": { "v": 12.42988881, "lo": 12.4111822, "hi": 12.44859542, "unit": "pc", "src": "NEA pscomppars: Gaia DR2", "tier": "measured" } },
+  "size": { "radius": { "v": 0.1192, "lo": 0.1179, "hi": 0.1205, "unit": "Rsun", "src": "NEA pscomppars: Agol et al. 2021", "tier": "catalogue" }, "angular": null },
+  "props": {
+    "teff":          { "v": 2566, "lo": 2540, "hi": 2592, "unit": "K", "src": "NEA pscomppars: Agol et al. 2021", "tier": "catalogue" },
+    "mass":          { "v": 0.0898, "lo": 0.0875, "hi": 0.0921, "unit": "Msun", "src": "NEA pscomppars: Agol et al. 2021", "tier": "catalogue" },
+    "spectral_type": { "v": "M8.0 V", "src": "NEA pscomppars: Piaulet-Ghorayeb et al. 2025", "tier": "catalogue" },
+    "vmag":          { "v": 17.02, "unit": "mag", "src": "NEA pscomppars: TICv8", "tier": "measured" },
+    "n_planets":     { "v": 7, "src": "NEA pscomppars", "tier": "catalogue" }
+  },
+  "provenance": { "source": "static:nea-exoplanets", "dataset": "nea-exoplanets", "catalogue": "NASA Exoplanet Archive pscomppars", "version": "snapshot 2026-11-18" },
+  "evidence": "measured",
+  "render": { "mag": 17.02 }
+}
+```
+51 Peg's star record has `"same_as": ["hip:113357"]`, so it also resolves when the star payload holds only the
+`hip:` context star.
+
+### 16.14 Test plan
+
+**Backend** (`uv run pytest`, offline):
+- **`test_objects_schema.py`**
+  - The new examples validate.
+  - `host_radec` ranges.
+  - `same_as` ids.
+  - `t_conj_mjd`.
+  - `neahost`.
+  - `lens-model`.
+  - Each new evidence rule (§16.5) rejects its counter-example. For example:
+    - an orbit with node null but tier `catalogue`;
+    - an orbit with an assumed `e` that is not illustrative;
+    - `method: assumed` with a measured distance.
+- **`test_objects_static.py`**
+  - A hosted record is tiled by `host_radec`.
+  - A cone at the host finds it; a cone 1° away does not.
+  - `write_dataset` refuses a hosted record without `host_radec`, and an `orbit` record of a kind not in `HOSTED_KINDS`.
+  - `verify_dataset` catches a hosted record in the wrong tile.
+- **`test_build_nea.py`** (new; synthetic CSV rows, no network):
+  - `Msini` → `msini` and no `mass`; `M-R relationship` → `mass` with tier `inferred`.
+  - A `Calculated Value` radius → `inferred`.
+  - A missing e → 0, illustrative.
+  - A missing a → Kepler III, inferred.
+  - The host ladder: dr3 > dr2 crossmatch > hip > positional > neahost; microlensing skips the positional step.
+  - The DR2 neighbour rule (100 mas, ΔG).
+  - `same_as`.
+  - Exclusions are counted.
+  - Reflink text is extracted and its entities decoded.
+  - Building twice gives byte-identical output.
+  - The committed dataset passes `--check`.
+  - The §16.13 examples equal the built records.
+- **`test_build_hr23.py`** (new; synthetic rows):
+  - The parallax S/N rule (measured vs derived).
+  - The angular extent.
+  - The age conversion and its tier.
+  - Common names.
+  - Byte-identical rebuild and `--check`.
+- **`test_objects_api.py`**
+  - Both datasets merge through `SPHEREX_OBJECTS_DIR` (with small fixtures built by the scripts from synthetic rows).
+  - Exoplanets and stars are cone-only by host position, and `in_cone` is true.
+  - `truncated` per kind.
+
+**Frontend** (`node --test`):
+- **`scene3d-orbits.test.mjs`** (new)
+  - Kepler solver residual < 1e-12 at e = 0, 0.5, 0.95.
+  - Periodicity (t and t + P give the same position).
+  - `r` between `a(1 − e)` and `a(1 + e)`.
+  - At `t_conj`, the planet lies toward Earth: `dot(xyz, −û) ≈ r sin i`.
+  - FNV-1a test vectors.
+  - Assumed values are stable per id and differ across ids.
+  - A transiting planet with unknown i gets 90°.
+  - `assumed` flags.
+  - `phaseSigmaDeg`.
+  - `orbitPath` closes and contains the placement.
+- **`scene3d-objects.test.mjs`**
+  - The orbit branch of placement.
+  - Star records go to `store.stars`.
+  - `setHostResolver`: aliases through `same_as`, and re-placement after hosts arrive.
+  - `childrenOf` ignores evidence and layers.
+  - A non-Sun group needs ≥ 1 record, its label carries the noun, and its pick resolves to the host star.
+  - `billboardItems`: glow vs outline mode by evidence, the fades, derived → hollow.
+  - `countPhrase` and `capNotes`.
+  - `planGo` for an exoplanet from the galaxy frame → `via-host` with the resolved key.
+  - `fly-galaxy` for a cluster.
+- **`scene3d-registry.test.mjs`**
+  - The `exoplanets` and `clusters` layers in group `beyond`, and persistence.
+  - Exoplanet card rows:
+    - M sin i shown as minimum mass;
+    - an inferred radius labelled with its relation;
+    - an assumed e and i labelled and dropped in the Evidence view.
+  - Cluster card rows and tiers.
+  - `rendererOf` per record.
+
+**By hand** (the real app, backend restarted after every backend change, in a browser), at three patches:
+1. **TRAPPIST-1** (RA 346.626, Dec −5.043), and 55 Cnc (RA 133.149, Dec 28.330) for a bright hip/Gaia host.
+2. **The Pleiades** (RA 56.75, Dec 24.12), and the Hyades for a cluster bigger than the cone.
+3. **A patch near the ecliptic** (e.g. RA 150, Dec 12) for the small-body cap.
+
+In each, check:
+- markers and the group label;
+- the host card's planet list;
+- autopilot into the host's frame and on to a planet;
+- the orbits;
+- the billboards;
+- the layer toggles and their persistence;
+- the Evidence view (planets hidden but counted; outline rings; hollow derived markers);
+- stars and solar objects unchanged, and the frame time in DevTools unchanged.
+
+### 16.15 Work split
+
+`scene3d.js` has one owner at a time. Slices C1 and C2 run one after the other.
+
+| Slice | Model | Files (exclusive) | Depends on |
+|---|---|---|---|
+| A. Backend schema, tiles, NEA build | Sonnet | `objects.py`, `objects_static.py`, `backend/scripts/build_objects_nea.py`, `backend/data/sources/nea-exoplanets/**`, `frontend/data/objects/nea-exoplanets/**`, `backend/tests/test_objects_schema.py`, `test_objects_static.py`, `test_build_nea.py`, `test_objects_api.py`, `backend/tests/fixtures/objects/**` | this section |
+| B. Frontend pure modules | Sonnet, in parallel with A | `scene3d-orbits.js` (new), `scene3d-objects.js`, `scene3d-registry.js`, their tests, `scene3d-orbits.test.mjs` (new) | this section |
+| H. Cluster build | Sonnet, once CDS is reachable (in parallel with anything) | `backend/scripts/build_objects_hr23.py`, `backend/data/sources/hr23-clusters/**`, `frontend/data/objects/hr23-clusters/**`, `test_build_hr23.py` | A's `write_dataset` (cluster records are plain `fixed`, so only the merged schema is needed) |
+| C1. Renderer: hosts and exoplanets | Sonnet, after A and B | `scene3d.js`, `scene3d-card.js`, `scene3d-main.js`, `scene3d.html`, `scene3d.css` | A, B |
+| C2. Renderer: billboard, hollow marker, truncation UI | Sonnet, after C1 | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d.html`, `scene3d.css` | C1, H's data (or a fixture) |
+| D. Docs, integration, review | me | this doc's status, `docs/technical-reference.md`, `frontend/dev/mock_server.py` additions | all |
+
+Haiku runs both suites after each slice and the byte-identical `--check` rebuilds.
+
+Commits:
+1. This design.
+2. Schema and hosted tiles.
+3. NEA build and data.
+4. Frontend pure modules.
+5. Renderer: exoplanets and hosts.
+6. Clusters build and data.
+7. Billboard, hollow marker, truncation UI.
+8. Docs.
+
+### 16.16 Phase 2 checklist (nebulae and black holes)
+
+- [ ] `build_objects_ongc.py` (OpenNGC pinned by git SHA: emission/reflection/planetary nebulae, SNRs) and `build_objects_sh2.py` (Sharpless, VizieR `VII/20`). Distances are mostly absent: `dist: null` direction-only records, or photometric/kinematic distances → `evidence: derived` (hollow marker, now implemented).
+- [ ] Direction-only rendering: a sky marker at infinity in the galaxy frame (the store already computes `dir`), never placed in 3D, and its card says "distance unknown".
+- [ ] Nebula appearance: a `billboard` variant from the angular size and PA (`size.angular`), illustrative look; outline only in the Evidence view (reuses §16.10).
+- [ ] `bh-curated` dataset: Sgr A*, Gaia BH1/2/3, a handful of X-ray binaries, each citing its paper. BH1–3 are hosted by their companion's system (`host` = the companion's `gdr3:` id), and the companion is a `star` record if missing (reuses §16.7).
+- [ ] The `lensing` style: illustrative disc. The Evidence view shows the marker only.
+- [ ] Decide whether Sgr A* gets `gal:milky_way` as its parent, and the Milky Way record itself (Phase 3 overlap).
+- [ ] Follow-ups carried forward: `EVIDENCE_HIDES_FEATURES`; the README `online` marker; the member-star highlight (§16.12); orbit animation over time.
+
+### 16.17 Open questions
+
+- **Q1. Cluster catalogue version.** Pin HR24 if it re-releases every HR23 cluster under the same names (adding masses
+  and the bound/moving-group `kind`), else HR23? It cannot be checked until CDS is back. Meanwhile I can start every
+  slice except H.
+- **Q2. Size.** `nea-exoplanets` is estimated at ~10 MB on disk (~0.8 MB in git) for 6,470 planets and 4,862 hosts,
+  right at your ~10 MB line. Keep all planets with full intervals, or trim (no intervals on a/e/i, short `src`) to
+  ~8 MB?
+- **Q3. Committing source snapshots.** OK to commit the gzipped NEA snapshot (~1.3 MB), the two small Gaia crossmatch
+  CSVs, and the extracted HR columns (< 1 MB), so that rebuilds and `--check` work offline and byte-identically?
+- **Q4. Clusters to include.** All of them (about 7,167, candidates drawn fainter and labelled), or only the paper's
+  "reliable" subset (about 4,105 ⚠)?
+
+### 16.18 Decisions at approval (2026-11-18)
+
+These answer Q1–Q4 and take precedence over §16.1–§16.17.
+
+**D1. Cluster version.**
+- Pin **HR24** (`J/A+A/686/A42`) if its ReadMe confirms the same 7,167 clusters under the same names.
+- If HR24 only adds columns and does not repeat astrometry and distances, pin **HR23 as well** and join the two by
+  cluster name. The manifest then records both pins (VizieR ids and sha256s).
+- Ids stay `hr23:<name>`.
+- If HR24 is pinned, the card shows its bound-cluster / moving-group class.
+- Slice H waits for CDS; everything else proceeds.
+
+**D2. Size.**
+- Keep every planet and every uncertainty interval. About 10 MB is fine for this dataset: git stores it compressed
+  (~0.8 MB), clients fetch only their cone's tiles, and the deployment's Caddy compresses JSON.
+- Lossless savings are welcome. **String table:**
+  - The manifest gains `src_table: [string…]`, the distinct quantity `src` strings sorted.
+  - In tile files, a Quantity's or position's `src` may be an integer index into it.
+  - The loader (`objects_static._read_tile`) and `verify_dataset` expand indices before validation and caching, so
+    `/api/objects` and every record in memory always carry string `src`.
+  - `write_dataset(..., src_table=True)` builds the table, and the output stays byte-deterministic.
+  - This is a **change to §6**, kept within tile format 1, because no reader outside this repo exists yet. A tile
+    reader must expand integer `src` values from `manifest.src_table`. A reader that does not would fail validation
+    on an integer `src`; it can never mistake it for a source.
+  - Expected saving: ~2 MB on `nea-exoplanets`.
+
+**D3. Source snapshots.**
+- Committed under `backend/data/sources/<dataset>/` (outside `frontend/`, so never served), gzipped
+  deterministically.
+- Each directory has a `SOURCE.json` with, per file:
+  - `file`, `sha256` (of the uncompressed bytes);
+  - `retrieved` (UTC date), the exact `query_url` (or download URL), the row count;
+  - `citation`, and the licence or acknowledgement text.
+- Build scripts read the committed snapshot by default and download only with `--refresh`.
+
+**D4. Clusters to include.**
+- All ~7,167 are in the dataset.
+- Candidate status is separate from `evidence`: `props.quality` is `{ v: "reliable" | "candidate", tier: "catalogue",
+  src: "<the paper's criterion>" }`.
+- By default only reliable clusters are shown.
+- The `clusters` layer has a persisted sub-switch, **"Include candidates"**. This is a layer
+  `clusterCandidates`:
+  - group `beyond`, `on: false`, `parent: 'clusters'`;
+  - the panel shows it indented and disabled while `clusters` is off;
+  - it is saved in the same `blink.scene3d.layers` map.
+- Kind specs' `visible(o, { evidence, layers })` now also receives the layer map (**change to §7.1**).
+- Shown candidates are drawn at half glow and half marker alpha, and labelled "candidate" on the card.

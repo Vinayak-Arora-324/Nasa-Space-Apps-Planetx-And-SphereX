@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase } from '../js/blink/scene3d-objects.js';
+import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, countPhrase, capNotes, hostCountText } from '../js/blink/scene3d-objects.js';
+import { orbitPlacement } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-frames.js';
 import * as M from '../js/blink/scene3d-math.js';
@@ -55,10 +56,11 @@ test('a schema major of 2 is refused and the store stays empty', () => {
 
 test('unknown kinds are counted and skipped; bad records and duplicates are skipped', () => {
   const s = new ObjectStore();
-  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'exoplanet' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
+  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'nebula' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
     { ...earth }, { id: 'gdr3:1', kind: 'star', name: 's', position: { model: 'fixed' } }, mars]));
   assert.deepEqual(r, { ok: true, unknownKinds: 1 });
-  assert.deepEqual([...s.byId.keys()].sort(), ['ss:earth', 'ss:mars']); assert.equal(s.skipped, 5);
+  assert.deepEqual([...s.byId.keys()].sort(), ['ss:earth', 'ss:mars']); assert.equal(s.skipped, 4);   // star records are kept in store.stars, not skipped
+  assert.deepEqual([...s.stars.keys()], ['gdr3:1']);
 });
 
 test('galaxy placement: the direction from the origin is the geocentric one, the Sun marker points at minus Earth', () => {
@@ -248,6 +250,219 @@ test('errorNotes groups failed kinds by message; kindsPhrase uses the registry n
   assert.deepEqual(s.errorNotes(), [{ kinds: ['moon'], error: 'ephemeris failed' }, { kinds: ['dwarf_planet', 'asteroid', 'comet'], error: 'SkyBoT down' }]);
   assert.equal(kindsPhrase(['dwarf_planet', 'asteroid', 'comet']), 'Dwarf planets, asteroids and comets');
   assert.equal(kindsPhrase(['comet']), 'Comets'); assert.equal(kindsPhrase(['asteroid', 'comet']), 'Asteroids and comets');
-  assert.equal(kindsPhrase(['cluster']), 'Clusters');
+  assert.equal(kindsPhrase(['cluster']), 'Star clusters');
   assert.deepEqual(new ObjectStore().errorNotes(), []);
+});
+
+
+// ------------------------------------------------------------------ Phase 1: hosted exoplanets, stars, clusters
+const HOST = 'gdr3:2635476908753563008', HOST_PC = M.radecToXyz(346.6263919, -5.0434618, 12.43);
+const exoEl = (o = {}) => ({ period_d: q(1.510826, 'd'), a_au: q(0.01154, 'au', 'catalogue'), e: q(0.00622), i_deg: q(89.728), omega_deg: q(336.86), t_conj_mjd: q(57322.014193), t_peri_mjd: null, node_deg: null, ...o });
+const exo = (id, o = {}, el = {}) => ({
+  id, kind: 'exoplanet', name: id.replace('nea:', ''), designations: [], host: HOST, parent: HOST,
+  position: { model: 'orbit', host_radec: [346.6263919, -5.0434618], phase_known: true, tier: 'illustrative', src: 't', elements: exoEl(el) },
+  in_cone: true, size: { radius: q(1.116, 'Rearth'), angular: null }, props: { mass: q(0.004, 'Mjup'), disc_method: { v: 'Transit', src: 't', tier: 'catalogue' } },
+  provenance: { source: 't' }, evidence: 'illustrative', render: { mag: 17 }, ...o,
+});
+const trB = exo('nea:TRAPPIST-1 b'), trC = exo('nea:TRAPPIST-1 c', {}, { period_d: q(2.42, 'd'), a_au: q(0.0158, 'au', 'catalogue') });
+const hostStar = (id = HOST, o = {}) => ({ id, kind: 'star', name: 'TRAPPIST-1', designations: [], same_as: ['hip:555'], host: null, parent: null,
+  position: { model: 'fixed', ra: 346.6263919, dec: -5.0434618, dist: q(12.43, 'pc') }, props: {}, evidence: 'measured', render: { mag: 17 }, ...o });
+const resolver = (map, pcs = {}) => ({ key: (id) => map[id] || null, pc: (k) => pcs[k] || null });
+const cluster = (id, o = {}, pr = {}) => ({
+  id, kind: 'cluster', name: id, designations: [], host: null, parent: null,
+  position: { model: 'fixed', ra: 56.75, dec: 24.12, epoch: 2016, method: 'cluster-parallax', dist: q(135, 'pc') }, in_cone: true,
+  size: { radius: q(3, 'pc', 'catalogue'), angular: { major: 6 } },
+  props: { n_members: q(1000, undefined, 'catalogue'), age: q(0.1, 'Gyr', 'inferred'), quality: { v: 'reliable', tier: 'catalogue', src: 't' }, ...pr },
+  evidence: 'measured', render: {}, ...o,
+});
+const pleiades = cluster('hr23:Pleiades');
+
+test('orbit placement: sysAu is the orbit at query.mjd, galPc is hostPc + sysAu / AU, and placement() returns the orbit', () => {
+  const s = store([earth, trB, hostStar()], { hostPc: (id) => (id === HOST ? HOST_PC : null) });
+  const p = s.placement('nea:TRAPPIST-1 b'), want = orbitPlacement(trB, 61000);
+  assert.deepEqual(p.sysAu, want.xyzAu); assert.equal(p.orbit.phaseSource, 'conjunction'); assert.deepEqual(p.orbit.assumed, want.assumed);
+  assert.ok(near(p.galPc, HOST_PC.map((v, i) => v + p.sysAu[i] / AU), 1e-12));
+  assert.equal(p.dir, null);
+  const noHost = store([earth, trB]).placement('nea:TRAPPIST-1 b');
+  assert.ok(noHost.sysAu && noHost.galPc === null);                                       // no host position: placed in the system, not in the galaxy
+  // query.mjd missing: J2000 (MJD 51544.5)
+  const s2 = new ObjectStore(); s2.ingest({ ...payload([trB]), query: { ra: 1, dec: 1, radius: 1 } });
+  assert.deepEqual(s2.placement('nea:TRAPPIST-1 b').sysAu, orbitPlacement(trB, 51544.5).xyzAu);
+  const bad = exo('nea:bad b', {}, { period_d: null });
+  assert.equal(store([bad]).placement('nea:bad b').sysAu, null);
+});
+
+test('star records are kept in store.stars, never drawn, and never counted as skipped', () => {
+  const s = store([earth, hostStar(), hostStar('hip:9'), { ...hostStar(), name: 'dup' }]);
+  assert.deepEqual([...s.stars.keys()], [HOST, 'hip:9']); assert.equal(s.stars.get(HOST).name, 'TRAPPIST-1'); assert.equal(s.skipped, 1, 'only the duplicate star id');
+  assert.equal(s.byId.has(HOST), false); assert.deepEqual(s.counts(), { planet: 1 });
+  assert.ok(visibleObjects(s, gctx()).every((e) => e.kind !== 'star'));
+});
+
+test('setHostResolver: aliases through same_as, re-placement once hosts arrive, resolved keys on records and entries', () => {
+  const alias = exo('nea:51 Peg b', { host: 'hip:555', parent: 'hip:555' });
+  const s = store([earth, trB, alias, hostStar()]);
+  assert.equal(s.placement(trB.id).galPc, null); assert.deepEqual(visibleObjects(s, gctx()), []);
+  assert.equal(s.resolveHost(HOST), HOST);
+  const key = 'star:7';
+  s.setHostResolver(resolver({ [HOST]: key, 'hip:555': key, [key]: key }, { [key]: HOST_PC }));
+  assert.equal(s.resolveHost('hip:555'), key); assert.equal(s.resolveHost('ss:sun'), 'ss:sun');
+  assert.deepEqual(s.hostPc('hip:555'), HOST_PC); assert.deepEqual(s.hostPc(key), HOST_PC);
+  const vis = visibleObjects(s, gctx());
+  assert.deepEqual(ids(vis), ['nea:51 Peg b', 'nea:TRAPPIST-1 b']); for (const e of vis) { assert.equal(e.host, key); assert.equal(e.renderer, 'marker'); }
+  assert.ok(near(s.placement(trB.id).galPc, HOST_PC.map((v, i) => v + s.placement(trB.id).sysAu[i] / AU), 1e-12));
+  assert.deepEqual(s.childrenOf(key).map((o) => o.id).sort(), ['nea:51 Peg b', 'nea:TRAPPIST-1 b']);
+  assert.equal(s.hostName(key), 'TRAPPIST-1');                                              // via the star record's id or same_as alias
+  // the resolver survives a new ingest; a null result falls back to the raw id; null removes it
+  s.ingest(payload([earth, trB, hostStar()]));
+  assert.equal(s.placement(trB.id).galPc !== null, true);
+  s.setHostResolver(resolver({}, {})); assert.equal(s.placement(trB.id).galPc, null);
+  assert.deepEqual(visibleObjects(s, gctx()), []); assert.equal(s.childrenOf(HOST).length, 1);
+  s.setHostResolver(null); assert.equal(s.hostPc(HOST), null);
+});
+
+test('the resolver leaves Sun-hosted records alone and opts.hostPc still works', () => {
+  const s = store([earth, mars, trB], { hostPc: (id) => (id === HOST ? HOST_PC : null) });
+  const before = s.placement('ss:mars');
+  s.setHostResolver(resolver({}, {}));
+  assert.deepEqual(s.placement('ss:mars'), before);
+  assert.ok(s.placement(trB.id).galPc, 'opts.hostPc is the fallback when the resolver knows nothing');
+});
+
+test('childrenOf ignores layers and evidence, and Sun-hosted records are not children of a star', () => {
+  const s = store([earth, mars, trB, trC, { ...exo('nea:x b', { evidence: 'measured' }) }]);
+  s.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC }));
+  assert.deepEqual(s.childrenOf('k').map((o) => o.id).sort(), ['nea:TRAPPIST-1 b', 'nea:TRAPPIST-1 c', 'nea:x b']);
+  assert.deepEqual(s.childrenOf('nope'), []);
+  const hidden = ids(visibleObjects(s, gctx({ evidence: true, layers: { ...defaultLayers(), exoplanets: false } })));
+  assert.ok(!hidden.includes('nea:TRAPPIST-1 b'));
+  assert.equal(s.childrenOf('k').length, 3);
+});
+
+test('a non-Sun group needs one record; its label carries the noun and its target is the host star; the Sun keeps its label', () => {
+  const s = store([earth, mars, trB]); s.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC }));
+  s.stars.set(HOST, hostStar());
+  const cam = F.makeCam({ pos: [0, 0, 0] }), vis = visibleObjects(s, gctx()), g = groupState(s, vis, cam, 1000);
+  assert.equal(g.k.grouped, true); assert.equal(g.k.count, 1); assert.equal(g.k.name, 'TRAPPIST-1'); assert.equal(g.k.kind, 'exoplanet');
+  assert.deepEqual(g.k.noun, ['exoplanet', 'exoplanets']); assert.equal(g.k.label, 'TRAPPIST-1 · 1 exoplanet');
+  assert.equal(g['ss:sun'].grouped, false, 'the Sun still needs two records (only Mars is here)');
+  const two = store([earth, trB, trC]); two.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC })); two.stars.set(HOST, hostStar());
+  const g2 = groupState(two, visibleObjects(two, gctx()), cam, 1000);
+  assert.equal(g2.k.label, 'TRAPPIST-1 · 2 exoplanets');
+  const L = labelCandidates(visibleObjects(two, gctx()), g2, { project: () => [5, 6], framePos: (e) => F.relFromCam(cam, e.galPc) });
+  assert.deepEqual(L, [{ x: 5, y: 6, key: 5, text: 'TRAPPIST-1 · 2 exoplanets' }]);
+  const hit = pickObjects(visibleObjects(two, gctx()), g2, 5, 6, 10, { project: () => [5, 6], framePos: (e) => F.relFromCam(cam, e.galPc) });
+  assert.deepEqual(hit.sel, { kind: 'group', id: 'group:k' });
+  assert.deepEqual(groupTarget(hit.sel), { kind: 'star', id: 'k' });
+  assert.deepEqual(groupTarget({ kind: 'group', id: 'group:ss:sun' }), { kind: 'group', id: 'group:ss:sun' });
+  assert.deepEqual(groupTarget({ kind: 'planet', id: 'ss:mars' }), { kind: 'planet', id: 'ss:mars' });
+  assert.equal(groupTarget(null), null);
+  // the Sun group is unchanged: two records, count-only label; unnamed non-Sun hosts fall back to the id; mixed kinds drop the noun
+  const sg = groupState(store(), visibleObjects(store(), gctx()), F.makeCam({ pos: [1, 0, 0] }), 1000)['ss:sun'];
+  assert.equal(sg.label, 'Solar system · 6'); assert.equal(sg.kind, null);
+  const bare = store([earth, trB]); bare.setHostResolver(resolver({}, { [HOST]: HOST_PC }));
+  assert.equal(groupState(bare, visibleObjects(bare, gctx()), cam, 1000)[HOST].name, HOST);
+  const mixed = store([earth, trB, exo('nea:m b', { kind: 'planet' })]); mixed.setHostResolver(resolver({}, { [HOST]: HOST_PC }));
+  assert.equal(groupState(mixed, visibleObjects(mixed, gctx()), cam, 1000)[HOST].label, `${HOST} · 2`);
+});
+
+test('exoplanets are cone-only in the galaxy frame and spheres or points in the system frame by radius', () => {
+  const noR = exo('nea:nr b', { size: null }), out = exo('nea:out b', { in_cone: false });
+  const s = store([earth, trB, noR, out]); s.setHostResolver(resolver({}, { [HOST]: HOST_PC }));
+  assert.deepEqual(ids(visibleObjects(s, gctx())), ['nea:TRAPPIST-1 b', 'nea:nr b']);
+  const sys = visibleObjects(s, gctx({ frame: 'system', inHost: (h) => h === HOST }));
+  assert.equal(sys.find((e) => e.id === trB.id).renderer, 'sphere'); assert.equal(sys.find((e) => e.id === noR.id).renderer, 'point');
+  assert.equal(sys.length, 3, 'the system frame is not cone-filtered');
+  assert.deepEqual(ids(visibleObjects(s, gctx({ evidence: true }))), [], 'illustrative records are hidden in the Evidence view');
+});
+
+test('cluster visibility gets the layers: candidates need clusterCandidates, evidence never hides measured or derived clusters', () => {
+  const cand = cluster('hr23:C', {}, { quality: { v: 'candidate', tier: 'catalogue', src: 't' } }), der = cluster('hr23:D', { evidence: 'derived' });
+  const s = store([earth, pleiades, cand, der]), L = defaultLayers();
+  assert.deepEqual(ids(visibleObjects(s, gctx({ layers: L }))), ['hr23:D', 'hr23:Pleiades']);
+  assert.deepEqual(ids(visibleObjects(s, gctx({ layers: { ...L, clusterCandidates: true } }))), ['hr23:C', 'hr23:D', 'hr23:Pleiades']);
+  assert.deepEqual(ids(visibleObjects(s, gctx({ layers: { ...L, clusters: false, clusterCandidates: true } }))), []);
+  assert.deepEqual(ids(visibleObjects(s, gctx({ layers: L, evidence: true }))), ['hr23:D', 'hr23:Pleiades']);
+  assert.equal(visibleObjects(s, gctx({ layers: L }))[0].renderer, 'billboard');
+  assert.deepEqual(visibleObjects(s, gctx({ layers: L, frame: 'system', inHost: () => true })).filter((e) => e.kind === 'cluster'), [], 'clusters are not drawn in a system frame');
+  assert.ok(near(s.placement('hr23:Pleiades').galPc, M.radecToXyz(56.75, 24.12, 135), 1e-9));
+  assert.deepEqual(visibleObjects(store([cluster('hr23:out', { in_cone: false })]), gctx()), []);
+});
+
+test('billboardItems: glow in the normal view, outline in the Evidence view, fades, marker-only and hollow', () => {
+  const der = cluster('hr23:D', { evidence: 'derived' }), cand = cluster('hr23:C', {}, { quality: { v: 'candidate', tier: 'catalogue', src: 't' } });
+  const s = store([earth, pleiades, der, cand]), L = { ...defaultLayers(), clusterCandidates: true }, vis = visibleObjects(s, gctx({ layers: L }));
+  const cam = F.makeCam({ pos: [0, 0, 0] }), by = (items, id) => items.find((i) => i.id === id);
+  const g = billboardItems(vis, cam, { evidence: false, pxPerRad: 1000 }), o = billboardItems(vis, cam, { evidence: true, pxPerRad: 1000 });
+  assert.equal(g.length, 3);
+  const p = by(g, 'hr23:Pleiades');
+  assert.equal(p.mode, 'glow'); assert.equal(by(o, 'hr23:Pleiades').mode, 'outline');
+  assert.equal(p.radiusUnits, 3); assert.ok(Math.abs(p.dist - 135) < 1e-9); assert.ok(near(p.rel, M.radecToXyz(56.75, 24.12, 135), 1e-9));
+  assert.equal(p.fade, 1); assert.ok(Math.abs(p.pxRadius - Math.atan(3 / 135) * 1000) < 1e-9); assert.equal(p.markerOnly, false);
+  assert.ok(Math.abs(p.alpha - 0.75) < 1e-12, 'log10(1000) members'); assert.equal(by(g, 'hr23:C').alpha, 0.375); assert.equal(by(g, 'hr23:C').candidate, true);
+  assert.deepEqual(p.rgb.map((v) => v >= 0 && v <= 1), [true, true, true]);
+  assert.equal(p.hollow, false); assert.equal(by(g, 'hr23:D').hollow, true); assert.equal(by(g, 'hr23:D').dashed, false); assert.equal(by(o, 'hr23:D').dashed, true);
+  assert.equal(by(g, 'hr23:Pleiades').screen, undefined);
+  assert.deepEqual(billboardItems(vis, cam, { project: () => [3, 4] })[0].screen, [3, 4]);
+  // fade: smoothstep(0.5, 2, dist / r50); inside half an r50 it is 0, beyond two r50 it is 1
+  const at = (d) => billboardItems(vis.filter((e) => e.id === 'hr23:Pleiades'), F.makeCam({ pos: M.radecToXyz(56.75, 24.12, 135 - d) }), { pxPerRad: 1000 })[0];
+  assert.equal(at(1.4).fade, 0); assert.equal(at(6).fade, 1); assert.ok(at(4.5).fade > 0 && at(4.5).fade < 1);
+  assert.equal(at(1.4).alpha, 0);
+  // marker-only when the projected r50 is under 2 px
+  assert.equal(billboardItems(vis, cam, { pxPerRad: 40 })[0].markerOnly, true);
+  assert.equal(billboardItems(vis, F.makeCam({ frame: 'system', host: { key: 'x', pc: [0, 0, 0] }, pos: [0, 0, 0] }), { pxPerRad: 1000 }).length, 0);
+  assert.deepEqual(billboardItems(visibleObjects(s, gctx({ layers: L })).filter((e) => e.kind === 'planet'), cam, {}), []);
+  const lowN = cluster('hr23:L', {}, { n_members: q(10, undefined, 'catalogue') }), noN = cluster('hr23:N', {}, { n_members: undefined });
+  const s2 = store([lowN, noN]), v2 = visibleObjects(s2, gctx());
+  assert.ok(Math.abs(by(billboardItems(v2, cam, {}), 'hr23:L').alpha - 0.15) < 1e-12); assert.equal(by(billboardItems(v2, cam, {}), 'hr23:N').alpha, 0.3);
+});
+
+test('pick priority: a billboard is 25 until it collapses to a marker, then 16 (ahead of the 20 of stars)', () => {
+  const e = visibleObjects(store([pleiades]), gctx())[0];
+  assert.equal(pickPriority(e), 25); assert.equal(pickPriority({ ...e, markerOnly: true }), 16);
+  const x = visibleObjects(store([earth, trB], { hostPc: () => HOST_PC }), gctx())[0]; assert.equal(pickPriority(x), 15);
+});
+
+test('countPhrase: small bodies, truncation, exoplanets, separators', () => {
+  const small = ['dwarf_planet', 'asteroid', 'comet'];
+  assert.equal(countPhrase(small, { dwarf_planet: 1, asteroid: 20, comet: 2 }, {}), '23 small bodies');
+  assert.equal(countPhrase(small, { asteroid: 1 }, {}), '1 small body');
+  assert.equal(countPhrase(small, { dwarf_planet: 1, asteroid: 1996, comet: 3 }, { asteroid: { truncated: true } }), '2,000 brightest small bodies (more in this cone)');
+  assert.equal(countPhrase(['asteroid'], { asteroid: 2000 }, { asteroid: { truncated: true } }), '2,000 brightest asteroids (more in this cone)');
+  assert.equal(countPhrase(['exoplanet'], { exoplanet: 2000 }, { exoplanet: { truncated: true } }), '2,000 exoplanets of the brightest hosts (more in this cone)');
+  assert.equal(countPhrase(['exoplanet'], { exoplanet: 7 }, { exoplanet: { truncated: false } }), '7 exoplanets');
+  assert.equal(countPhrase(['exoplanet'], { exoplanet: 1 }), '1 exoplanet');
+  assert.equal(countPhrase(['cluster'], { cluster: 12 }), '12 star clusters');
+  assert.equal(countPhrase(small, {}, {}), ''); assert.equal(countPhrase(['exoplanet'], { exoplanet: 12345 }), '12,345 exoplanets');
+});
+
+test('capNotes: one sentence per capped kind group, in the style of the Gaia sentence', () => {
+  assert.deepEqual(capNotes({}), []); assert.deepEqual(capNotes({ asteroid: { status: 'ok', count: 5 } }), []);
+  assert.deepEqual(capNotes({ asteroid: { truncated: true, count: 2000 }, comet: { truncated: true, count: 30 }, dwarf_planet: { truncated: false, count: 2 } }),
+    ['Showing the 2,030 brightest small bodies in the cone; fainter ones are left out.']);
+  assert.deepEqual(capNotes({ asteroid: { truncated: true, count: 2000 }, exoplanet: { truncated: true, count: 2000 }, cluster: { truncated: true, count: 500 } }), [
+    'Showing the 2,000 brightest small bodies in the cone; fainter ones are left out.',
+    'Showing the 2,000 exoplanets of the brightest hosts in the cone; the rest are left out.',
+    'Showing 500 star clusters in the cone; more are left out.']);
+});
+
+test('hostCountText: counts with the illustrative note, the Evidence view and a layer that is off', () => {
+  const s = store([earth, trB, trC]); s.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC }));
+  assert.equal(hostCountText(s, 'k', {}), '2 exoplanets (positions illustrative)');
+  assert.equal(hostCountText(s, 'k', { evidence: true }), '2 exoplanets (positions illustrative, hidden in the Evidence view)');
+  assert.equal(hostCountText(s, 'k', { layers: { exoplanets: false } }), '2 exoplanets (positions illustrative, layer off)');
+  assert.equal(hostCountText(s, 'none', {}), '');
+  const one = store([earth, exo('nea:z b', { evidence: 'measured' })]); one.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC }));
+  assert.equal(hostCountText(one, 'k'), '1 exoplanet');
+});
+
+test('planGo: an exoplanet from the galaxy frame goes via the resolved host; a cluster flies in the galaxy frame', () => {
+  const s = store([earth, trB]); s.setHostResolver(resolver({ [HOST]: 'k' }, { k: HOST_PC }));
+  const stars = { camFrame: 'galaxy', camHostKey: null, resolveHost: (h) => s.resolveHost(h) };
+  assert.deepEqual(planGo(trB, stars), { type: 'via-host', hostId: 'k' });
+  assert.deepEqual(planGo({ kind: 'exoplanet', id: trB.id, host: HOST }, { ...stars, camFrame: 'system', camHostKey: 'k' }), { type: 'fly' });
+  assert.deepEqual(planGo({ kind: 'group', id: 'group:k' }, stars), { type: 'via-host', hostId: 'k' });
+  assert.deepEqual(planGo(trB, { camFrame: 'galaxy', camHostKey: null }), { type: 'via-host', hostId: HOST }, 'without a resolver the raw id is used');
+  assert.deepEqual(planGo(pleiades, stars), { type: 'fly-galaxy' });
+  assert.deepEqual(planGo({ kind: 'cluster', id: 'x', host: null }, { ...stars, camFrame: 'system', camHostKey: 'k' }), { type: 'fly-galaxy' });
 });

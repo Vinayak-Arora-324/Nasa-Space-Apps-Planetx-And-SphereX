@@ -13,7 +13,7 @@ import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpe
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
 import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, planetLine, fmtNum as regFmtNum } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
-  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from './scene3d-objects.js';
+  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature, billboardItems, markerPoints, mergeStarSystem } from './scene3d-objects.js';
 import { orbitPath } from './scene3d-orbits.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
@@ -40,7 +40,10 @@ const SNAP_FADE_S = 1.2, SNAP_DROP_S = 0.25;
 const SUN_ABS_G = 4.67, SUN_BP_RP = 0.82;
 const Z_UP = [0, 0, 1];
 const SUN_HOST = { idx: 0, key: 'ss:sun', name: 'Sun', pc: [0, 0, 0] };
-const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;   // a grouped system's marker: warm white, a little larger
+const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;
+// Cluster glow brightness: BB_K x the exposure (capped), so a glow stays a faint wash even in a dark, high-exposure view. The Evidence
+// ring is a thin line and gets more.
+const BB_GLOW_K = 0.07, BB_GLOW_MAX = 0.14, BB_RING_K = 0.3, BB_RING_MAX = 0.6;   // a grouped system's marker: warm white, a little larger
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
 
@@ -140,11 +143,12 @@ export class Scene3D {
       line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye'], d),
       body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
       sky: makeProgram(gl, S.SKY_VS, S.SKY_FS, ['u_tan', 'u_sky', 'u_v2w', 'u_k'], d),
+      bb: makeProgram(gl, S.BB_VS, S.BB_FS, ['u_vp', 'u_k', 'u_dpr'], d),
     };
     this.skyTex = null;
     if (this.mwImg) this._uploadSky();
     this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
-    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer() };
+    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
   }
@@ -391,10 +395,11 @@ export class Scene3D {
     const m = this.st.meta[i], s = this.sys.get(m.key), system = s && s.payload ? s.payload : undefined;
     const distPc = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(i));
     if (m.kind === 'sun') md = starModel({ kind: 'sun', system });
-    else if (m.kind === 'gaia') md = starModel({ system, absG: m.abs, bpRp: m.bp, distPc, kind: 'gaia' });
-    // An archive host: its physical rows are the record's props (tier and src kept); a Gaia payload, once fetched, replaces them
-    // (the two are not mixed). The BP-RP estimate only colours the point, so it is not passed here: it would read as measured.
-    else if (m.kind === 'obj') md = starModel({ system: system || { values: starValuesFromRecord(m.rec), notes: [] }, absG: m.abs, distPc: m.d, kind: 'obj' });
+    // A star that hosts planets has an archive star record too. Per row (Teff, radius, luminosity, mass, age) the stronger tier wins,
+    // so TRAPPIST-1 shows the archive's Teff and radius (catalogue) instead of this page's colour-based guesses (inferred).
+    else if (m.kind === 'gaia') md = starModel({ system: mergeStarSystem(system, this.store.starRecord(m.key)), absG: m.abs, bpRp: m.bp, distPc, kind: 'gaia' });
+    // An archive host: its physical rows are the record's props (tier and src kept); a Gaia payload, once fetched, is merged row by row. The BP-RP estimate only colours the point, so it is not passed here: it would read as measured.
+    else if (m.kind === 'obj') md = starModel({ system: system ? mergeStarSystem(system, m.rec) : { values: starValuesFromRecord(m.rec), notes: [] }, absG: m.abs, distPc: m.d, kind: 'obj' });
     else md = starModel({ absG: m.abs, bpRp: m.bp, distPc: m.d, name: m.name, kind: 'ctx' });
     this.models.set(i, md);
     return md;
@@ -674,6 +679,8 @@ export class Scene3D {
       return g ? { type: 'group', host, pc: g.pcPos, name: g.name } : null;
     }
     const o = this.store.get(sel.id), pl = o && this.store.placement(sel.id), spec = o && kindSpec(o.kind);
+    // a cluster (go 'fly-galaxy'): { type: 'galaxy', pc, stopPc (spec.arrivePc, 2 x r50), name }, a trip in galaxy parsecs
+    if (o && spec && spec.go === 'fly-galaxy' && pl && pl.galPc) return { type: 'galaxy', pc: pl.galPc, stopPc: spec.arrivePc(o), name: o.name, o };
     if (!o || !spec || !pl || !pl.sysAu) return null;
     return { type: 'object', host: this.store.resolveHost(o.host), pos: pl.sysAu, rAu: spec.arriveAu(o), name: o.name, o };   // host: the key the camera's frame carries
   }
@@ -707,7 +714,19 @@ export class Scene3D {
       const idx = this._starIdx(plan.hostId);                   // the resolved host; not loaded: nothing to fly to (the card disables the button)
       if (idx >= 0) this._goStar(this._starSel(idx), sel);       // the host star first; on arrival the trip to the object starts
     }
-    // 'fly-galaxy': nothing yet (clusters are flown to in a later slice)
+    else if (plan.type === 'fly-galaxy') this._goGalaxy(sel);
+  }
+  /**
+   * A trip to a cluster's centre in galaxy parsecs, stopping at spec.arrivePc (2 x r50) from it, retargeted each frame like the star
+   * trip. It runs in world parsecs, so it carries on across a star's system frame if the path enters one.
+   */
+  _goGalaxy(sel) {
+    const t = this._resolve(sel), cam = this.cam;
+    if (!t || t.type !== 'galaxy') return;
+    const obj = new Autopilot();
+    obj.start({ from: F.worldPc(cam), fromDir: M.dirFromYawPitch(cam.yaw, cam.pitch), to: t.pc, stopAt: Math.max(t.stopPc, 1e-6) });
+    this.ap = { obj, sel, type: 'galaxy', then: null, unitsPerPc: 1 };
+    cam.vel = [0, 0, 0];
   }
   /** The star trip, run in galaxy parsecs (doubles keep the last few AU exact), so crossing into the star's system frame needs no restart. */
   _goStar(sel, then) {
@@ -729,12 +748,14 @@ export class Scene3D {
   }
   _stepAutopilot(dt) {
     const ap = this.ap, cam = this.cam; if (!ap) return;
-    if (ap.type !== 'star' && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
+    const world = ap.type === 'star' || ap.type === 'galaxy';          // trips in world parsecs: they cross frame switches
+    if (!world && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
     const t = this._resolve(ap.sel);
     if (!t) { this.ap = null; return; }
-    if (ap.type !== 'star') ap.obj.retarget(t.pos);
+    if (ap.type === 'galaxy') ap.obj.retarget(t.pc);
+    else if (ap.type !== 'star') ap.obj.retarget(t.pos);
     const r = ap.obj.step(dt);
-    cam.pos = ap.type === 'star' ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.slice()) : r.pos.slice();
+    cam.pos = world ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.slice()) : r.pos.slice();
     const v = M.yawPitchFromDir(r.dir);
     cam.yaw = v.yaw; cam.pitch = clamp(v.pitch, -1.5, 1.5); cam.vel = [0, 0, 0];
     if (r.done) { this.ap = null; this._arrived(t, ap.then); }
@@ -742,7 +763,8 @@ export class Scene3D {
   _arrived(t, then) {
     const cam = this.cam, upc = F.unitsPerPc(cam);
     const surfAu = this._surfaceAu(), r = F.rangeOf(cam.frame);
-    cam.speed = clamp(suggestSpeed(surfAu * (upc / AU_PER_PC), upc), r.min, r.max);
+    // At a cluster (stopped 2 x r50 out) the nearest "surface" is a star, so a third of the stop distance is the comfortable pace.
+    cam.speed = clamp(t.type === 'galaxy' ? suggestSpeed(t.stopPc * upc, upc) : suggestSpeed(surfAu * (upc / AU_PER_PC), upc), r.min, r.max);
     if (t.type === 'star' && cam.frame === 'system') this.hooks.onHud(this._hudData());
     // a chained trip (to an object of the star just reached): only once we are in that star's frame, and never to a group
     if (then && then.kind !== 'group' && t.type === 'star' && cam.frame === 'system' && cam.host.key === this._starKey(t.idx)) {
@@ -774,7 +796,7 @@ export class Scene3D {
       this._system(cam.host.idx);
       cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), F.rangeOf('system').min, F.rangeOf('system').max);
     } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), F.rangeOf('galaxy').min, F.rangeOf('galaxy').max);
-    if (this.ap && this.ap.type !== 'star') this.ap = null;     // a trip inside a system ends when the camera leaves it
+    if (this.ap && this.ap.type !== 'star' && this.ap.type !== 'galaxy') this.ap = null;     // a trip inside a system ends when the camera leaves it
   }
 
   // ------------------------------------------------------------------ arriving from and leaving for a flat picture
@@ -1017,9 +1039,6 @@ export class Scene3D {
     if (sig === this._visSig) return;
     this._visSig = sig;
     this._vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: cam.frame, inHost: (h) => cam.frame === 'system' && cam.host.key === h, pxPerRad: this.pxPerRad });
-    for (const e of this._vis) {
-      if (e.renderer === 'billboard' && !this._warned.has(e.kind)) { this._warned.add(e.kind); console.warn(`scene3d: the billboard renderer is not implemented (kind ${e.kind} is skipped)`); }
-    }
   }
   _refreshGroups() { this._groups = groupState(this.store, this._vis, this.cam, this.pxPerRad); }
 
@@ -1030,6 +1049,8 @@ export class Scene3D {
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     this._drawSky();
+    const bb = this._billboards();                                // cluster glows and rings; the items also feed markers and picking
+    this._drawBillboards(bb);
     const sun = this._inSun(), inSys = cam.frame === 'system', vis = this._vis, groups = this._groups;
     const bufOk = inSys && this._bufHost === cam.host.key;       // points and lineSys belong to the camera's host (rebuilt on every frame change)
     const bodies = [];                                            // spheres to draw, with their crossfade weight
@@ -1048,7 +1069,6 @@ export class Scene3D {
       dynStars.push(rel[0], rel[1], rel[2], this.st.gal[7 * c.idx + 3], col[0] * wPoint, col[1] * wPoint, col[2] * wPoint);
       if (s > 0 && !inside) bodies.push({ kind: 0, rel, dist: distAu, rAu, s, md, idx: c.idx, units: cam.frame === 'system' ? 1 : AU_PER_PC });
     });
-    let nMark = 0;
     for (const e of vis) {
       if (e.renderer === 'sphere') {                              // a point that cross-fades into a ray-traced sphere
         const rAu = e.spec.arriveAu(e.o), relv = framePos(e, cam), dist = Math.hypot(relv[0], relv[1], relv[2]);
@@ -1056,9 +1076,8 @@ export class Scene3D {
         this.dyn.set(e.id, angPx);
         if (dist > rAu) dynPts.push(relv[0], relv[1], relv[2], e.spec.pointSize(e.o), 1 - s, c[0], c[1], c[2]);
         if (s > 0 && dist > rAu) bodies.push({ kind: 1, rel: relv, dist, rAu, s, e });
-      } else if (e.renderer === 'marker' && !(e.host && groups[e.host] && groups[e.host].grouped)) nMark++;
+      }
     }
-    for (const g of Object.values(groups)) if (g.grouped) nMark++;
     // lines
     if (cam.frame === 'galaxy') { if (this.layers.cone) this._drawLines('lineStars'); }
     else if (inSys) {                                             // orbits of the current host; the cone outline is the Sun's only (it is Earth's patch)
@@ -1069,7 +1088,8 @@ export class Scene3D {
     if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
     if (bufOk) this._drawPoints(this.gpu.points, cam.pos);
     if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
-    if (nMark) this._drawDynPoints(this._markerData(vis, groups, nMark));
+    const marks = markerPoints(vis, groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
+    if (marks.length) this._drawDynPoints(marks);
     // spheres, far to near, premultiplied "over"
     bodies.sort((a, b) => b.dist - a.dist);
     if (bodies.length) {
@@ -1079,22 +1099,56 @@ export class Scene3D {
     if (hdr) hdr.finish({ strength: this.bloomK * (0.1 + 0.2 * clamp(-Math.log10(this.expo) / 4, 0, 1)), exposure: 1, threshold: this.bloomT });
     else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
-  /** Galaxy-frame markers: a camera-relative point per ungrouped marker entry (positions in doubles), one per grouped host. */
-  _markerData(vis, groups, n) {
-    const cam = this.cam, out = new Float32Array(n * 8);
+  /**
+   * The cluster billboard items for this frame (billboardItems), in the galaxy frame only. The nearest star's distance feeds the fade
+   * that hides a cluster before the camera enters a star's system frame (clusters are not drawn there). It also tells each entry
+   * whether it has collapsed to a marker (< 2 px), which picking reads (pickPriority).
+   */
+  _billboards() {
+    if (this.cam.frame !== 'galaxy') return [];
+    const hasBb = this._vis.some((e) => e.renderer === 'billboard');
+    if (!hasBb) return [];
+    const near = this.cam.disarm ? Infinity : this._nearBody().d;    // while leaving the start star (the Sun) it is not "about to enter" anything
+    const items = billboardItems(this._vis, this.cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, nearPc: near });
+    const by = new Map(items.map((i) => [i.id, i]));
+    for (const e of this._vis) if (e.renderer === 'billboard') { const it = by.get(e.id); e.markerOnly = !!(it && it.markerOnly); }
+    return items;
+  }
+  /**
+   * Draws the cluster glows (or, in the Evidence view, the r50 rings): a camera-facing quad of half-size 4 x r50 per item, built here
+   * from the camera-relative doubles (cast to float32 only at the end, as the markers are). Additive, no depth, after the Milky Way
+   * and before the stars. An item whose r50 is under 2 px (markerOnly) or that has faded out draws no quad: its marker is enough.
+   */
+  _drawBillboards(items) {
+    const quads = items.filter((it) => it.markerOnly ? false : (it.mode === 'outline' ? it.lineAlpha : it.alpha) > 1e-3);
+    if (!quads.length) return;
+    const cam = this.cam, f = M.dirFromYawPitch(cam.yaw, cam.pitch), r = M.norm(M.cross(f, Z_UP)), u = M.cross(r, f);
+    const data = new Float32Array(quads.length * 6 * 10);
     let k = 0;
-    const put = (rel, size, c) => { out[k++] = rel[0]; out[k++] = rel[1]; out[k++] = rel[2]; out[k++] = size; out[k++] = 1; out[k++] = c[0]; out[k++] = c[1]; out[k++] = c[2]; };
-    for (const e of vis) {
-      if (e.renderer !== 'marker' || (e.host && groups[e.host] && groups[e.host].grouped)) continue;
-      const rel = framePos(e, cam);
-      if (rel) put(rel, e.spec.markerPx(e.o), e.spec.color(e.o));
+    const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+    for (const it of quads) {
+      const h = 4 * it.radiusUnits, outline = it.mode === 'outline';
+      const a = outline ? it.lineAlpha : it.alpha, mode = outline ? (it.dashed ? 2 : 1) : 0;
+      for (const [cx, cy] of CORNERS) {
+        for (let j = 0; j < 3; j++) data[k++] = it.rel[j] + h * (cx * r[j] + cy * u[j]);
+        data[k++] = 4 * cx; data[k++] = 4 * cy;
+        data[k++] = it.rgb[0]; data[k++] = it.rgb[1]; data[k++] = it.rgb[2]; data[k++] = a; data[k++] = mode;
+      }
     }
-    for (const [host, g] of Object.entries(groups)) {
-      if (!g.grouped) continue;
-      const rel = framePos({ galPc: g.pcPos, host, group: true }, cam);
-      if (rel) put(rel, GROUP_PX_SIZE, GROUP_RGB);
-    }
-    return k === out.length ? out : out.subarray(0, k);
+    const gl = this.gl, pr = this.prog.bb, st = 40;
+    const kk = this.evidence ? Math.min(BB_RING_K * this.expo, BB_RING_MAX) : Math.min(BB_GLOW_K * this.expo, BB_GLOW_MAX);
+    gl.useProgram(pr.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.bb);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, k), gl.STREAM_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, st, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, st, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, st, 20);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, st, 36);
+    gl.uniformMatrix4fv(pr.u.u_vp, false, this.vp);
+    gl.uniform1f(pr.u.u_k, kk);
+    gl.uniform1f(pr.u.u_dpr, this.dpr);
+    gl.drawArrays(gl.TRIANGLES, 0, k / 10);
+    gl.disableVertexAttribArray(3);
   }
   _drawSky() {
     if (!this.skyTex || !this.layers.mw) return;
@@ -1330,7 +1384,7 @@ export class Scene3D {
       return;
     }
     const plan = this._planFor(sel), goLabel = plan.type === 'solar-scene' ? 'Show in the Solar system' : 'Go there';
-    const onGo = pinned && plan.type !== 'fly-galaxy' ? () => this._go(sel) : undefined;
+    const onGo = pinned ? () => this._go(sel) : undefined;     // clusters too: their plan is fly-galaxy
     const goDisabled = this._hostMissing(plan) ? 'host star not in this view' : null;
     if (sel.kind === 'group') {
       const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host];

@@ -54,9 +54,13 @@
 //       label: 'Solar system · 14' for the Sun and mixed groups, 'TRAPPIST-1 · 7 exoplanets' for a one-kind non-Sun group.
 //   groupTarget(sel, sunId = 'ss:sun') -> sel   a group sel of a non-Sun host becomes { kind: 'star', id: hostKey } (the renderer
 //       selects the host star, whose card lists the planets); the Sun's group and every other sel come back unchanged
-//   billboardItems(visible, cam, { evidence, pxPerRad, project? }) -> item[]   pure data for the billboard renderer (section 16.10).
+//   billboardItems(visible, cam, { evidence, pxPerRad, project?, nearPc? }) -> item[]   pure data for the billboard renderer (section 16.10).
 //       Galaxy frame only ([] otherwise); entries whose renderer is 'billboard'. item = { id, kind, rel, dist, radiusUnits, rgb,
-//       alpha, fade, mode, pxRadius, markerOnly, hollow, dashed, candidate, screen? }
+//       alpha, fade, nearFade, lineAlpha, mode, pxRadius, markerOnly, hollow, dashed, candidate, screen? }
+//         nearFade     smoothstep(ENTER_PC, 4 ENTER_PC, nearPc): 0 where the camera is about to enter a star's system frame (nearPc =
+//                      distance to the nearest star, default Infinity = 1), so a cluster's glow and marker never pop when the
+//                      frame switch stops drawing clusters. alpha includes it
+//         lineAlpha    the Evidence ring's alpha: (0.5 for candidates, else 1) * fade * nearFade (no member-count dimming)
 //         rel          camera-relative position in the camera's frame units (doubles; the renderer casts to float32)
 //         dist, radiusUnits  its length and r50, both in frame units (r50 from size.radius, pc)
 //         rgb          clusterRgb(o), illustrative colour from the age
@@ -68,6 +72,11 @@
 //         hollow       evidence 'derived' (hollow marker); dashed: hollow in outline mode; candidate: quality 'candidate'
 //         screen       project(rel) when a projector is given
 //       The renderer sets entry.markerOnly from the item so pickPriority uses the kind's marker priority (16) instead of 25.
+//   markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb }) -> Float32Array   the dynamic-points data of the galaxy
+//       frame: 8 floats per point (x y z size alpha r g b, camera-relative), one per ungrouped 'marker' entry, one per grouped host
+//       and one per billboard item (the cluster centre marker, alpha 0.5 for candidates, times nearFade). A hollow marker
+//       (spec.markerStyle(o) === 'hollow') is encoded as a NEGATIVE size: the point shader draws a ring of |size| px.
+//   markerSize(px, hollow) -> signed size;  isHollowSize(size) -> bool   the encoding
 //   pickObjects(visible, groups, px, py, maxPx, { project, framePos, reach }) -> { sel, priority, d } | null
 //       framePos(entry) -> rel (the renderer closes over the camera; a pseudo-entry { galPc, host, group: true } stands for a
 //       group marker), reach(entry) -> extra pick radius in px (a sphere's disc; may be omitted). Grouped hosts give one group
@@ -84,6 +93,13 @@
 //       hostId in the plan is the resolved key.
 //       { type: 'star' } | { type: 'fly' } (host is the camera's system frame) | { type: 'solar-scene' } (host ss:sun, camera
 //       not in it) | { type: 'via-host', hostId } (star trip to hostId, then fly) | { type: 'fly-galaxy' } (no host: clusters)
+//
+// STAR CARDS (section 16.8)
+//   mergeStarSystem(system, rec) -> system'   the star model's `system` input for a star that has an archive star record (rec) and
+//       maybe a Gaia /api/system payload. Per row (teff_k, radius_rsun, lum_lsun, mass_msun, age_gyr, spectral_type) the value with
+//       the strongest tier wins (measured > catalogue > inferred > illustrative); on a tie, or when only one side has the row,
+//       Gaia's is kept / the present one is used. The winner keeps its own src. Notes that the archive value makes false
+//       ('No effective temperature available...', 'FLAME mass / age not available...') are dropped. Without rec, system is returned as is.
 //
 // TEXT HELPERS (section 16.11)
 //   countPhrase(kinds, counts, kindStatus) -> string   '23 small bodies' | '2,000 brightest small bodies (more in this cone)' |
@@ -354,9 +370,9 @@ export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost 
 
 // ------------------------------------------------------------------ billboards (section 16.10)
 const GLOW_MIN_PX = 2;
-export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null } = {}) {
+export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null, nearPc = Infinity } = {}) {
   if (cam.frame !== 'galaxy') return [];
-  const out = [], upc = F.unitsPerPc(cam);
+  const out = [], upc = F.unitsPerPc(cam), nearFade = smoothstep(F.ENTER_PC, 4 * F.ENTER_PC, nearPc);
   for (const e of visible) {
     if (e.renderer !== 'billboard') continue;
     const rel = framePos(e, cam), r50 = toPc(e.o.size && e.o.size.radius);
@@ -368,12 +384,39 @@ export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000
     const fade = dist > 0 ? smoothstep(0.5, 2, dist / radiusUnits) : 0;
     const pxRadius = dist > 0 ? Math.atan(radiusUnits / dist) * pxPerRad : Infinity;
     const mode = evidence ? 'outline' : 'glow', hollow = e.spec.markerStyle(e.o) === 'hollow';
-    const item = { id: e.id, kind: e.kind, rel, dist, radiusUnits, rgb: clusterRgb(e.o), alpha: base * fade, fade, mode, pxRadius,
+    const item = { id: e.id, kind: e.kind, rel, dist, radiusUnits, rgb: clusterRgb(e.o), alpha: base * fade * nearFade, fade, nearFade,
+      lineAlpha: (candidate ? 0.5 : 1) * fade * nearFade, mode, pxRadius,
       markerOnly: pxRadius < GLOW_MIN_PX, hollow, dashed: hollow && mode === 'outline', candidate };
     if (project) item.screen = project(rel);
     out.push(item);
   }
   return out;
+}
+
+// ------------------------------------------------------------------ galaxy-frame marker points
+export const markerSize = (px, hollow) => (hollow ? -px : px);
+export const isHollowSize = (size) => size < 0;
+export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb = [1, 0.92, 0.75] } = {}) {
+  const out = [];
+  const put = (rel, size, a, c) => out.push(rel[0], rel[1], rel[2], size, a, c[0], c[1], c[2]);
+  for (const e of visible) {
+    if (e.renderer !== 'marker' || (e.host && groups[e.host] && groups[e.host].grouped)) continue;
+    const rel = framePos(e, cam);
+    if (rel) put(rel, markerSize(e.spec.markerPx(e.o), e.spec.markerStyle(e.o) === 'hollow'), 1, e.spec.color(e.o));
+  }
+  if (items.length) {
+    const by = new Map(visible.map((e) => [e.id, e]));
+    for (const it of items) {
+      const e = by.get(it.id);
+      if (e && it.nearFade > 0) put(it.rel, markerSize(e.spec.markerPx(e.o), it.hollow), (it.candidate ? 0.5 : 1) * it.nearFade, e.spec.color(e.o));
+    }
+  }
+  for (const [host, g] of Object.entries(groups)) {
+    if (!g.grouped) continue;
+    const rel = framePos({ galPc: g.pcPos, host, group: true }, cam);
+    if (rel) put(rel, groupPx, 1, groupRgb);
+  }
+  return new Float32Array(out);
 }
 
 // ------------------------------------------------------------------ count and cap text (section 16.11)
@@ -473,6 +516,23 @@ export function starValuesFromRecord(o) {
   if (pc > 0) out.dist_pc = { ...keep(d, pc), lo: Number.isFinite(d.lo) ? pcOf({ v: d.lo, unit: d.unit }) : undefined, hi: Number.isFinite(d.hi) ? pcOf({ v: d.hi, unit: d.unit }) : undefined, unit: 'pc' };
   if (qv(pr.gmag) !== null) out.g_mag = keep(pr.gmag, pr.gmag.v);
   return out;
+}
+const TIER_STRENGTH = { measured: 0, catalogue: 1, derived: 2, inferred: 2, illustrative: 3 };
+const strength = (q) => (q && Number.isFinite(TIER_STRENGTH[q.tier]) ? TIER_STRENGTH[q.tier] : 2);
+const hasVal = (q) => !!q && (typeof q.v === 'string' ? q.v !== '' : Number.isFinite(q.v));
+const MERGED_ROWS = ['teff_k', 'radius_rsun', 'lum_lsun', 'mass_msun', 'age_gyr', 'spectral_type'];
+const NOTE_FOR_ROW = { teff_k: /^No effective temperature available/, mass_msun: /^FLAME mass not available/, age_gyr: /^FLAME age not available/ };
+export function mergeStarSystem(system, rec) {
+  if (!rec) return system;
+  const recVals = starValuesFromRecord(rec), vals = { ...((system && system.values) || {}) };
+  let notes = system && Array.isArray(system.notes) ? system.notes.slice() : [];
+  for (const row of MERGED_ROWS) {
+    const a = vals[row], b = recVals[row];
+    if (!hasVal(b) || (hasVal(a) && strength(a) <= strength(b))) continue;   // a tie keeps Gaia's
+    vals[row] = b;
+    if (NOTE_FOR_ROW[row]) notes = notes.filter((n) => !NOTE_FOR_ROW[row].test(n));
+  }
+  return { ...(system || {}), values: vals, notes };
 }
 export function resolveStarAliases(stars, has) {
   const append = [], alias = new Map();

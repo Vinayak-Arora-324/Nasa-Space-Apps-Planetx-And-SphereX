@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from '../js/blink/scene3d-objects.js';
+import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, markerPoints, markerSize, isHollowSize, mergeStarSystem, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from '../js/blink/scene3d-objects.js';
 import { orbitPlacement } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-frames.js';
@@ -529,4 +529,63 @@ test('starSignature changes with the ids and aliases only', () => {
   assert.notEqual(starSignature(new Map([['a', starRec('a')]])), sig);
   assert.notEqual(starSignature(new Map([['a', starRec('a')], ['b', starRec('b', { same_as: ['y'] })]])), sig);
   assert.equal(starSignature(new Map()), '');
+});
+
+// ------------------------------------------------------------------ slice C2: billboards, hollow markers, star-card merge, cluster trip
+test('billboardItems: nearFade hides a cluster before the camera enters a star frame (no pop), lineAlpha ignores the member count', () => {
+  const lowN = cluster('hr23:L', {}, { n_members: q(10, undefined, 'catalogue') });
+  const vis = visibleObjects(store([lowN]), gctx()), cam = F.makeCam({ pos: [0, 0, 0] });
+  const at = (nearPc) => billboardItems(vis, cam, { pxPerRad: 1000, nearPc })[0];
+  assert.equal(at(Infinity).nearFade, 1); assert.equal(at(1).nearFade, 1); assert.equal(at(F.ENTER_PC).nearFade, 0); assert.equal(at(0).alpha, 0);
+  assert.ok(at(2 * F.ENTER_PC).nearFade > 0 && at(2 * F.ENTER_PC).nearFade < 1);
+  assert.ok(Math.abs(at(1).alpha - 0.15) < 1e-12); assert.equal(at(1).lineAlpha, 1);
+  const cand = cluster('hr23:C', {}, { quality: { v: 'candidate', tier: 'catalogue', src: 't' } });
+  assert.equal(billboardItems(visibleObjects(store([cand]), gctx({ layers: { ...defaultLayers(), clusterCandidates: true } })), cam, {})[0].lineAlpha, 0.5);
+});
+
+test('hollow markers are a negative size; markerPoints puts cluster centres, markers and groups into the 8-float point layout', () => {
+  assert.equal(markerSize(4, true), -4); assert.equal(markerSize(4, false), 4); assert.equal(isHollowSize(-4), true); assert.equal(isHollowSize(4), false);
+  const der = cluster('hr23:D', { evidence: 'derived', position: { ...pleiades.position, ra: 100 } }), cand = cluster('hr23:C', { position: { ...pleiades.position, ra: 80 } }, { quality: { v: 'candidate', tier: 'catalogue', src: 't' } });
+  const s = store([earth, mars, pleiades, der, cand]), vis = visibleObjects(s, gctx({ layers: { ...defaultLayers(), clusterCandidates: true } }));
+  const cam = F.makeCam({ pos: [0, 0, 0] }), items = billboardItems(vis, cam, { pxPerRad: 1000 });
+  const pts = markerPoints(vis, groupState(s, vis, cam, 1000), cam, items);
+  assert.equal(pts.length % 8, 0); assert.equal(pts.length / 8, 4, 'Mars marker + three cluster centres');
+  const rows = []; for (let i = 0; i < pts.length; i += 8) rows.push(Array.from(pts.slice(i, i + 8)));
+  const byDist = (id) => rows.find((r) => near(r.slice(0, 3), items.find((it) => it.id === id).rel, 1e-3));
+  assert.equal(byDist('hr23:Pleiades')[3], 4); assert.equal(byDist('hr23:Pleiades')[4], 1);
+  assert.equal(byDist('hr23:D')[3], -4, 'derived: hollow'); assert.equal(byDist('hr23:C')[3], 4); assert.equal(byDist('hr23:C')[4], 0.5, 'candidate: half alpha');
+  const mk = rows.find((r) => r[3] === 5); assert.ok(mk && mk[4] === 1, 'a solid kind marker keeps size 5 and alpha 1');
+  // a faded-out cluster (camera about to enter a star frame) draws no centre marker either
+  assert.equal(markerPoints(vis, {}, cam, billboardItems(vis, cam, { nearPc: 0 })).length / 8, 1);
+});
+
+test('mergeStarSystem: per row the strongest tier wins, a tie keeps Gaia, notes the archive value makes false are dropped', () => {
+  const sc = (v, tier, src, o = {}) => ({ v, tier, src, ...o });
+  const rec = starRec('gdr3:1', { size: { radius: { v: 0.1192, unit: 'Rsun', tier: 'catalogue', src: 'NEA pscomppars: Agol et al. 2021' }, angular: null },
+    props: { teff: sc(2566, 'catalogue', 'NEA pscomppars: Agol et al. 2021'), mass: { v: 0.0898, unit: 'Msun', tier: 'catalogue', src: 'NEA m' } } });
+  const gaia = { values: { dist_pc: sc(12.4, 'measured', 'BJ'), teff_k: null, radius_rsun: null, mass_msun: null, age_gyr: null },
+    notes: ['No effective temperature available for this star', 'FLAME mass not available for this star', 'FLAME age not available for this star'] };
+  const m = mergeStarSystem(gaia, rec);
+  assert.equal(m.values.teff_k.v, 2566); assert.equal(m.values.teff_k.tier, 'catalogue'); assert.match(m.values.teff_k.src, /Agol/);
+  assert.equal(m.values.radius_rsun.v, 0.1192); assert.equal(m.values.mass_msun.v, 0.0898); assert.equal(m.values.dist_pc.v, 12.4, 'other rows are untouched');
+  assert.deepEqual(m.notes, ['FLAME age not available for this star']);
+  assert.equal(gaia.notes.length, 3, 'the input is not mutated');
+  // a tie keeps Gaia's value and src; a stronger Gaia value stays; a stronger archive value replaces a weaker Gaia one
+  const g2 = { values: { teff_k: sc(2500, 'catalogue', 'GSP-Phot'), radius_rsun: sc(0.2, 'measured', 'interferometry'), mass_msun: sc(0.5, 'inferred', 'x') }, notes: [] };
+  const m2 = mergeStarSystem(g2, rec);
+  assert.equal(m2.values.teff_k.src, 'GSP-Phot'); assert.equal(m2.values.radius_rsun.v, 0.2); assert.equal(m2.values.mass_msun.v, 0.0898);
+  // no Gaia payload yet: the record's values alone; no record: the system comes back as it is
+  assert.equal(mergeStarSystem(undefined, rec).values.teff_k.v, 2566); assert.deepEqual(mergeStarSystem(undefined, rec).notes, []);
+  assert.equal(mergeStarSystem(gaia, null), gaia); assert.equal(mergeStarSystem(undefined, undefined), undefined);
+});
+
+test('a cluster trip: the plan is fly-galaxy and the spec stops at 2 x r50 (pc); the HUD phrase for a capped cone reads 2,003 small bodies', async () => {
+  const { kindSpec } = await import('../js/blink/scene3d-registry.js');
+  const spec = kindSpec('cluster');
+  assert.equal(spec.go, 'fly-galaxy'); assert.equal(spec.arrivePc(pleiades), 6); assert.equal(spec.arrivePc({ size: null }), 0);
+  const stars = { camFrame: 'galaxy', camHostKey: null, resolveHost: (h) => h };
+  assert.deepEqual(planGo({ kind: 'cluster', id: pleiades.id, host: pleiades.host }, stars), { type: 'fly-galaxy' });
+  const st = { asteroid: { count: 2000, truncated: true } };
+  assert.equal(countPhrase(['dwarf_planet', 'asteroid', 'comet'], { dwarf_planet: 1, asteroid: 2000, comet: 2 }, st), '2,003 brightest small bodies (more in this cone)');
+  assert.deepEqual(capNotes(st), ['Showing the 2,000 brightest small bodies in the cone; fainter ones are left out.']);
 });

@@ -14,8 +14,8 @@ const trappist = (el = {}, extra = {}) => ({
     i_deg: q(89.728), omega_deg: q(336.86), t_conj_mjd: q(57322.014193), t_peri_mjd: null, node_deg: null, ...el } },
   props: { disc_method: { v: 'Transit', src: 't', tier: 'catalogue' } }, ...extra,
 });
-const bare = (id, el = {}, props = {}) => ({
-  id, kind: 'exoplanet', name: id, host: 'x', position: { model: 'orbit', host_radec: [100, 20], elements: {
+const bare = (id, el = {}, props = {}, host = 'x') => ({
+  id, kind: 'exoplanet', name: id, host, position: { model: 'orbit', host_radec: [100, 20], elements: {
     period_d: q(10), a_au: q(0.1), e: q(0.3), i_deg: null, omega_deg: null, t_peri_mjd: null, t_conj_mjd: null, node_deg: null, ...el } }, props });
 
 test('hashUnit is FNV-1a 32-bit over UTF-8 of id#salt, divided by 2^32 (test vectors and an independent implementation)', () => {
@@ -81,11 +81,11 @@ test('periastron: the planet is at a(1-e) at t_peri; the phase source and an unk
 });
 
 test('assumed values are stable per id, differ across ids, and carry assumed flags', () => {
-  const a = orbitPlacement(bare('nea:A b'), 60000), a2 = orbitPlacement(bare('nea:A b'), 60000), b = orbitPlacement(bare('nea:B b'), 60000);
+  const a = orbitPlacement(bare('nea:A b', {}, {}, 'hostA'), 60000), a2 = orbitPlacement(bare('nea:A b', {}, {}, 'hostA'), 60000), b = orbitPlacement(bare('nea:B b', {}, {}, 'hostB'), 60000);
   assert.deepEqual(a, a2);
   assert.notEqual(a.used.node, b.used.node); assert.notEqual(a.used.incl, b.used.incl); assert.notEqual(a.used.omega, b.used.omega);
-  assert.equal(a.used.node, 360 * hashUnit('nea:A b', 'node')); assert.equal(a.used.omega, 360 * hashUnit('nea:A b', 'omega'));
-  assert.ok(Math.abs(a.used.incl - Math.acos(hashUnit('nea:A b', 'incl')) / D2R) < 1e-12 && a.used.incl >= 0 && a.used.incl <= 90);
+  assert.equal(a.used.node, 360 * hashUnit('hostA', 'node')); assert.equal(a.used.omega, 360 * hashUnit('nea:A b', 'omega'));
+  assert.ok(Math.abs(a.used.incl - Math.acos(hashUnit('hostA', 'incl')) / D2R) < 1e-12 && a.used.incl >= 0 && a.used.incl <= 90);
   assert.deepEqual(a.assumed, { node: true, incl: true, omega: true, phase: true, ecc: false });
   const t = orbitPlacement(trappist(), 60000);                               // known i, omega, phase; node and nothing else assumed
   assert.deepEqual(t.assumed, { node: true, incl: false, omega: false, phase: false, ecc: false });
@@ -132,4 +132,23 @@ test('orbitPath closes, stays on the orbit and contains the placement', () => {
   const n = [0, 1, 2].map(() => 0), a = path[0], b = path[90];
   const nrm = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; const nl = len(nrm);
   for (const p of path) assert.ok(Math.abs(dot(p, nrm) / nl) < 1e-12 && n);
+});
+
+test('the assumed node and inclination are per host: one system shares its plane, other hosts and planet-only values differ', () => {
+  const b1 = orbitPlacement(bare('nea:S b', {}, {}, 'gdr3:7'), 60000), b2 = orbitPlacement(bare('nea:S c', {}, {}, 'gdr3:7'), 60000), o = orbitPlacement(bare('nea:T b', {}, {}, 'gdr3:8'), 60000);
+  assert.equal(b1.used.node, b2.used.node); assert.equal(b1.used.incl, b2.used.incl);
+  assert.notEqual(b1.used.node, o.used.node); assert.notEqual(b1.used.incl, o.used.incl);
+  assert.notEqual(b1.used.omega, b2.used.omega, 'omega stays per planet');
+  assert.equal(b1.used.node, 360 * hashUnit('gdr3:7', 'node'));
+  // the same holds for the drawn ellipse, and a record without a host falls back to its own id
+  const p1 = orbitPath(bare('nea:S b', { e: q(0) }, {}, 'gdr3:7'), 8), p2 = orbitPath(bare('nea:S c', { e: q(0) }, {}, 'gdr3:7'), 8);
+  assert.ok(Math.abs(Math.hypot(...p1[0]) - 0.1) < 1e-12 && Math.abs(Math.hypot(...p2[0]) - 0.1) < 1e-12);
+  const nh = orbitPlacement({ ...bare('nea:N b'), host: undefined }, 60000);
+  assert.equal(nh.used.node, 360 * hashUnit('nea:N b', 'node'));
+  // transiting planets keep i = 90 whatever the host's draw is
+  assert.equal(orbitPlacement(bare('nea:S d', {}, { disc_method: { v: 'Transit' } }, 'gdr3:7'), 60000).used.incl, 90);
+  // coplanar: two circular planets of one host with the same i have orbit normals that agree
+  const nrm = (rec) => { const P = orbitPath(rec, 8), A = P[0], B = P[2]; const c = [A[1]*B[2]-A[2]*B[1], A[2]*B[0]-A[0]*B[2], A[0]*B[1]-A[1]*B[0]]; const l = len(c); return c.map((v) => v / l); };
+  const n1 = nrm(bare('nea:S b', { e: q(0) }, {}, 'gdr3:7')), n2 = nrm(bare('nea:S c', { e: q(0), a_au: q(0.2) }, {}, 'gdr3:7'));
+  assert.ok(Math.abs(Math.abs(dot(n1, n2)) - 1) < 1e-9);
 });

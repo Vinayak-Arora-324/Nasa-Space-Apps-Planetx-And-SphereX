@@ -25,11 +25,13 @@
 //   orbitPath(rec, n = 180) -> [[x, y, z], ...]   n + 1 points (the last equals the first) of the ellipse relative to the
 //       host, in AU, uniform in eccentric anomaly, with the same orientation as orbitPlacement; [] when unusable.
 //
-// ASSUMED VALUES (illustrative, deterministic per id)
-//   node   360 * h(id, 'node'), always (the archive has none)
-//   incl   90 if the planet transits (disc_method 'Transit' or t_conj_mjd present), else acos(h(id, 'incl')) (isotropic, prograde)
-//   omega  e > 0: 360 * h(id, 'omega'); e = 0: 0
-//   phase  M0 = 360 * h(id, 'phase') at J2000_MJD
+// ASSUMED VALUES (illustrative, deterministic)
+//   node   360 * h(host, 'node'), always (the archive has none). Per HOST (rec.host, else the record id), so the planets of one
+//          system share one assumed orbital plane orientation instead of drawing as a starburst
+//   incl   90 if the planet transits (disc_method 'Transit' or t_conj_mjd present), else acos(h(host, 'incl')) (isotropic, prograde),
+//          also per host (a coplanar system stays coplanar)
+//   omega  e > 0: 360 * h(id, 'omega')   (per planet); e = 0: 0
+//   phase  M0 = 360 * h(id, 'phase') at J2000_MJD   (per planet)
 //   e      the record's value, clamped to [0, 0.99]
 const D2R = Math.PI / 180, TWO_PI = 2 * Math.PI;
 export const J2000_MJD = 51544.5;
@@ -72,16 +74,16 @@ function orient(rec) {
   if (!el) return null;
   const P = finite(el.period_d), a = finite(el.a_au);
   if (!(P > 0) || !(a > 0)) return null;
-  const id = rec.id || '', props = rec.props || {}, method = props.disc_method && props.disc_method.v;
+  const id = rec.id || '', sys = rec.host || id, props = rec.props || {}, method = props.disc_method && props.disc_method.v;
   const eq = el.e, eVal = finite(eq);
   const e = Math.min(Math.max(eVal == null ? 0 : eVal, 0), 0.99);
   const assumed = { node: false, incl: false, omega: false, phase: false, ecc: eVal == null || (eq && eq.tier === 'illustrative') };
   let node = finite(el.node_deg), incl = finite(el.i_deg), omega = finite(el.omega_deg);
   const tConj = finite(el.t_conj_mjd), tPeri = finite(el.t_peri_mjd);
-  if (node == null) { node = 360 * hashUnit(id, 'node'); assumed.node = true; }
+  if (node == null) { node = 360 * hashUnit(sys, 'node'); assumed.node = true; }
   if (incl == null) {
     const transits = method === 'Transit' || tConj != null;
-    incl = transits ? 90 : Math.acos(hashUnit(id, 'incl')) / D2R; assumed.incl = true;
+    incl = transits ? 90 : Math.acos(hashUnit(sys, 'incl')) / D2R; assumed.incl = true;
   }
   if (omega == null) { omega = e > 0 ? 360 * hashUnit(id, 'omega') : 0; assumed.omega = true; }
   return { P, a, e, node, incl, omega, tConj, tPeri, assumed, el, id };

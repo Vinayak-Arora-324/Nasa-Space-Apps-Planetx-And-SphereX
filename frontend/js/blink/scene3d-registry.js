@@ -12,6 +12,7 @@
 //   UNIT_KM                          kilometres per unit: km, au, pc, Mpc, Rearth, Rjup, Rsun
 //   toAu(q) / toPc(q) -> number|null a Quantity {v, unit} in AU / parsecs (null for a missing, non-numeric or unknown unit)
 //   fmtNum(v, sig = 3)               number text for cards (the same as scene3d.js's)
+//   valueWithRange(q, unit, sig = 3) '134.8 pc (134.2–135.4)': more digits (up to 5) until lo and hi differ, else no interval
 //   evidenceRows(rows, evidence)     drops rows whose tier is 'illustrative' when evidence is true
 //
 //   registerKind(spec) / kindSpec(kind) -> spec|null / kinds() -> spec[] in registration order
@@ -155,6 +156,16 @@ const earthDistAu = (o) => {
 const fromYouRow = (ctx) => (ctx.fromYou != null ? [['From you', ctx.fromYou, 'illustrative', 'distance from the camera right now']] : []);
 const finish = (ctx, card) => ({ ...card, rows: evidenceRows(card.rows, ctx.evidence) });
 const num = (ctx) => ctx.fmtNum || fmtNum;
+/**
+ * 'v unit (lo-hi)' with enough significant digits for lo and hi to read differently: 3, then 4, then 5; when they still match the
+ * interval is omitted ('135 pc'). q needs finite v, lo, hi for an interval. The value uses the same digits as the interval.
+ */
+export function valueWithRange(q, unit = '', sig = 3) {
+  const u = unit ? ` ${unit}` : '';
+  if (!q || !Number.isFinite(q.lo) || !Number.isFinite(q.hi)) return `${fmtNum(q && q.v, sig)}${u}`;
+  for (let d = sig; d <= 5; d++) if (fmtNum(q.lo, d) !== fmtNum(q.hi, d)) return `${fmtNum(q.v, d)}${u} (${fmtNum(q.lo, d)}–${fmtNum(q.hi, d)})`;
+  return `${fmtNum(q.v, sig)}${u}`;
+}
 
 function planetCard(o, ctx) {
   const f = num(ctx), r = o.size && o.size.radius, km = toKm(r), sun = sunDistAu(o);
@@ -285,8 +296,7 @@ export function clusterRgb(o) {
 function clusterCard(o, ctx) {
   const f = num(ctx), p = o.position || {}, d = p.dist, r = o.size && o.size.radius;
   const rows = [];
-  const range = hasV(d) && Number.isFinite(d.lo) && Number.isFinite(d.hi) ? ` (${f(d.lo)}–${f(d.hi)})` : '';
-  rows.push(qtyRow('Distance (cluster parallax)', d, (q) => `${f(q.v)} pc${range}`, 'measured'));
+  rows.push(qtyRow('Distance (cluster parallax)', d, (q) => valueWithRange(q, 'pc'), 'measured'));
   const n = prop(o, 'n_members'); rows.push(qtyRow('Members', n, (q) => f(q.v), 'catalogue'));
   rows.push(qtyRow('Radius (r50)', r, (q) => `${f(toPc(q) ?? q.v)} pc`, 'catalogue'));
   const age = prop(o, 'age'); rows.push(qtyRow('Age', age, (q) => (q.v < 0.1 ? `${f(q.v * 1000)} Myr` : `${f(q.v)} Gyr`), 'inferred'));
@@ -295,7 +305,7 @@ function clusterCard(o, ctx) {
   const qu = prop(o, 'quality'); if (qu) rows.push(['Quality', qu.v, qu.tier || 'catalogue', srcOf(qu)]);
   const cls = prop(o, 'class') || prop(o, 'bound');
   if (cls) rows.push(['Class', typeof cls.v === 'boolean' ? (cls.v ? 'bound cluster' : 'moving group') : String(cls.v), cls.tier || 'catalogue', srcOf(cls)]);
-  const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', `${f(mass.v)} ${mass.unit === 'Msun' || !mass.unit ? 'Msun' : mass.unit}`, mass.tier || 'inferred', srcOf(mass)]);
+  const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', `${f(mass.v)} ${mass.unit === 'Msun' || !mass.unit ? 'M☉' : mass.unit}`, mass.tier || 'inferred', srcOf(mass)]);
   rows.push(...fromYouRow(ctx));
   const notes = [];
   if ((d && d.tier === 'inferred') || o.evidence === 'derived') notes.push('The distance is prior-dominated (parallax S/N < 5), so the cluster is drawn as a hollow marker.');

@@ -307,7 +307,7 @@ test('cluster card: distance with interval and method, members, r50, age, extinc
   assert.equal(c.notes, null); assert.equal(rowOf(c, 'Class'), undefined); assert.equal(rowOf(c, 'Mass'), undefined);
   assert.deepEqual(R.kindSpec('cluster').card(cl({}, { age: q(2.5, 'Gyr', 'inferred') }), ctx()).rows.find((r) => r[0] === 'Age').slice(1, 3), ['2.5 Gyr', 'inferred']);
   const hr24 = R.kindSpec('cluster').card(cl({}, { mass: q(800, 'Msun', 'inferred', 'HR24'), class: q('bound cluster', undefined, 'catalogue', 'HR24') }), ctx());
-  assert.deepEqual(rowOf(hr24, 'Class').slice(1, 3), ['bound cluster', 'catalogue']); assert.deepEqual(rowOf(hr24, 'Mass').slice(1, 3), ['800 Msun', 'inferred']);
+  assert.deepEqual(rowOf(hr24, 'Class').slice(1, 3), ['bound cluster', 'catalogue']); assert.deepEqual(rowOf(hr24, 'Mass').slice(1, 3), ['800 M☉', 'inferred']);
   assert.equal(rowOf(R.kindSpec('cluster').card(cl({}, { bound: q(false, undefined, 'catalogue') }), ctx()), 'Class')[1], 'moving group');
 });
 
@@ -331,4 +331,11 @@ test('clusterRgb: blue when young, white near 300 Myr, warm when old, grey witho
 
 test('units: exoplanet radii convert to AU', () => {
   assert.ok(Math.abs(R.toAu(q(1, 'Rearth')) - 6371 / M.KM_PER_AU) < 1e-15); assert.equal(R.toAu(q(1, 'Parsnip')), null);
+});
+
+test('valueWithRange: more digits (up to 5) until lo and hi differ, else no interval', () => {
+  assert.equal(R.valueWithRange({ v: 135.2, lo: 134.2, hi: 137.1 }, 'pc'), '135 pc (134–137)');
+  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.6, hi: 135.2 }, 'pc'), '134.8 pc (134.6–135.2)');   // 3 digits: 135 and 135
+  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.84, hi: 134.84 }, 'pc'), '135 pc');
+  assert.equal(R.valueWithRange({ v: 12.4 }, 'pc'), '12.4 pc');
 });

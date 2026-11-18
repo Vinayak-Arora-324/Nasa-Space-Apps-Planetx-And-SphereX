@@ -42,8 +42,9 @@ const Z_UP = [0, 0, 1];
 const SUN_HOST = { idx: 0, key: 'ss:sun', name: 'Sun', pc: [0, 0, 0] };
 const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;
 // Cluster glow brightness: BB_K x the exposure (capped), so a glow stays a faint wash even in a dark, high-exposure view. The Evidence
-// ring is a thin line and gets more.
-const BB_GLOW_K = 0.07, BB_GLOW_MAX = 0.14, BB_RING_K = 0.3, BB_RING_MAX = 0.6;   // a grouped system's marker: warm white, a little larger
+// ring is a thin line, drawn at a fixed linear level (not scaled by the exposure: a bright star nearby drives the exposure down and a
+// scaled ring vanished with it).
+const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;   // a grouped system's marker: warm white, a little larger
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
 
@@ -1136,7 +1137,7 @@ export class Scene3D {
       }
     }
     const gl = this.gl, pr = this.prog.bb, st = 40;
-    const kk = this.evidence ? Math.min(BB_RING_K * this.expo, BB_RING_MAX) : Math.min(BB_GLOW_K * this.expo, BB_GLOW_MAX);
+    const kk = this.evidence ? BB_RING : Math.min(BB_GLOW_K * this.expo, BB_GLOW_MAX);
     gl.useProgram(pr.p);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.bb);
     gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, k), gl.STREAM_DRAW);

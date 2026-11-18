@@ -399,22 +399,28 @@ test('billboardItems: glow in the normal view, outline in the Evidence view, fad
   assert.equal(p.mode, 'glow'); assert.equal(by(o, 'hr23:Pleiades').mode, 'outline');
   assert.equal(p.radiusUnits, 3); assert.ok(Math.abs(p.dist - 135) < 1e-9); assert.ok(near(p.rel, M.radecToXyz(56.75, 24.12, 135), 1e-9));
   assert.equal(p.fade, 1); assert.ok(Math.abs(p.pxRadius - Math.atan(3 / 135) * 1000) < 1e-9); assert.equal(p.markerOnly, false);
-  assert.ok(Math.abs(p.alpha - 0.75) < 1e-12, 'log10(1000) members'); assert.equal(by(g, 'hr23:C').alpha, 0.375); assert.equal(by(g, 'hr23:C').candidate, true);
+  assert.ok(Math.abs(p.alpha - 0.002 * 1000 / 9) < 1e-12, 'surface brightness 0.002 N / r50^2'); assert.ok(Math.abs(by(g, 'hr23:C').alpha - p.alpha / 2) < 1e-12); assert.equal(by(g, 'hr23:C').candidate, true);
   assert.deepEqual(p.rgb.map((v) => v >= 0 && v <= 1), [true, true, true]);
   assert.equal(p.hollow, false); assert.equal(by(g, 'hr23:D').hollow, true); assert.equal(by(g, 'hr23:D').dashed, false); assert.equal(by(o, 'hr23:D').dashed, true);
   assert.equal(by(g, 'hr23:Pleiades').screen, undefined);
   assert.deepEqual(billboardItems(vis, cam, { project: () => [3, 4] })[0].screen, [3, 4]);
-  // fade: smoothstep(0.5, 2, dist / r50); inside half an r50 it is 0, beyond two r50 it is 1
+  // fade: smoothstep(1.5, 4, dist / r50) on the glow only; the Evidence ring (lineAlpha) keeps full strength at any distance
   const at = (d) => billboardItems(vis.filter((e) => e.id === 'hr23:Pleiades'), F.makeCam({ pos: M.radecToXyz(56.75, 24.12, 135 - d) }), { pxPerRad: 1000 })[0];
-  assert.equal(at(1.4).fade, 0); assert.equal(at(6).fade, 1); assert.ok(at(4.5).fade > 0 && at(4.5).fade < 1);
-  assert.equal(at(1.4).alpha, 0);
+  assert.equal(at(1.4).fade, 0); assert.equal(at(1.4).alpha, 0); assert.equal(at(12.5).fade, 1); assert.ok(at(9).fade > 0 && at(9).fade < 1);
+  assert.equal(at(1.4).lineAlpha, 1); assert.equal(at(6).lineAlpha, 1); assert.equal(at(1.4).mode, 'glow');
   // marker-only when the projected r50 is under 2 px
   assert.equal(billboardItems(vis, cam, { pxPerRad: 40 })[0].markerOnly, true);
   assert.equal(billboardItems(vis, F.makeCam({ frame: 'system', host: { key: 'x', pc: [0, 0, 0] }, pos: [0, 0, 0] }), { pxPerRad: 1000 }).length, 0);
   assert.deepEqual(billboardItems(visibleObjects(s, gctx({ layers: L })).filter((e) => e.kind === 'planet'), cam, {}), []);
   const lowN = cluster('hr23:L', {}, { n_members: q(10, undefined, 'catalogue') }), noN = cluster('hr23:N', {}, { n_members: undefined });
   const s2 = store([lowN, noN]), v2 = visibleObjects(s2, gctx());
-  assert.ok(Math.abs(by(billboardItems(v2, cam, {}), 'hr23:L').alpha - 0.15) < 1e-12); assert.equal(by(billboardItems(v2, cam, {}), 'hr23:N').alpha, 0.3);
+  assert.ok(Math.abs(by(billboardItems(v2, cam, {}), 'hr23:L').alpha - 0.002 * 10 / 9) < 1e-12); assert.equal(by(billboardItems(v2, cam, {}), 'hr23:N').alpha, 0.1);
+  // distance-independent surface brightness: the Pleiades (N 1721, r50 2.7: ~236) is a haze, a diffuse group (194, 16.4: ~0.72) is not; capped at 1
+  const pl = cluster('hr23:P', {}, { n_members: q(1721, undefined, 'catalogue') }), hsc = cluster('hr23:H', { size: { radius: q(16.38, 'pc', 'catalogue'), angular: { major: 6 } } }, { n_members: q(194, undefined, 'catalogue') });
+  pl.size.radius = q(2.7, 'pc', 'catalogue');
+  const v3 = billboardItems(visibleObjects(store([pl, hsc]), gctx()), cam, {});
+  assert.ok(Math.abs(by(v3, 'hr23:P').alpha - 0.002 * 1721 / 7.29) < 1e-9 && by(v3, 'hr23:P').alpha > 0.4); assert.ok(by(v3, 'hr23:H').alpha < 0.002);
+  assert.equal(billboardItems(visibleObjects(store([cluster('hr23:X', {}, { n_members: q(1e6, undefined, 'catalogue') })]), gctx()), cam, {})[0].alpha, 1);
 });
 
 test('pick priority: a billboard is 25 until it collapses to a marker, then 16 (ahead of the 20 of stars)', () => {
@@ -538,7 +544,7 @@ test('billboardItems: nearFade hides a cluster before the camera enters a star f
   const at = (nearPc) => billboardItems(vis, cam, { pxPerRad: 1000, nearPc })[0];
   assert.equal(at(Infinity).nearFade, 1); assert.equal(at(1).nearFade, 1); assert.equal(at(F.ENTER_PC).nearFade, 0); assert.equal(at(0).alpha, 0);
   assert.ok(at(2 * F.ENTER_PC).nearFade > 0 && at(2 * F.ENTER_PC).nearFade < 1);
-  assert.ok(Math.abs(at(1).alpha - 0.15) < 1e-12); assert.equal(at(1).lineAlpha, 1);
+  assert.ok(Math.abs(at(1).alpha - 0.002 * 10 / 9) < 1e-12); assert.equal(at(1).lineAlpha, 1);
   const cand = cluster('hr23:C', {}, { quality: { v: 'candidate', tier: 'catalogue', src: 't' } });
   assert.equal(billboardItems(visibleObjects(store([cand]), gctx({ layers: { ...defaultLayers(), clusterCandidates: true } })), cam, {})[0].lineAlpha, 0.5);
 });
@@ -553,7 +559,7 @@ test('hollow markers are a negative size; markerPoints puts cluster centres, mar
   const rows = []; for (let i = 0; i < pts.length; i += 8) rows.push(Array.from(pts.slice(i, i + 8)));
   const byDist = (id) => rows.find((r) => near(r.slice(0, 3), items.find((it) => it.id === id).rel, 1e-3));
   assert.equal(byDist('hr23:Pleiades')[3], 4); assert.equal(byDist('hr23:Pleiades')[4], 1);
-  assert.equal(byDist('hr23:D')[3], -4, 'derived: hollow'); assert.equal(byDist('hr23:C')[3], 4); assert.equal(byDist('hr23:C')[4], 0.5, 'candidate: half alpha');
+  assert.equal(byDist('hr23:D')[3], -8, 'derived: hollow, widened to 8 px so it reads as a ring'); assert.equal(byDist('hr23:C')[3], 4); assert.equal(byDist('hr23:C')[4], 0.5, 'candidate: half alpha');
   const mk = rows.find((r) => r[3] === 5); assert.ok(mk && mk[4] === 1, 'a solid kind marker keeps size 5 and alpha 1');
   // a faded-out cluster (camera about to enter a star frame) draws no centre marker either
   assert.equal(markerPoints(vis, {}, cam, billboardItems(vis, cam, { nearPc: 0 })).length / 8, 1);

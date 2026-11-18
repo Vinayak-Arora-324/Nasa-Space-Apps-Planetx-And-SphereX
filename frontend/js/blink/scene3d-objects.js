@@ -60,13 +60,15 @@
 //         nearFade     smoothstep(ENTER_PC, 4 ENTER_PC, nearPc): 0 where the camera is about to enter a star's system frame (nearPc =
 //                      distance to the nearest star, default Infinity = 1), so a cluster's glow and marker never pop when the
 //                      frame switch stops drawing clusters. alpha includes it
-//         lineAlpha    the Evidence ring's alpha: (0.5 for candidates, else 1) * fade * nearFade (no member-count dimming)
+//         lineAlpha    the Evidence ring's alpha: (0.5 for candidates, else 1) * nearFade (no member-count dimming and NO close fade:
+//                      the ring stays at any distance where the cluster is drawn)
 //         rel          camera-relative position in the camera's frame units (doubles; the renderer casts to float32)
 //         dist, radiusUnits  its length and r50, both in frame units (r50 from size.radius, pc)
 //         rgb          clusterRgb(o), illustrative colour from the age
-//         alpha        base * fade: base from log10(n_members) (0.15 at 10 members, 0.45 at 100, 0.75 at 1000, clamped to
-//                      [0.1, 1]; 0.3 without a count), times 0.5 for candidates
-//         fade         smoothstep(0.5, 2, dist / r50): 0 inside the cluster's core, 1 beyond two r50
+//         alpha        base * fade * nearFade: base = clamp(GLOW_K * N / r50_pc^2, 0, 1), a distance-independent surface brightness
+//                      (GLOW_K = 0.002: the Pleiades, N/r50^2 ~ 236, gives 0.47; a diffuse group at 0.7 gives 0.0014; 0.1 without a
+//                      count), times 0.5 for candidates
+//         fade         smoothstep(1.5, 4, dist / r50): the glow fades out as the camera nears the cluster (you see its stars, not a fog)
 //         mode         'outline' (Evidence view: centre marker plus an r50 ring) | 'glow' (Plummer glow, illustrative look)
 //         pxRadius     the projected r50 in px (atan(r50 / dist) * pxPerRad); markerOnly: pxRadius < 2 (no glow, marker only)
 //         hollow       evidence 'derived' (hollow marker); dashed: hollow in outline mode; candidate: quality 'candidate'
@@ -75,7 +77,7 @@
 //   markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb }) -> Float32Array   the dynamic-points data of the galaxy
 //       frame: 8 floats per point (x y z size alpha r g b, camera-relative), one per ungrouped 'marker' entry, one per grouped host
 //       and one per billboard item (the cluster centre marker, alpha 0.5 for candidates, times nearFade). A hollow marker
-//       (spec.markerStyle(o) === 'hollow') is encoded as a NEGATIVE size: the point shader draws a ring of |size| px.
+//       (spec.markerStyle(o) === 'hollow') is encoded as a NEGATIVE size, at least HOLLOW_MIN_PX (8): the point shader draws a ring of |size| px.
 //   markerSize(px, hollow) -> signed size;  isHollowSize(size) -> bool   the encoding
 //   pickObjects(visible, groups, px, py, maxPx, { project, framePos, reach }) -> { sel, priority, d } | null
 //       framePos(entry) -> rel (the renderer closes over the camera; a pseudo-entry { galPc, host, group: true } stands for a
@@ -370,6 +372,7 @@ export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost 
 
 // ------------------------------------------------------------------ billboards (section 16.10)
 const GLOW_MIN_PX = 2;
+export const GLOW_K = 0.002, GLOW_UNKNOWN = 0.1, GLOW_NEAR = [1.5, 4];   // alpha = clamp(GLOW_K N / r50_pc^2); the glow fades out between 1.5 and 4 r50 from the centre
 export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null, nearPc = Infinity } = {}) {
   if (cam.frame !== 'galaxy') return [];
   const out = [], upc = F.unitsPerPc(cam), nearFade = smoothstep(F.ENTER_PC, 4 * F.ENTER_PC, nearPc);
@@ -380,12 +383,14 @@ export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000
     const dist = Math.hypot(rel[0], rel[1], rel[2]), radiusUnits = r50 * upc;
     const nq = e.o.props && e.o.props.n_members, n = nq && Number.isFinite(nq.v) && nq.v > 0 ? nq.v : null;
     const candidate = !!(e.o.props && e.o.props.quality && e.o.props.quality.v === 'candidate');
-    const base = (n == null ? 0.3 : Math.min(Math.max(0.15 + 0.3 * (Math.log10(n) - 1), 0.1), 1)) * (candidate ? 0.5 : 1);
-    const fade = dist > 0 ? smoothstep(0.5, 2, dist / radiusUnits) : 0;
+    // surface brightness, independent of distance: peak ~ N / r50_pc^2 (members per projected area), so a compact rich cluster is a
+    // visible haze and a diffuse moving group is not. Unknown N: a faint default.
+    const base = (n == null ? GLOW_UNKNOWN : Math.min(Math.max(GLOW_K * n / (r50 * r50), 0), 1)) * (candidate ? 0.5 : 1);
+    const fade = dist > 0 ? smoothstep(GLOW_NEAR[0], GLOW_NEAR[1], dist / radiusUnits) : 0;
     const pxRadius = dist > 0 ? Math.atan(radiusUnits / dist) * pxPerRad : Infinity;
     const mode = evidence ? 'outline' : 'glow', hollow = e.spec.markerStyle(e.o) === 'hollow';
     const item = { id: e.id, kind: e.kind, rel, dist, radiusUnits, rgb: clusterRgb(e.o), alpha: base * fade * nearFade, fade, nearFade,
-      lineAlpha: (candidate ? 0.5 : 1) * fade * nearFade, mode, pxRadius,
+      lineAlpha: (candidate ? 0.5 : 1) * nearFade, mode, pxRadius,
       markerOnly: pxRadius < GLOW_MIN_PX, hollow, dashed: hollow && mode === 'outline', candidate };
     if (project) item.screen = project(rel);
     out.push(item);
@@ -394,6 +399,7 @@ export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000
 }
 
 // ------------------------------------------------------------------ galaxy-frame marker points
+export const HOLLOW_MIN_PX = 8;   // a hollow marker is at least this wide: a 4 px ring cannot be told from a dot
 export const markerSize = (px, hollow) => (hollow ? -px : px);
 export const isHollowSize = (size) => size < 0;
 export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb = [1, 0.92, 0.75] } = {}) {
@@ -402,13 +408,13 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
   for (const e of visible) {
     if (e.renderer !== 'marker' || (e.host && groups[e.host] && groups[e.host].grouped)) continue;
     const rel = framePos(e, cam);
-    if (rel) put(rel, markerSize(e.spec.markerPx(e.o), e.spec.markerStyle(e.o) === 'hollow'), 1, e.spec.color(e.o));
+    if (rel) { const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o); put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), 1, e.spec.color(e.o)); }
   }
   if (items.length) {
     const by = new Map(visible.map((e) => [e.id, e]));
     for (const it of items) {
       const e = by.get(it.id);
-      if (e && it.nearFade > 0) put(it.rel, markerSize(e.spec.markerPx(e.o), it.hollow), (it.candidate ? 0.5 : 1) * it.nearFade, e.spec.color(e.o));
+      if (e && it.nearFade > 0) put(it.rel, markerSize(it.hollow ? Math.max(e.spec.markerPx(e.o), HOLLOW_MIN_PX) : e.spec.markerPx(e.o), it.hollow), (it.candidate ? 0.5 : 1) * it.nearFade, e.spec.color(e.o));
     }
   }
   for (const [host, g] of Object.entries(groups)) {

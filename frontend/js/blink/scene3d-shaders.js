@@ -357,9 +357,11 @@ void main(){
   float rho = length(v_uv);
   vec3 c;
   if (v_mode < 0.5) {
+    // Plummer profile with its value at the quad edge (rho = 4) subtracted and rescaled, so it is exactly 0 there, times a taper
+    // over rho 3..4: no visible square, whatever the brightness
     float q = 1.0 + rho*rho;
-    c = v_col.rgb * (v_col.a * u_k / (q*q));
-    if (rho > 3.9) c *= clamp((4.0 - rho)/0.1, 0.0, 1.0);          // the quad edge: the profile is ~0.004 there, but end it cleanly
+    float f = max((1.0/(q*q) - 0.00346) / (1.0 - 0.00346), 0.0) * (1.0 - smoothstep(3.0, 4.0, rho));
+    c = v_col.rgb * (v_col.a * u_k * f);
   } else {
     float w = fwidth(rho);                                           // rho change per device px
     float hw = 0.75*u_dpr*w;                                     // half of ~1.5 CSS px, in rho units

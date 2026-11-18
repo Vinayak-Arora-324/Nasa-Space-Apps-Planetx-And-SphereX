@@ -1,4 +1,4 @@
-"""Offline tests for /api/scene3d (no network: star fetchers, TAP and SkyBoT are monkeypatched)."""
+"""Offline tests for /api/scene3d (no network: star fetchers and TAP are monkeypatched)."""
 
 from __future__ import annotations
 
@@ -9,12 +9,11 @@ import random
 import pytest
 from fastapi.testclient import TestClient
 
-from spherex_app import catalogs, config, movers, scene3d
+from spherex_app import catalogs, config, scene3d
 from spherex_app.archive import UpstreamError
 from spherex_app.main import app
 
 client = TestClient(app)
-MJD = 60000.0
 ORION = (83.82, -5.39)
 
 
@@ -37,14 +36,6 @@ def _fake_gaia(n_rows: int, seen: list | None = None):
         if seen is not None:
             seen.append((ra, dec, radius, limit))
         return _gaia_rows(n_rows)
-    return fake
-
-
-def _fake_skybot(objs=None, exc: Exception | None = None):
-    async def fake(ra, dec, radius, jd):
-        if exc is not None:
-            raise exc
-        return objs or []
     return fake
 
 
@@ -80,8 +71,6 @@ def _star(i: int, ra: float, dec: float, g: float) -> dict:
     {"ra": 10, "dec": 0, "radius": 5.5},
     {"ra": 10, "dec": 0, "limit": 99},
     {"ra": 10, "dec": 0, "limit": 50001},
-    {"ra": 10, "dec": 0, "mjd": 1000.0},
-    {"ra": 10, "dec": 0, "mjd": float("nan")},
 ])
 def test_validation_is_json_400(params, monkeypatch):
     monkeypatch.setattr(scene3d, "_gaia_csv", _fake_gaia(0))
@@ -198,8 +187,7 @@ def test_esa_is_the_primary_when_configured(monkeypatch):
 
 def test_source_label_in_response(monkeypatch):
     monkeypatch.setattr(scene3d, "_gaia_csv", _fake_gaia(2))
-    monkeypatch.setattr(movers, "skybot_cone", _fake_skybot())
-    j = client.get("/api/scene3d", params={"ra": 1, "dec": 1, "mjd": MJD}).json()
+    j = client.get("/api/scene3d", params={"ra": 1, "dec": 1}).json()
     assert j["stars"]["source"] == scene3d.SOURCE_LABELS["esa"]
 
 
@@ -465,47 +453,17 @@ def test_star_rows_abs_g_and_fields():
     assert bp is None
 
 
-def test_bodies_xyz_adds_earth_and_skips_missing_distance():
-    earth = [1.0, 0.0, 0.0]
-    objs = [
-        {"name": "A", "number": 1, "class": "MB", "vmag": 12.0, "ra": 0.0, "dec": 0.0,
-         "dg_au": 2.0, "dh_au": 3.0},
-        {"name": "B", "number": None, "class": None, "vmag": None, "ra": 0.0, "dec": 90.0,
-         "dg_au": None, "dh_au": None},
-    ]
-    out = scene3d.bodies_xyz(earth, objs)
-    assert len(out) == 1
-    b = out[0]
-    assert (b["x"], b["y"], b["z"]) == pytest.approx((3.0, 0.0, 0.0))
-    assert b["dg_au"] == 2.0 and b["dh_au"] == 3.0 and b["name"] == "A"
-
-
-def test_solar_planets_and_earth_distance():
-    sol = scene3d.solar_positions(MJD)
-    names = [p["name"] for p in sol["planets"]]
-    assert names == ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Moon"]
-    earth_r = math.sqrt(sum(c * c for c in sol["earth"]))
-    assert 0.98 < earth_r < 1.02
-    moon = sol["planets"][-1]
-    assert math.dist([moon["x"], moon["y"], moon["z"]], sol["earth"]) < 0.01
-    neptune = sol["planets"][6]
-    assert 29.5 < math.hypot(neptune["x"], neptune["y"], neptune["z"]) < 30.5
-
-
 # --- route ------------------------------------------------------------------------------
 
 def test_scene_response_shape_and_fields(monkeypatch):
     seen = []
     monkeypatch.setattr(scene3d, "_gaia_csv", _fake_gaia(3, seen))
-    monkeypatch.setattr(movers, "skybot_cone", _fake_skybot(objs=[
-        {"name": "Ceres", "number": 1, "class": "MBA", "vmag": 8.1, "ra": 83.8, "dec": -5.4,
-         "dg_au": 1.5, "dh_au": 2.6}]))
-    r = client.get("/api/scene3d", params={"ra": 83.82, "dec": -5.39, "radius": 2, "limit": 500,
-                                           "mjd": MJD})
+    r = client.get("/api/scene3d", params={"ra": 83.82, "dec": -5.39, "radius": 2, "limit": 500})
     assert r.status_code == 200
     j = r.json()
-    assert set(j) == {"ra", "dec", "radius", "mjd", "stars", "solar"}
-    assert j["mjd"] == MJD and j["radius"] == 2.0
+    # stars only: solar-system objects moved to /api/objects (docs/object-framework.md section 4.4)
+    assert set(j) == {"ra", "dec", "radius", "stars"}
+    assert j["radius"] == 2.0
     st = j["stars"]
     assert set(st) == {"epoch", "source", "fields", "rows", "truncated", "incomplete", "failed_tiles"}
     assert st["epoch"] == 2016.0 and st["fields"] == scene3d.STAR_FIELDS
@@ -513,28 +471,9 @@ def test_scene_response_shape_and_fields(monkeypatch):
     assert len(st["rows"]) == 3  # the same three stars come back from every tile: deduped
     assert all(isinstance(row[0], str) and len(row) == 8 for row in st["rows"])
     assert len(seen) == len(scene3d.tile_centres(83.82, -5.39, 2.0))
-    so = j["solar"]
-    assert set(so) == {"earth", "sun", "planets", "bodies", "bodies_error"}
-    assert so["sun"] == [0, 0, 0] and so["bodies_error"] is None
-    assert len(so["earth"]) == 3 and len(so["planets"]) == 8
-    assert set(so["planets"][0]) == {"name", "x", "y", "z"}
-    b = so["bodies"][0]
-    assert set(b) == {"name", "number", "class", "vmag", "x", "y", "z", "dg_au", "dh_au"}
-    assert b["name"] == "Ceres" and b["number"] == 1
-
-
-def test_skybot_failure_does_not_fail_request(monkeypatch):
-    monkeypatch.setattr(scene3d, "_gaia_csv", _fake_gaia(2))
-    monkeypatch.setattr(movers, "skybot_cone", _fake_skybot(exc=RuntimeError("SkyBoT down")))
-    r = client.get("/api/scene3d", params={"ra": 1, "dec": 1, "mjd": MJD})
-    assert r.status_code == 200
-    so = r.json()["solar"]
-    assert so["bodies"] == [] and so["bodies_error"] == "SkyBoT down"
-    assert len(so["planets"]) == 8
 
 
 def test_star_total_failure_is_502(monkeypatch):
     monkeypatch.setattr(scene3d, "_gaia_csv", _catalogue_fake([], fail=lambda *a: True))
-    monkeypatch.setattr(movers, "skybot_cone", _fake_skybot())
-    r = client.get("/api/scene3d", params={"ra": 1, "dec": 1, "mjd": MJD})
+    r = client.get("/api/scene3d", params={"ra": 1, "dec": 1})
     assert r.status_code == 502 and "detail" in r.json()

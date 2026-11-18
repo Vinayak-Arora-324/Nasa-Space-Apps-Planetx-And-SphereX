@@ -602,8 +602,7 @@ async def coverage():
 
 
 @app.get("/api/scene3d")
-async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 20000,
-                      mjd: float | None = None):
+async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 20000):
     if not (math.isfinite(ra) and 0 <= ra < 360):
         _bad("ra must be in [0, 360)")
     if not (math.isfinite(dec) and -90 <= dec <= 90):
@@ -612,9 +611,7 @@ async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 2
         _bad("radius must be between 0.1 and 5.0 deg")
     if not 100 <= limit <= 50000:
         _bad("limit must be between 100 and 50000")
-    if mjd is not None and not (math.isfinite(mjd) and scene3d.MJD_MIN <= mjd <= scene3d.MJD_MAX):
-        _bad("mjd must be between 15020 (1900) and 88069 (2100)")
-    return _clean(await scene3d.build_scene(ra, dec, radius, limit, mjd))
+    return _clean(await scene3d.build_scene(ra, dec, radius, limit))
 
 
 @app.get("/api/objects")

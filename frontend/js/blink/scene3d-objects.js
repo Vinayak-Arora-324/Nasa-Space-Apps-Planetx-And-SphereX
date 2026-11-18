@@ -41,7 +41,8 @@
 //   pickObjects(visible, groups, px, py, maxPx, { project, framePos, reach }) -> { sel, priority, d } | null
 //       framePos(entry) -> rel (the renderer closes over the camera; a pseudo-entry { galPc, host, group: true } stands for a
 //       group marker), reach(entry) -> extra pick radius in px (a sphere's disc; may be omitted). Grouped hosts give one group
-//       candidate (priority 10). Lowest priority wins, then nearest pixel (see choosePick).
+//       candidate (priority 10). Lowest priority wins, then nearest pixel (see choosePick). Priority is pickPriority(entry):
+//       spec.pick.marker for marker entries when the kind sets it (small bodies: 15, ahead of stars), else spec.pick.priority.
 //   choosePick(cands) -> the winning candidate | null   cands: [{ sel, priority, d }]; merge the star candidate in here
 //   labelCandidates(visible, groups, { project, framePos, discPx }) -> [{ x, y, key, text }]
 //       discPx(entry) -> disc radius in px. Applies each kind's label rule. Labels of one pool (spec.label.group, else the
@@ -186,6 +187,8 @@ export function groupState(store, visible, cam, pxPerRad, GROUP_PX = 8) {
   return out;
 }
 
+/** A kind's pick priority for this entry: spec.pick.marker while drawn as a marker (when set), else spec.pick.priority. */
+export const pickPriority = (e) => (e.renderer === 'marker' && e.spec.pick.marker != null ? e.spec.pick.marker : e.spec.pick.priority);
 const isGrouped = (groups, e) => !!(e.host && groups[e.host] && groups[e.host].grouped);
 
 /** The best candidate: the lowest priority number, then the smallest pixel distance. */
@@ -201,7 +204,7 @@ export function pickObjects(visible, groups, px, py, maxPx, { project, framePos:
     if (isGrouped(groups, e)) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
-    if (d <= Math.max(maxPx, reach(e) || 0)) cands.push({ sel: { kind: e.kind, id: e.id }, priority: e.spec.pick.priority, d });
+    if (d <= Math.max(maxPx, reach(e) || 0)) cands.push({ sel: { kind: e.kind, id: e.id }, priority: pickPriority(e), d });
   }
   for (const [host, g] of Object.entries(groups)) {
     if (!g.grouped) continue;

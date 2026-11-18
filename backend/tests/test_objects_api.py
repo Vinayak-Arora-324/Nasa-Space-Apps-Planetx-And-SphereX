@@ -168,9 +168,9 @@ def test_missing_required_params_are_422():
     assert client.get("/api/objects", params={"ra": 1}).status_code == 422
 
 
-def test_scene3d_route_is_untouched():
+def test_both_routes_exist_and_scene3d_has_no_solar_helpers():
     from spherex_app import scene3d
-    assert scene3d.solar_positions is objects_live.solar_positions
+    assert not hasattr(scene3d, "solar_positions") and not hasattr(scene3d, "bodies_xyz")
     paths = set(client.get("/openapi.json").json()["paths"])
     assert "/api/scene3d" in paths and "/api/objects" in paths
 

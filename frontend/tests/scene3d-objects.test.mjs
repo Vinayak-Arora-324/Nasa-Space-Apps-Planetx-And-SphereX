@@ -154,15 +154,24 @@ test('fixed positions place by ra, dec and distance; direction-only records get 
   assert.equal(s.placement('t:b').galPc, null); assert.ok(near(s.placement('t:b').dir, [0, 1, 0], 1e-12));
 });
 
-test('pick priority: a planet beats a star beats an asteroid at the same pixel', () => {
+test('pick priority: in the system frame a planet beats a star beats an asteroid at the same pixel', () => {
+  const s = store(), host = { key: 'ss:sun', pc: [0, 0, 0] }, scam = F.makeCam({ frame: 'system', host, pos: [0.5, 0.25, -0.125] });
+  const svis = visibleObjects(s, gctx({ frame: 'system', inHost: (h) => h === 'ss:sun' }));
+  const star = { sel: { kind: 'star', id: 'gdr3:1', idx: 4 }, priority: 20, d: 0 };
+  const sast = pickObjects(svis.filter((e) => e.kind === 'asteroid'), {}, 100, 100, 10, { project: () => [100, 100], framePos: (e) => framePos(e, scam) });
+  assert.equal(sast.priority, 30);
+  assert.equal(choosePick([sast, star]).sel.kind, 'star');
+});
+
+test('pick priority: as a galaxy-frame marker an asteroid beats the cone\'s stars; planets still come first', () => {
   const s = store(), cam = F.makeCam({ pos: [0, 0, 0] });
   const project = () => [100, 100], pos = (e) => framePos(e, cam), vis = visibleObjects(s, gctx());
   const only = (pred) => vis.filter(pred);
   const star = { sel: { kind: 'star', id: 'gdr3:1', idx: 4 }, priority: 20, d: 0 };
   const pick = (v) => pickObjects(v, {}, 100, 100, 10, { project, framePos: pos });
   const ast = pick(only((e) => e.kind === 'asteroid'));
-  assert.equal(ast.priority, 30);
-  assert.equal(choosePick([ast, star]).sel.kind, 'star');
+  assert.equal(ast.priority, 15);
+  assert.equal(choosePick([ast, star]).sel.kind, 'asteroid');
   const pl = pick(only((e) => e.kind === 'planet' || e.kind === 'asteroid'));
   assert.equal(pl.priority, 10); assert.equal(pl.sel.kind, 'planet');
   assert.equal(choosePick([pl, star, ast]).sel.kind, 'planet');

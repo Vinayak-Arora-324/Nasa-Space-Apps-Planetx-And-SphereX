@@ -26,12 +26,9 @@ def _by_id(recs):
 
 # --- moved helpers (behaviour kept) -----------------------------------------------------------
 
-def test_helpers_are_still_reachable_from_scene3d():
+def test_scene3d_shares_radec_to_xyz():
     from spherex_app import scene3d
-    assert scene3d.bodies_xyz is objects_live.bodies_xyz
-    assert scene3d.solar_positions is objects_live.solar_positions
     assert scene3d.radec_to_xyz is objects_live.radec_to_xyz
-    assert scene3d.PLANETS is objects_live.PLANETS
 
 
 def test_bodies_xyz_adds_earth_and_skips_missing_distance():

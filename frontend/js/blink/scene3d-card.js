@@ -21,7 +21,7 @@ function addRow(doc, dl, label, text, tier, src, used) {
   dl.appendChild(dt); dl.appendChild(dd);
 }
 
-function finish(doc, root, dl, used, notes, onGo, loading, error) {
+function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel) {
   root.appendChild(dl);
   if (used.size) {
     const leg = el(doc, 'div', 'card-legend');
@@ -36,7 +36,7 @@ function finish(doc, root, dl, used, notes, onGo, loading, error) {
   if (loading) root.appendChild(el(doc, 'p', 'card-loading', 'Loading details…'));
   if (error) root.appendChild(el(doc, 'p', 'card-error', String(error)));
   if (onGo) {
-    const b = el(doc, 'button', 'btn accent', 'Go there');
+    const b = el(doc, 'button', 'btn accent', goLabel || 'Go there');
     b.type = 'button';
     b.addEventListener('click', onGo);
     root.appendChild(b);
@@ -44,7 +44,8 @@ function finish(doc, root, dl, used, notes, onGo, loading, error) {
 }
 
 /** Fill `el` with a card for a star model (see starModel in scene3d-physics.js). */
-export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error } = {}) {
+/** goLabel: the button's text (default 'Go there'). */
+export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || 'Star'));
@@ -62,17 +63,18 @@ export function renderStarCard(host, model, { title, subtitle, distFromCameraTex
   row('G', m.gMag, 'mag', 2);
   row('BP−RP', m.bpRp, 'mag', 2);
   if (distFromCameraText) addRow(doc, dl, 'From you', distFromCameraText, 'illustrative', 'distance from the camera right now', used);
-  finish(doc, host, dl, used, m.notes, onGo, loading, error);
+  finish(doc, host, dl, used, m.notes, onGo, loading, error, goLabel);
 }
 
-/** Generic card: rows are [label, text, tier]. */
-export function renderBodyCard(host, { title, rows = [], onGo, notes } = {}) {
+/** Generic card: rows are [label, text, tier, src]; src (optional) goes into the tier's tooltip. goLabel: the button's text. */
+export function renderBodyCard(host, { title, subtitle, rows = [], onGo, notes, goLabel } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || ''));
+  if (subtitle) host.appendChild(el(doc, 'div', 'card-sub', subtitle));
   const dl = el(doc, 'dl', 'card-rows'), used = new Set();
-  rows.forEach(([label, text, tier]) => addRow(doc, dl, label, text, tier, '', used));
-  finish(doc, host, dl, used, notes, onGo, false, null);
+  rows.forEach(([label, text, tier, src]) => addRow(doc, dl, label, text, tier, src || '', used));
+  finish(doc, host, dl, used, notes, onGo, false, null, goLabel);
 }
 
 export const CARD_CSS = `

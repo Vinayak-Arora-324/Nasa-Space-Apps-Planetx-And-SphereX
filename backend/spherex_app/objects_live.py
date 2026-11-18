@@ -94,6 +94,11 @@ def xyz_to_radec(x: float, y: float, z: float) -> tuple[float, float, float]:
     return math.degrees(math.atan2(y, x)) % 360.0, math.degrees(math.asin(max(-1.0, min(1.0, z / d)))), d
 
 
+# Heliocentric positions are kept to 1e-9 AU (150 m): at 6 decimals the Moon's direction from Earth
+# (0.0026 AU away) was off by up to an arcminute in the Stars scene, which places it as seen from Earth.
+XYZ_DP = 9
+
+
 def solar_positions(mjd: float) -> dict:
     """Earth and the planets/Moon relative to the Sun, AU, ICRS axes (built-in ephemeris)."""
     t = Time(mjd, format="mjd", scale="tdb")
@@ -101,7 +106,7 @@ def solar_positions(mjd: float) -> dict:
 
     def rel(body: str) -> list[float]:
         xyz = (get_body_barycentric(body, t) - sun).xyz.to_value(u.au)
-        return [round(float(v), 6) for v in xyz]
+        return [round(float(v), XYZ_DP) for v in xyz]
 
     planets = []
     for name, body in PLANETS:
@@ -117,7 +122,7 @@ def earth_xyz(mjd: float) -> tuple[float, float, float]:
     t = Time(mjd, format="mjd", scale="tdb")
     sun = get_body_barycentric("sun", t)
     xyz = (get_body_barycentric("earth", t) - sun).xyz.to_value(u.au)
-    return tuple(round(float(v), 6) for v in xyz)  # type: ignore[return-value]
+    return tuple(round(float(v), XYZ_DP) for v in xyz)  # type: ignore[return-value]
 
 
 def bodies_xyz(earth: list[float], objs: list[dict]) -> list[dict]:
@@ -135,7 +140,7 @@ def bodies_xyz(earth: list[float], objs: list[dict]) -> list[dict]:
         out.append({
             "name": o.get("name") or "", "number": o.get("number"), "class": o.get("class"),
             "vmag": _f(o.get("vmag")),
-            "x": round(ex + dg * ux, 6), "y": round(ey + dg * uy, 6), "z": round(ez + dg * uz, 6),
+            "x": round(ex + dg * ux, XYZ_DP), "y": round(ey + dg * uy, XYZ_DP), "z": round(ez + dg * uz, XYZ_DP),
             "dg_au": round(dg, 6), "dh_au": None if dh is None else round(dh, 6),
         })
     return out

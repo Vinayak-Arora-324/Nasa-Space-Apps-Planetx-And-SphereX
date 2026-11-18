@@ -322,7 +322,8 @@ def mock_solar(ra, dec, radius, mjd):
                            x=round(p[0], 6), y=round(p[1], 6), z=round(p[2], 6), dg_au=round(dg, 6), dh_au=round(dh, 6)))
     return earth, planets, bodies
 
-def scene3d_payload(ra, dec, radius, limit, mjd):
+def scene3d_payload(ra, dec, radius, limit):
+    """/api/scene3d: the synthetic star cone only (solar-system objects are served by /api/objects)."""
     rng = random.Random(f"scene3d/{ra:.4f}/{dec:.4f}/{radius:.3f}")
     a0, d0 = math.radians(ra), math.radians(dec)
     c = (math.cos(d0) * math.cos(a0), math.cos(d0) * math.sin(a0), math.sin(d0))
@@ -341,11 +342,9 @@ def scene3d_payload(ra, dec, radius, limit, mjd):
                      round(absg, 3), bprp, round(d * (1 - f), 3), round(d * (1 + f), 3)])
     truncated = len(rows) > limit
     rows = rows[:limit]
-    earth, planets, bodies = mock_solar(ra, dec, radius, mjd)
-    return dict(ra=ra, dec=dec, radius=radius, mjd=mjd,
+    return dict(ra=ra, dec=dec, radius=radius,
                 stars=dict(epoch=2016.0, source="mock (synthetic)", fields=["id", "x", "y", "z", "abs_g", "bp_rp", "d_lo", "d_hi"],
-                           rows=rows, truncated=truncated),
-                solar=dict(earth=[round(e, 6) for e in earth], sun=[0, 0, 0], planets=planets, bodies=bodies, bodies_error=None))
+                           rows=rows, truncated=truncated, incomplete=False, failed_tiles=0))
 
 # ---- /api/objects: the space-maps.objects/1 contract, from the mock solar system above ----
 OBJ_SCHEMA = "space-maps.objects/1"
@@ -564,13 +563,12 @@ class H(BaseHTTPRequestHandler):
             try:
                 ra, dec = float(p['ra']), float(p['dec'])
                 radius = float(p.get('radius', 3)); limit = int(p.get('limit', 20000))
-                mjd = float(p['mjd']) if 'mjd' in p else 61000.0
             except (KeyError, ValueError):
-                return self.send_json({"detail": "ra and dec are required numbers; radius, limit and mjd must be numbers"}, 400)
+                return self.send_json({"detail": "ra and dec are required numbers; radius and limit must be numbers"}, 400)
             if not (0 <= ra < 360 and -90 <= dec <= 90): return self.send_json({"detail": "ra must be in [0, 360) and dec in [-90, 90]"}, 400)
             if not (0 < radius <= 30): return self.send_json({"detail": "radius must be in (0, 30] degrees"}, 400)
             if limit < 1: return self.send_json({"detail": "limit must be at least 1"}, 400)
-            return self.send_json(scene3d_payload(ra, dec, radius, limit, mjd))
+            return self.send_json(scene3d_payload(ra, dec, radius, limit))
         if ep == 'objects':
             try:
                 ra, dec = float(p['ra']), float(p['dec'])

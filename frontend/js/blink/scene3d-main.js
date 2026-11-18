@@ -1,10 +1,13 @@
 // Page controller for scene3d.html: reads the patch from the URL, loads the bright context stars (a static file) and
-// the Gaia stars plus solar system for the patch (/api/scene3d), and wires the HUD to the Scene3D renderer.
+// the Gaia stars for the patch (/api/scene3d) and its objects (/api/objects: planets, the Moon, small bodies), which load
+// side by side and fail separately, and wires the HUD and the layers panel to the Scene3D renderer.
 // This is the first view of a spot picked on the sphere; its SPHEREx frames load only from "Watch this patch change".
-import { getScene3D, getCoverage } from '../api.js';
+import { getScene3D, getObjects, getCoverage } from '../api.js';
 import { Scene3D, fmtNum } from './scene3d.js';
 import { contextStars, LY_PER_PC as LY } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
+import { layers as layerList, kinds as kindList, kindSpec } from './scene3d-registry.js';
+import { kindsPhrase } from './scene3d-objects.js';
 import { C_PC_PER_S, fmtTimesC } from './scene3d-nav.js';
 import { fmtRA, fmtDec, fmtDeg, separation } from './util.js';
 
@@ -66,7 +69,8 @@ document.title = 'Inside the patch · 3D fly-through';
 
 // ---------------------------------------------------------------- status banner
 let solarDate = '';
-let gaiaState = 'loading';   // loading | ok | error
+let gaiaState = 'loading';      // loading | ok | error
+let objectsState = 'loading';   // loading | ok | error
 function showStatus(text, { error = false, retry = false } = {}) {
   const box = $('status');
   box.hidden = false;
@@ -93,17 +97,31 @@ function onHud(h) {
   $('hud-count').textContent = stars
     ? (c.gaia ? `${c.gaia.toLocaleString('en-US')} Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around`
       : gaiaState === 'error' ? `No Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around` : 'Gaia stars loading…')
-    : `${c.planets} planets and moons · ${c.bodies} small bodies`;
+    : solarCountText(h.objCounts || {});
   $('hud-limit').textContent = `${h.limit.toFixed(1)} mag · [ and ] change it`;
   $('hint').textContent = h.flying ? 'Autopilot · Esc cancels' : h.locked ? 'WASD move · mouse look · wheel throttle · T auto/manual speed · Shift boost · G autopilot to the target · Esc release' : 'Click a star to select it · click empty sky to fly · WASD move · wheel throttle · T auto/manual speed · Shift boost · G autopilot';
   document.querySelectorAll('.scene-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === h.scene)));
   setEvidenceUi(h.evidence);
 }
+const plural = (n, kind) => { const s = kindSpec(kind); return s ? s.noun[n === 1 ? 0 : 1] : kind; };
+/** "8 planets and the Moon · 23 small bodies", from the store's counts and the registry nouns. */
+function solarCountText(c) {
+  if (objectsState === 'loading') return 'Solar system loading…';
+  const planets = c.planet || 0, moons = c.moon || 0, small = (c.dwarf_planet || 0) + (c.asteroid || 0) + (c.comet || 0);
+  const first = [planets ? `${planets} ${plural(planets, 'planet')}` : '', moons === 1 ? 'the Moon' : moons > 1 ? `${moons} ${plural(moons, 'moon')}` : ''].filter(Boolean).join(' and ');
+  return [first, `${small} small ${small === 1 ? 'body' : 'bodies'}`].filter(Boolean).join(' · ');
+}
 function setEvidenceUi(on) {
   $('btn-evidence').setAttribute('aria-pressed', String(!!on));
   $('ev-chip').hidden = !on;
 }
-function setNote(text) { const n = $('note'); n.textContent = text || ''; n.hidden = !text; }
+// Notes from independent loads (the bright stars, the objects) share one line, each under its own key.
+const notes = {};
+function setNote(text, key = 'ctx') {
+  notes[key] = text || '';
+  const all = Object.values(notes).filter(Boolean).join(' ');
+  const n = $('note'); n.textContent = all; n.hidden = !all;
+}
 
 // ---------------------------------------------------------------- renderer
 let scene;
@@ -112,6 +130,7 @@ try {
     canvas: $('gl'), labels: $('labels'), card: $('card'), ra, dec, radius,
     onHud,
     onEvidence: setEvidenceUi,
+    onLayers: syncLayers,
     onScene: (name) => {
       $('btn-stars').setAttribute('aria-pressed', String(name === 'stars'));
       $('btn-solar').setAttribute('aria-pressed', String(name === 'solar'));
@@ -124,7 +143,7 @@ try {
 } catch (e) {
   showStatus(`The 3D view needs WebGL2. This browser could not start it: ${e.message} Try a current Chrome, Edge, Firefox or Safari.`, { error: true });
   $('gl').hidden = true;
-  $('btn-stars').disabled = true; $('btn-solar').disabled = true; $('btn-reset').disabled = true; $('btn-evidence').disabled = true;
+  $('btn-stars').disabled = true; $('btn-solar').disabled = true; $('btn-reset').disabled = true; $('btn-evidence').disabled = true; $('btn-layers').disabled = true;
 }
 
 // ---------------------------------------------------------------- loading
@@ -137,13 +156,24 @@ async function loadContext() {
     setNote(`The bright stars around the patch did not load (${e.message}).`);
   }
 }
-async function loadScene() {
-  const t0 = performance.now();
-  const tick = () => showStatus(`Loading the Gaia stars and the solar system for this patch · ${Math.round((performance.now() - t0) / 1000)} s. A cold cache can take 30 to 90 s.`);
-  tick();
-  const timer = setInterval(tick, 1000);
+let t0 = 0, timer = 0;
+function loadingText() {
+  const what = [gaiaState === 'loading' ? 'the Gaia stars' : '', objectsState === 'loading' ? 'the solar system' : ''].filter(Boolean).join(' and ');
+  return what ? `Loading ${what} for this patch · ${Math.round((performance.now() - t0) / 1000)} s.${gaiaState === 'loading' ? ' A cold cache can take 30 to 90 s.' : ''}` : '';
+}
+/** Banner: what is still loading, else the stars error (with a retry), else nothing. */
+function refreshStatus() {
+  const text = loadingText();
+  if (text) showStatus(text);
+  else if (gaiaState === 'error') showStatus(`Could not load the Gaia stars for this patch: ${gaiaError}`, { error: true, retry: true });
+  else hideStatus();
+  if (!text && timer) { clearInterval(timer); timer = 0; }
+}
+let gaiaError = '';
+async function loadStars() {
+  gaiaState = 'loading';
   try {
-    const p = await getScene3D({ ra, dec, radius, mjd });
+    const p = await getScene3D({ ra, dec, radius });
     if (p.stars) {
       scene.setGaia(p.stars);
       scene.reveal();   // only moves the camera on an untouched arrival from the sphere or the frames
@@ -154,22 +184,93 @@ async function loadScene() {
         p.stars.incomplete ? 'Part of the cone failed to load, so some areas have no Gaia stars.' : '',
       ].filter(Boolean).join(' ');
     }
-    if (p.solar) scene.setSolar(p.solar);
     gaiaState = 'ok';
-    if (Number.isFinite(p.mjd)) solarDate = new Date((p.mjd - 40587) * 86400000).toISOString().slice(0, 10) + ' UTC';
-    $('btn-solar').disabled = !scene.hasSolar;
-    const bodiesNote = p.solar && p.solar.bodies_error ? `Small bodies are missing: ${p.solar.bodies_error}` : '';
-    setNote(bodiesNote);
-    hideStatus();
   } catch (e) {
-    gaiaState = 'error';
+    gaiaState = 'error'; gaiaError = e.message || String(e);
     scene.endIntro();
-    showStatus(`Could not load the Gaia stars and the solar system for this patch: ${e.message}`, { error: true, retry: true });
   } finally {
-    clearInterval(timer);
     if (scene.introWaiting) scene.endIntro();   // no Gaia stars in the payload: nothing to reveal
+    refreshStatus();
   }
 }
+async function loadObjects() {
+  objectsState = 'loading';
+  try {
+    const p = await getObjects({ ra, dec, radius, mjd });
+    const r = scene.setObjects(p);
+    if (!r.ok) { objectsState = 'error'; setNote(r.error, 'objects'); }
+    else {
+      objectsState = 'ok';
+      const m = p.query && p.query.mjd;
+      if (Number.isFinite(m)) solarDate = new Date((m - 40587) * 86400000).toISOString().slice(0, 10) + ' UTC';
+      setNote(scene.store.errorNotes().map((n) => `${kindsPhrase(n.kinds)} are missing: ${n.error}`).join(' '), 'objects');
+    }
+  } catch (e) {
+    objectsState = 'error';
+    setNote(`The solar system did not load (${e.message || e}).`, 'objects');
+  } finally {
+    $('btn-solar').disabled = !scene.hasSolar;
+    buildLayers();
+    refreshStatus();
+  }
+}
+/** Both requests run side by side and each is handled alone. A retry asks again only for what failed. */
+function loadScene() {
+  const wantStars = gaiaState !== 'ok', wantObjects = objectsState !== 'ok';
+  t0 = performance.now();
+  if (wantStars) gaiaState = 'loading';
+  if (wantObjects) objectsState = 'loading';
+  refreshStatus();
+  if (!timer) timer = setInterval(refreshStatus, 1000);
+  if (wantStars) loadStars();
+  if (wantObjects) loadObjects();
+}
+
+// ---------------------------------------------------------------- layers panel
+const panel = $('layers'), layersBtn = $('btn-layers');
+const LAYER_GROUPS = [['sky', 'Sky'], ['solar', 'Solar system']];
+/** A layer whose kinds all failed to load is disabled, with the error as its title. */
+function layerError(l) {
+  const ks = kindList().filter((k) => k.layer === l.id);
+  if (!ks.length) return null;
+  const st = scene.store.kindStatus || {};
+  return ks.every((k) => st[k.kind] && st[k.kind].status === 'error') ? ks.map((k) => st[k.kind].error).find(Boolean) || 'did not load' : null;
+}
+function buildLayers() {
+  if (!scene) return;
+  const host = $('layers-body');
+  host.textContent = '';
+  for (const [gid, label] of LAYER_GROUPS) {
+    const list = layerList().filter((l) => l.group === gid);
+    if (!list.length) continue;
+    const h = document.createElement('h3'); h.className = 'layers-label'; h.textContent = label; h.id = `layers-${gid}`;
+    const chips = document.createElement('div'); chips.className = 'chips layers'; chips.setAttribute('role', 'group'); chips.setAttribute('aria-labelledby', h.id);
+    for (const l of list) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'pill'; b.textContent = l.label; b.dataset.layer = l.id;
+      b.setAttribute('aria-pressed', String(!!scene.layers[l.id]));
+      const err = layerError(l);
+      if (err) { b.disabled = true; b.title = err; }
+      b.addEventListener('click', () => scene.setLayer(l.id, !scene.layers[l.id]));
+      chips.append(b);
+    }
+    host.append(h, chips);
+  }
+}
+function syncLayers(map) {
+  panel.querySelectorAll('[data-layer]').forEach((b) => b.setAttribute('aria-pressed', String(!!map[b.dataset.layer])));
+}
+function setLayersOpen(open) {
+  panel.hidden = !open;
+  layersBtn.setAttribute('aria-expanded', String(open));
+}
+layersBtn.addEventListener('click', () => setLayersOpen(panel.hidden));
+$('layers-close').addEventListener('click', () => { setLayersOpen(false); layersBtn.focus({ preventScroll: true }); });
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || !scene) return;
+  if (e.code === 'KeyL' && !e.repeat) setLayersOpen(panel.hidden);
+  else if (e.code === 'Escape' && !panel.hidden) { setLayersOpen(false); if (panel.contains(document.activeElement)) layersBtn.focus({ preventScroll: true }); }
+});
 
 // ---------------------------------------------------------------- hand-off to and from the flat views
 const veil = $('veil');
@@ -244,6 +345,7 @@ if (scene) {
     setTimeout(helpLater, INTRO_WAIT_MS);
   }
   scene.start();
+  buildLayers();
   loadContext();
   loadScene();
 }

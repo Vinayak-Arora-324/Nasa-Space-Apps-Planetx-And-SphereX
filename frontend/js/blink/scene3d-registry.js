@@ -24,7 +24,9 @@
 //   kind, layer (id or null), noun [singular, plural], builtin [false]
 //   frames       { system?: 'point'|'sphere'|'marker', galaxy?: ... }  renderer per frame; absent = not drawn there [{}]
 //   galaxyScope  'sky' (all records) | 'cone' (only in_cone === true)  in the galaxy frame ['sky']
-//   pick         { priority }  lower is picked first: planets and the Sun 10, stars 20, small bodies 30 [30]
+//   pick         { priority, marker? }  lower is picked first: planets and the Sun 10, stars 20, small bodies 30 [30].
+//                marker: the priority while drawn as a galaxy-frame marker (small bodies 15: a marker in the Gaia cone
+//                always has stars within reach, and the marker is what the viewer is pointing at)
 //   label        { key(o), max, group?, hideOverDiscPx } | null.  key sorts labels (small first wins); max caps the
 //                labels of a pool (kinds sharing `group`, or the kind alone); hideOverDiscPx hides the label over a disc
 //   card(o, ctx) -> { title, subtitle, rows: [[label, text, tier, src]], notes }   ctx = { fromYou: string|null, evidence, fmtNum }
@@ -174,7 +176,7 @@ function sphereOf(o, { evidence } = {}) {
   return { rgb: PLANET_RGB[n] || [0.8, 0.8, 0.8], pole: POLE[n] || null, features: f, ext: n === 'Saturn' && !evidence && !hide ? 2.4 : 1.1 };
 }
 const smallColor = (o) => (NEO_RE.test((prop(o, 'class') || {}).v || '') ? [1.0, 0.7, 0.5] : [0.82, 0.78, 0.7]);
-const SMALL = { frames: { system: 'point', galaxy: 'marker' }, galaxyScope: 'cone', pick: { priority: 30 }, card: smallBodyCard, pointSize: () => 3, markerPx: () => 3,
+const SMALL = { frames: { system: 'point', galaxy: 'marker' }, galaxyScope: 'cone', pick: { priority: 30, marker: 15 }, card: smallBodyCard, pointSize: () => 3, markerPx: () => 3,
   label: { key: (o) => 100 + smallMag(o), max: MAX_BODY_LABELS, group: 'small', hideOverDiscPx: null } };
 
 registerLayer({ id: 'mw', label: 'Milky Way glow', group: 'sky' });
@@ -187,7 +189,7 @@ registerLayer({ id: 'asteroids', label: 'Asteroids', group: 'solar' });
 registerLayer({ id: 'comets', label: 'Comets', group: 'solar' });
 
 registerKind({ kind: 'sun', layer: 'planets', noun: ['sun', 'suns'], frames: { galaxy: 'marker' }, galaxyScope: 'sky', pick: { priority: 10 },
-  label: { key: () => 0, max: null, hideOverDiscPx: null }, card: sunCard, color: () => [1.0, 0.95, 0.8], pointSize: () => 6.5, markerPx: () => 6 });
+  label: { key: () => 0, max: null, hideOverDiscPx: null }, card: sunCard, arriveAu: radiusAu, color: () => [1.0, 0.95, 0.8], pointSize: () => 6.5, markerPx: () => 6 });
 registerKind({ kind: 'planet', layer: 'planets', noun: ['planet', 'planets'], frames: { system: 'sphere', galaxy: 'marker' }, galaxyScope: 'sky', pick: { priority: 10 },
   label: { key: () => 0, max: null, hideOverDiscPx: 30 }, card: planetCard, arriveAu: radiusAu, collide: true,
   color: (o) => PLANET_RGB[o.name] || [0.8, 0.8, 0.8], sphere: sphereOf, pointSize: (o) => (o.name === 'Earth' ? 9 : 6.5), markerPx: () => 5 });

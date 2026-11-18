@@ -1,0 +1,88 @@
+{
+  "designations": [
+    "TIC 278892590",
+    "Gaia DR3 2635476908753563008"
+  ],
+  "evidence": "measured",
+  "host": null,
+  "id": "gdr3:2635476908753563008",
+  "kind": "star",
+  "name": "TRAPPIST-1",
+  "parent": null,
+  "position": {
+    "dec": -5.0434618,
+    "dist": {
+      "hi": 12.44859542,
+      "lo": 12.4111822,
+      "src": "NEA pscomppars: Gaia DR2",
+      "tier": "measured",
+      "unit": "pc",
+      "v": 12.42988881
+    },
+    "epoch": null,
+    "method": "parallax",
+    "model": "fixed",
+    "ra": 346.6263919
+  },
+  "props": {
+    "gmag": {
+      "src": "NEA pscomppars: TICv8",
+      "tier": "measured",
+      "unit": "mag",
+      "v": 15.6451
+    },
+    "mass": {
+      "hi": 0.0921,
+      "lo": 0.0875,
+      "src": "NEA pscomppars: Agol et al. 2021",
+      "tier": "catalogue",
+      "unit": "Msun",
+      "v": 0.0898
+    },
+    "n_planets": {
+      "src": "NEA pscomppars",
+      "tier": "catalogue",
+      "v": 7
+    },
+    "spectral_type": {
+      "src": "NEA pscomppars: Piaulet-Ghorayeb et al. 2025",
+      "tier": "catalogue",
+      "v": "M8.0 V"
+    },
+    "teff": {
+      "hi": 2592,
+      "lo": 2540,
+      "src": "NEA pscomppars: Agol et al. 2021",
+      "tier": "catalogue",
+      "unit": "K",
+      "v": 2566
+    },
+    "vmag": {
+      "src": "NEA pscomppars: TICv8",
+      "tier": "measured",
+      "unit": "mag",
+      "v": 17.02
+    }
+  },
+  "provenance": {
+    "catalogue": "NASA Exoplanet Archive pscomppars",
+    "dataset": "nea-exoplanets",
+    "source": "static:nea-exoplanets",
+    "version": "snapshot 2026-11-18"
+  },
+  "render": {
+    "mag": 17.02
+  },
+  "same_as": [],
+  "size": {
+    "angular": null,
+    "radius": {
+      "hi": 0.1205,
+      "lo": 0.1179,
+      "src": "NEA pscomppars: Agol et al. 2021",
+      "tier": "catalogue",
+      "unit": "Rsun",
+      "v": 0.1192
+    }
+  }
+}

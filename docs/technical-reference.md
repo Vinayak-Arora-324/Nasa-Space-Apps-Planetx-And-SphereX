@@ -156,6 +156,15 @@ Moving-object endpoints. They take the same parameters: `ra`, `dec`, `fov` (defa
 - `GET /api/movers/search/status?job=` returns `state` (`running`, `done`, `error` or `cancelled`), `progress`, `tried`, `total` and the candidates found so far.
 - `GET /api/movers/search/cancel?job=` cancels a running search.
 
+3D fly-through endpoints (`frontend/scene3d.html`):
+
+- `GET /api/scene3d?ra&dec&radius=3&limit=20000` returns the Gaia star cone only: `{ra, dec, radius, stars}`. Positions are in parsecs from the Sun with Bailer-Jones distances. If every star source fails, the response is 502.
+- `GET /api/objects?ra&dec&radius=3&mjd&kinds&limit=2000` returns everything else in the 3D view as schema-versioned records (`space-maps.objects/1`). Today that is the Sun, planets and Moon from the built-in ephemeris, and dwarf planets, asteroids and comets from SkyBoT.
+  - Each source runs under its own deadline (`SPHEREX_OBJECTS_SOURCE_TIMEOUT`, 25 s). Failures are reported per kind in `kinds`, and the request itself does not fail.
+  - Prebuilt static datasets are read from `SPHEREX_OBJECTS_DIR` (default `frontend/data/objects/`).
+  - The schema, evidence rules, tile format and frontend registry are specified in `docs/object-framework.md`.
+- `GET /api/system/{source_id}` returns stellar parameters with tiers and sources for a Gaia DR3 star, or `sun`.
+
 ## Frontend layout
 
 The Space Maps page is an ES module app with no framework. Its code is in `frontend/js/blink/`:
@@ -173,6 +182,16 @@ The Space Maps page is an ES module app with no framework. Its code is in `front
 - `skytime.js`: the rewind's astronomy (calendar, ΔT and its uncertainty, long-term precession, Earth rotation, horizon frame, 3-D star motion), with no DOM.
 - `ephem.js`: the Sun, Moon and planets for the rewind (ports of ERFA `eraPlan94` and `eraMoon98`, light-time, the Moon's parallax and phase, planet magnitudes), with no DOM.
 - `rewind-sky.js`: the rewind's sky layers: which ones are switched on (kept in `localStorage`), sky brightness by Sun and Moon altitude, the Sun and Moon discs, and overlap-free label placement.
+
+The 3D fly-through (`frontend/scene3d.html`, controller `scene3d-main.js`) is built from:
+
+- `scene3d.js`: the WebGL2 renderer.
+- `scene3d-frames.js`: frame levels (AU, pc, and later Mpc).
+- `scene3d-registry.js`: object kinds and the persisted layer toggles.
+- `scene3d-objects.js`: the object store, Earth-view placement, picking, labels, group markers and autopilot plans.
+- `scene3d-physics.js`, `scene3d-nav.js`, `scene3d-math.js`, `scene3d-card.js`, `scene3d-gl.js` and `scene3d-shaders.js`.
+
+Adding a kind of object is one data source on the backend plus one `registerKind` call. See `docs/object-framework.md`.
 
 Space Maps also uses `frontend/js/api.js` (streaming, including the model planes), `frontend/js/wcs.js` and `frontend/js/data.js`.
 
@@ -206,6 +225,8 @@ The star list is rebuilt from VizieR (CDS, with mirrors as fallback) with:
 uv run python backend/scripts/build_rewind_stars.py
 uv run python backend/scripts/build_rewind_sky.py     # constellations, boundaries and deep-sky labels
 ```
+
+Static object datasets for the 3D view follow the same build-script pattern and the tile format in `docs/object-framework.md` §6. `backend/scripts/build_objects_fixture.py` is the template. It writes the synthetic test dataset, and its `--check` option verifies that a rebuild is byte-identical.
 
 `build_rewind_sky.py` reads the same XHIP table (`--tsv` takes a local copy) and the pinned d3-celestial files. It prints a note for the 4 boundary segments near the north pole (Cepheus and Ursa Minor) that run along neither a B1875 meridian nor a parallel; those are kept as given.
 

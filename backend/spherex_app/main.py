@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import numpy as np
 
-from . import archive, cache, catalogs, config, processing, scene3d, system3d
+from . import archive, cache, catalogs, config, objects, processing, scene3d, system3d
 from .archive import Frame, UpstreamError
 from .geometry import Grid, mjd_to_jyear, npix_for, propagate, std_to_sky
 
@@ -602,8 +602,7 @@ async def coverage():
 
 
 @app.get("/api/scene3d")
-async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 20000,
-                      mjd: float | None = None):
+async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 20000):
     if not (math.isfinite(ra) and 0 <= ra < 360):
         _bad("ra must be in [0, 360)")
     if not (math.isfinite(dec) and -90 <= dec <= 90):
@@ -612,9 +611,29 @@ async def get_scene3d(ra: float, dec: float, radius: float = 3.0, limit: int = 2
         _bad("radius must be between 0.1 and 5.0 deg")
     if not 100 <= limit <= 50000:
         _bad("limit must be between 100 and 50000")
-    if mjd is not None and not (math.isfinite(mjd) and scene3d.MJD_MIN <= mjd <= scene3d.MJD_MAX):
+    return _clean(await scene3d.build_scene(ra, dec, radius, limit))
+
+
+@app.get("/api/objects")
+async def get_objects(ra: float, dec: float, radius: float = 3.0, mjd: float | None = None,
+                      kinds: str | None = None, limit: int = 2000):
+    """Records for the 3D view (planets, Moon, small bodies, static datasets), schema
+    space-maps.objects/1. Always 200 for valid parameters: a failing source is reported per kind."""
+    if not (math.isfinite(ra) and 0 <= ra < 360):
+        _bad("ra must be in [0, 360)")
+    if not (math.isfinite(dec) and -90 <= dec <= 90):
+        _bad("dec must be in [-90, 90]")
+    if not (math.isfinite(radius) and 0.1 <= radius <= 5.0):
+        _bad("radius must be between 0.1 and 5.0 deg")
+    if not 1 <= limit <= 10000:
+        _bad("limit must be between 1 and 10000")
+    if mjd is not None and not (math.isfinite(mjd) and objects.MJD_MIN <= mjd <= objects.MJD_MAX):
         _bad("mjd must be between 15020 (1900) and 88069 (2100)")
-    return _clean(await scene3d.build_scene(ra, dec, radius, limit, mjd))
+    wanted = [k.strip() for k in (kinds or "").split(",") if k.strip()] or None
+    unknown = [k for k in wanted or () if k not in objects.KINDS]
+    if unknown:
+        _bad(f"unknown kind(s): {', '.join(unknown)}; valid kinds: {', '.join(objects.KINDS)}")
+    return _clean(await objects.build_objects(ra, dec, radius, mjd, wanted, limit))
 
 
 @app.get("/api/system/{source_id}")

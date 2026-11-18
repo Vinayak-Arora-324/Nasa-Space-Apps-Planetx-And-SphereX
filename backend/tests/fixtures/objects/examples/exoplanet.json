@@ -1,0 +1,21 @@
+{
+  "id": "nea:51 Peg b", "kind": "exoplanet", "name": "51 Peg b", "designations": ["HD 217014 b", "Dimidium"],
+  "host": "hip:113357", "parent": "hip:113357",
+  "position": { "model": "orbit", "phase_known": false, "tier": "illustrative",
+    "src": "NASA Exoplanet Archive pscomppars (placeholder values)",
+    "elements": {
+      "a_au":     { "v": 0.0527, "unit": "au", "src": "placeholder", "tier": "catalogue" },
+      "e":        { "v": 0.0, "src": "placeholder", "tier": "catalogue" },
+      "period_d": { "v": 4.2308, "unit": "d", "src": "placeholder", "tier": "measured" },
+      "i_deg": null, "t_peri_mjd": null, "omega_deg": null, "node_deg": null } },
+  "size": null,
+  "props": {
+    "mass":        { "v": 0.46, "unit": "Mjup", "src": "placeholder (M sin i)", "tier": "measured" },
+    "disc_method": { "v": "Radial Velocity", "src": "placeholder", "tier": "catalogue" },
+    "disc_year":   { "v": 1995, "src": "placeholder", "tier": "catalogue" }
+  },
+  "provenance": { "source": "static:nea-exoplanets", "dataset": "nea-exoplanets", "catalogue": "NASA Exoplanet Archive",
+    "version": "pscomppars <pinned date>", "citation": "NASA Exoplanet Archive (Christiansen et al. 2025)", "url": "https://exoplanetarchive.ipac.caltech.edu/" },
+  "evidence": "illustrative",
+  "render": {}
+}

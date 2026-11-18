@@ -1,7 +1,8 @@
-"""3D scene for the fly-through view: Gaia (E)DR3 stars with Bailer-Jones distances, and the solar system.
+"""3D scene for the fly-through view: Gaia (E)DR3 stars with Bailer-Jones distances.
 
 Frame: ICRS equatorial Cartesian axes, origin at the Sun. x toward RA=0 Dec=0, y toward RA=90
-Dec=0, z toward Dec=+90. Stars are in parsecs, solar-system bodies in AU.
+Dec=0, z toward Dec=+90, in parsecs. Solar-system and other objects are served by /api/objects
+(objects.py).
 
 Star sources (config.GAIA3D_SOURCE): a single cone query to the GAVO or ARI mirror is tried first.
 If it fails, the cone is answered from the ESA archive in tiles, because the ESA sync endpoint
@@ -19,12 +20,10 @@ import logging
 import math
 import time
 
-from astropy import units as u
-from astropy.coordinates import get_body_barycentric
-from astropy.time import Time
 
-from . import cache, catalogs, config, movers
+from . import cache, catalogs, config
 from .archive import UpstreamError
+from .objects_live import radec_to_xyz
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +35,6 @@ SOURCE_LABELS = {
 }
 STAR_FIELDS = ["id", "x", "y", "z", "abs_g", "bp_rp", "d_lo", "d_hi"]
 STAR_EPOCH = 2016.0
-SKYBOT_JD_OFFSET = 2400000.5
-# Accepted dates: 1900-01-01 .. 2100-01-01 (the built-in ephemeris is only meant for that span)
-MJD_MIN, MJD_MAX = 15020.0, 88069.0
 
 # ESA tiling: tile radius (deg). A hex lattice of spacing s has covering radius s/sqrt(3); the
 # 0.97 margin absorbs the difference between gnomonic-plane and true angular distances.
@@ -48,12 +44,6 @@ _HEX_SPACING_FACTOR = math.sqrt(3.0) * 0.97
 # holds about limit * tile_area / cone_area of the final stars, so the cap leaves a margin.
 TILE_CAP_FACTOR = 2.5
 
-# (display name, astropy body id); Earth is returned separately, Sun is the origin
-PLANETS = (
-    ("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter"),
-    ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Moon", "moon"),
-)
-
 
 def _f(v) -> float | None:
     try:
@@ -61,13 +51,6 @@ def _f(v) -> float | None:
     except (TypeError, ValueError):
         return None
     return x if math.isfinite(x) else None
-
-
-def radec_to_xyz(ra: float, dec: float, d: float = 1.0) -> tuple[float, float, float]:
-    """Equatorial (ICRS) RA/Dec in degrees at distance d -> Cartesian (x toward RA=0, z toward pole)."""
-    r, dd = math.radians(ra), math.radians(dec)
-    cd = math.cos(dd)
-    return (d * cd * math.cos(r), d * cd * math.sin(r), d * math.sin(dd))
 
 
 def angsep_deg(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
@@ -151,43 +134,6 @@ def _output_row(rec: list) -> list:
 def star_rows_from_csv(rows: list[dict]) -> list[list]:
     """Gaia/Bailer-Jones TAP rows (ESA or ARI column names) -> output star rows."""
     return [_output_row(rec) for rec in (_record(r) for r in rows) if rec is not None]
-
-
-def solar_positions(mjd: float) -> dict:
-    """Earth and the planets/Moon relative to the Sun, AU, ICRS axes (built-in ephemeris)."""
-    t = Time(mjd, format="mjd", scale="tdb")
-    sun = get_body_barycentric("sun", t)
-
-    def rel(body: str) -> list[float]:
-        xyz = (get_body_barycentric(body, t) - sun).xyz.to_value(u.au)
-        return [round(float(v), 6) for v in xyz]
-
-    planets = []
-    for name, body in PLANETS:
-        x, y, z = rel(body)
-        planets.append({"name": name, "x": x, "y": y, "z": z})
-    return {"earth": rel("earth"), "planets": planets}
-
-
-def bodies_xyz(earth: list[float], objs: list[dict]) -> list[dict]:
-    """SkyBoT objects -> heliocentric positions: earth + dg * unit(geocentric RA/Dec).
-
-    Light-time is ignored. Objects without a geocentric distance are skipped."""
-    ex, ey, ez = earth
-    out = []
-    for o in objs:
-        dg = _f(o.get("dg_au"))
-        if dg is None or dg <= 0:
-            continue
-        ux, uy, uz = radec_to_xyz(o["ra"], o["dec"], 1.0)
-        dh = _f(o.get("dh_au"))
-        out.append({
-            "name": o.get("name") or "", "number": o.get("number"), "class": o.get("class"),
-            "vmag": _f(o.get("vmag")),
-            "x": round(ex + dg * ux, 6), "y": round(ey + dg * uy, 6), "z": round(ez + dg * uz, 6),
-            "dg_au": round(dg, 6), "dh_au": None if dh is None else round(dh, 6),
-        })
-    return out
 
 
 # --- per-source fetchers: each returns raw rows already carrying the ESA/ARI column names ---
@@ -335,38 +281,16 @@ async def stars_block(ra: float, dec: float, radius: float, limit: int) -> dict:
     return await _esa_tiles(ra, dec, radius, limit)
 
 
-def _now_mjd() -> float:
-    """Now, rounded to the hour so repeat requests reuse the cached SkyBoT cone."""
-    return round(float(Time.now().tdb.mjd) * 24.0) / 24.0
-
-
-async def build_scene(ra: float, dec: float, radius: float, limit: int,
-                      mjd: float | None = None) -> dict:
-    """The /api/scene3d payload. A star failure of every source raises UpstreamError (502);
-    partial ESA tile failures are reported in stars.incomplete/failed_tiles. A SkyBoT failure is
-    reported in solar.bodies_error and does not fail the request."""
-    mjd = _now_mjd() if mjd is None else float(mjd)
-
-    async def solar() -> tuple[dict, list[dict], str | None]:
-        sol = await asyncio.to_thread(solar_positions, mjd)
-        try:
-            objs = await movers.skybot_cone(ra, dec, radius, mjd + SKYBOT_JD_OFFSET)
-        except Exception as e:  # noqa: BLE001  (SkyBoT is optional for the scene)
-            return sol, [], str(e) or type(e).__name__
-        return sol, bodies_xyz(sol["earth"], objs), None
-
-    stars, (sol, bodies, bodies_error) = await asyncio.gather(
-        stars_block(ra, dec, radius, limit), solar())
-
+async def build_scene(ra: float, dec: float, radius: float, limit: int) -> dict:
+    """The /api/scene3d payload: the Gaia star cone. A star failure of every source raises
+    UpstreamError (502); partial ESA tile failures are reported in stars.incomplete/failed_tiles.
+    Solar-system and other objects come from /api/objects (objects.py)."""
+    stars = await stars_block(ra, dec, radius, limit)
     return {
-        "ra": ra, "dec": dec, "radius": radius, "mjd": mjd,
+        "ra": ra, "dec": dec, "radius": radius,
         "stars": {
             "epoch": STAR_EPOCH, "source": SOURCE_LABELS[stars["source"]], "fields": STAR_FIELDS,
             "rows": stars["rows"], "truncated": stars["truncated"],
             "incomplete": stars["incomplete"], "failed_tiles": stars["failed_tiles"],
-        },
-        "solar": {
-            "earth": sol["earth"], "sun": [0, 0, 0], "planets": sol["planets"],
-            "bodies": bodies, "bodies_error": bodies_error,
         },
     }

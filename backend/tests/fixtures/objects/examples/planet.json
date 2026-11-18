@@ -1,0 +1,17 @@
+{
+  "id": "ss:mars", "kind": "planet", "name": "Mars", "designations": ["NAIF 499"],
+  "host": "ss:sun", "parent": "ss:sun",
+  "position": { "model": "state", "mjd": 61000.0, "xyz_au": [1.234567, -0.512345, -0.268901],
+    "geo": { "ra": 152.31, "dec": 11.92, "dist_au": 1.932 },
+    "method": "ephemeris", "src": "astropy built-in ephemeris (ERFA plan94/epv00)", "tier": "measured" },
+  "in_cone": false,
+  "size": { "radius": { "v": 3396.2, "unit": "km", "src": "IAU WGCCRE 2015 equatorial radius", "tier": "measured" }, "angular": null },
+  "props": {
+    "dist_sun":   { "v": 1.3637, "unit": "au", "src": "astropy built-in ephemeris", "tier": "measured" },
+    "dist_earth": { "v": 1.932,  "unit": "au", "src": "astropy built-in ephemeris", "tier": "measured" }
+  },
+  "provenance": { "source": "ephem", "catalogue": "astropy built-in solar-system ephemeris", "version": "astropy 6.1",
+    "citation": "Astropy Collaboration 2022; ERFA", "url": "https://docs.astropy.org/en/stable/coordinates/solarsystem.html" },
+  "evidence": "measured",
+  "render": { "mag": 1.1 }
+}

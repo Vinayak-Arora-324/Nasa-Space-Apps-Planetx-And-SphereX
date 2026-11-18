@@ -1,0 +1,13 @@
+{
+  "id": "bh:Sgr A*", "kind": "black_hole", "name": "Sagittarius A*", "designations": ["Sgr A*"],
+  "host": null, "parent": "gal:milky_way",
+  "position": { "model": "fixed", "ra": 266.41684, "dec": -29.00781, "epoch": 2000.0, "method": "orbit-fit",
+    "dist": { "v": 8178, "lo": 8165, "hi": 8191, "unit": "pc", "src": "placeholder (GRAVITY 2019, S2 orbit)", "tier": "measured" } },
+  "size": { "radius": { "v": 1.2e7, "unit": "km", "src": "placeholder (Schwarzschild radius from mass)", "tier": "inferred" }, "angular": null },
+  "props": { "mass": { "v": 4.15e6, "unit": "Msun", "src": "placeholder (GRAVITY 2019)", "tier": "measured" },
+             "type": { "v": "supermassive", "src": "curated", "tier": "catalogue" } },
+  "provenance": { "source": "static:bh-curated", "dataset": "bh-curated", "catalogue": "Space Maps curated black holes",
+    "version": "1", "citation": "GRAVITY Collaboration 2019, A&A 625, L10", "url": null },
+  "evidence": "measured",
+  "render": { "style": "lensing" }
+}

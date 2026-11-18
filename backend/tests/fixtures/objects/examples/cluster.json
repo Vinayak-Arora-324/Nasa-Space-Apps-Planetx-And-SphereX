@@ -1,0 +1,13 @@
+{
+  "id": "hr23:Melotte_22", "kind": "cluster", "name": "Pleiades", "designations": ["Melotte 22", "M45"],
+  "host": null, "parent": null,
+  "position": { "model": "fixed", "ra": 56.6, "dec": 24.1, "epoch": 2016.0, "method": "cluster-parallax",
+    "dist": { "v": 135.0, "lo": 134.0, "hi": 136.0, "unit": "pc", "src": "placeholder", "tier": "measured" } },
+  "size": { "radius": { "v": 3.0, "unit": "pc", "src": "placeholder (r50)", "tier": "catalogue" },
+            "angular": { "major": { "v": 1.3, "unit": "deg", "src": "placeholder", "tier": "catalogue" }, "minor": null, "pa": null } },
+  "props": { "n_members": { "v": 900, "src": "placeholder", "tier": "catalogue" }, "age": { "v": 0.1, "unit": "Gyr", "src": "placeholder", "tier": "inferred" } },
+  "provenance": { "source": "static:hr23-clusters", "dataset": "hr23-clusters", "catalogue": "Hunt & Reffert 2023",
+    "version": "J/A+A/673/A114", "citation": "Hunt & Reffert 2023, A&A 673, A114", "url": "https://cdsarc.cds.unistra.fr/" },
+  "evidence": "measured",
+  "render": { "mag": 1.6 }
+}

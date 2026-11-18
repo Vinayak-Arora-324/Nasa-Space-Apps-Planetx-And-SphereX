@@ -11,22 +11,21 @@ import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, fmtNum as regFmtNum } from './scene3d-registry.js';
+import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo } from './scene3d-objects.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
 import { getSystem } from '../api.js';
 
 const { D2R, LY_PER_PC: LY, V_EXPO } = M;
 const { AU_PER_PC } = F;
-const RANGE = { galaxy: { min: 0.01, max: 10000, speed: 2 }, system: { min: 1e-6, max: 1e3, speed: 0.2 } };
-const AUTO_MIN_PC = 1e-12, AUTO_MAX_PC = 100;   // auto-throttle speed bounds, parsecs per second (scaled to the frame's units)
 const XHAIR_DEG = 2, XHAIR_MS = 100;            // crosshair target readout: pick radius and refresh interval
 const CONE_DIST = 3000;          // pc, the distance at which the cone-edge ring is drawn
 const CORE_SIGMA_PX = 0.42;      // CSS px: gaussian sigma of a faint star's core (it is integrated over each pixel)
 const LIMIT_DEFAULT = 12, LIMIT_MIN = 0, LIMIT_MAX = 25;
-const MAX_LABELS = 40, MAX_BODY_LABELS = 12;
+const MAX_LABELS = 40;
 const PICK_PX = 10, GO_DEG = 2;
 const NEAR_PC = 0.05;            // stars this close to the camera are drawn exactly and may become spheres
-const FOV_SYSTEM = 60;
 // Milky Way glow (frontend/data/milkyway.webp, see backend/scripts/build_milkyway.py). MW_K sets its brightness against
 // the stars at the default limit and exposure; it brightens with the limit by the same sqrt-of-flux law as the stars.
 // The map is the sky seen from the Sun, so it fades out once the camera is a few hundred parsecs away.
@@ -38,14 +37,10 @@ const REVEAL_REF = 0.3;          // the dolly zoom keeps stars at this fraction 
 const SNAP_FADE_S = 1.2, SNAP_DROP_S = 0.25;
 const SUN_ABS_G = 4.67, SUN_BP_RP = 0.82;
 const Z_UP = [0, 0, 1];
-const SUN_HOST = { idx: 0, key: 'sun', name: 'Sun', pc: [0, 0, 0] };
+const SUN_HOST = { idx: 0, key: 'ss:sun', name: 'Sun', pc: [0, 0, 0] };
+const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;   // a grouped system's marker: warm white, a little larger
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
-const PLANET_RGB = {
-  Mercury: [0.75, 0.72, 0.68], Venus: [0.95, 0.85, 0.6], Earth: [0.35, 0.62, 1.0], Moon: [0.8, 0.8, 0.8],
-  Mars: [1.0, 0.5, 0.35], Jupiter: [0.92, 0.8, 0.66], Saturn: [0.95, 0.87, 0.6], Uranus: [0.6, 0.9, 0.95], Neptune: [0.42, 0.6, 1.0],
-};
-const POLE = { Jupiter: [268.06, 64.5], Saturn: [40.59, 83.54], Mars: [317.68, 52.89] };   // RA, Dec of the spin axes (illustrative)
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -58,7 +53,7 @@ function slerp(a, b, t) {
   return [a[0] * ka + b[0] * kb, a[1] * ka + b[1] * kb, a[2] * ka + b[2] * kb];
 }
 /** Number for the readout: 3 significant figures, with thousands separators. */
-export const fmtNum = (v, sig = 3) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumSignificantDigits: sig }) : 'n/a');
+export const fmtNum = regFmtNum;
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
 // Vertex layouts (floats): stars 7 = x y z abs r g b; points 8 = x y z size alpha r g b; lines 7 = x y z r g b a.
@@ -77,32 +72,28 @@ function linesToBuf(polys, [r, g, b, a]) {
   }
   return { data, n };
 }
-function bodyRgb(cls) {
-  const c = String(cls || '');
-  if (/^(C|P|D|I)/.test(c)) return [0.6, 0.9, 1.0];   // comets
-  if (/NEO|PHA|Apollo|Aten|Amor/i.test(c)) return [1.0, 0.7, 0.5];
-  return [0.82, 0.78, 0.7];
-}
-
 export class Scene3D {
   /**
    * canvas: WebGL canvas. labels: 2D canvas laid over it. card: element for the picked-object card.
    * ra, dec, radius: the patch (degrees). Throws if WebGL2 is unavailable or a shader fails to build.
    */
-  constructor({ canvas, labels, card, ra, dec, radius = 3, onHud = () => {}, onScene = () => {}, onLost = () => {}, onEvidence = () => {} }) {
+  constructor({ canvas, labels, card, ra, dec, radius = 3, onHud = () => {}, onScene = () => {}, onLost = () => {}, onEvidence = () => {}, onLayers = () => {} }) {
     this.canvas = canvas; this.labelsEl = labels; this.lab = labels.getContext('2d'); this.card = card;
     this.target = { ra, dec, radius };
     this.fovStars = clamp(radius * 2.5, 20, 70);
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is not available in this browser.');
     this.gl = gl;
-    this.hooks = { onHud, onScene, onLost, onEvidence };
+    this.hooks = { onHud, onScene, onLost, onEvidence, onLayers };
     this.cpu = {}; this.gpu = {};
     this.limit = LIMIT_DEFAULT; this.evidence = false; this.bloomK = 1; this.bloomT = 0.45;
-    this.ctx = []; this.gaia = null; this.solarData = null; this.namedIdx = [];
+    this.ctx = []; this.gaia = null; this.namedIdx = [];
+    this.layers = loadLayers();                                  // {layerId: bool}, saved in localStorage
+    this.store = new ObjectStore();                              // planets, the Moon, small bodies (later catalogues): /api/objects
+    this._ver = 0;                                               // bumps when layers, evidence or objects change (the pick cache key)
+    this._vis = []; this._groups = {}; this._warned = new Set(); this.pxPerRad = 1;
     this.st = { n: 0, pos: new Float64Array(0), data: new Float32Array(0), gal: new Float32Array(0), meta: [] };
-    this.planets = []; this.bodies = []; this.sunPos = [0, 0, 0];
-    this.counts = { gaia: 0, ctx: 0, planets: 0, bodies: 0 };
+    this.counts = { gaia: 0, ctx: 0 };
     this.keys = new Set(); this.touch = new Map(); this.pinch = null;
     this.hover = null; this.sel = null; this.locked = false;
     this.sys = new Map(); this.models = new Map();
@@ -116,6 +107,7 @@ export class Scene3D {
     this._intro = null; this._outro = null; this._arrival = null;   // camera animations to and from a flat picture
     this._snap = null;                                               // the flat picture laid over the canvas (showSnap)
     this._frame = this._frame.bind(this);
+    this._pj = (rel) => this._proj(rel); this._fp = (e) => framePos(e, this.cam);   // closures for the object helpers
     this.cam = this._startCam('stars');
     this.fov = this.fovStars;
     this._initGL();
@@ -127,6 +119,7 @@ export class Scene3D {
     loadSky(2);
     const cone = linesToBuf(M.coneLines(ra, dec, radius, CONE_DIST), [1, 0.82, 0.55, 0.4]);
     this._put('lineStars', cone.data, cone.n);
+    this._refreshVisible();
     this._rebuildStars();
     this._bind();
   }
@@ -218,43 +211,60 @@ export class Scene3D {
     this.gaia = { rows: payload.rows, I, match: (c) => payload.rows.some((r) => near(r, c)) };
     this._rebuildStars();
   }
-  /** Solar payload: the `solar` object of /api/scene3d. */
-  setSolar(s) {
-    if (!s || !Array.isArray(s.earth)) return;
-    this.solarData = { earth: s.earth.slice(0, 3) };
-    const pts = [], orbits = [], planets = [];
-    let earthListed = false;
-    const addPlanet = (name, p) => {
-      const km = M.PLANET_KM[name];
-      planets.push({ name, kind: name === 'Moon' ? 'moon' : 'planet', pos: [p[0], p[1], p[2]], rAu: km ? km / M.KM_PER_AU : 4e-5, rgb: PLANET_RGB[name] || [0.8, 0.8, 0.8] });
-    };
-    for (const p of s.planets || []) {
-      earthListed = earthListed || p.name === 'Earth';
-      addPlanet(p.name, [p.x, p.y, p.z]);
-      if (p.name !== 'Moon') orbits.push(M.orbitCircle(Math.hypot(p.x, p.y, p.z)));
+  /**
+   * Objects payload: the response of /api/objects (schema space-maps.objects/1). Replaces what was there. Returns the
+   * store's ingest result ({ ok, unknownKinds } or { ok: false, error }) so the page can say when the schema is too new.
+   */
+  setObjects(payload) {
+    const r = this.store.ingest(payload);
+    this._ver++; this._pickSig = ''; this._near = null;
+    const e = this._earthAu();
+    const orbits = [];
+    for (const o of this.store.byKind.get('planet') || []) {      // the Moon travels with Earth: it has no orbit of its own
+      const p = this.store.placement(o.id);
+      if (p && p.sysAu) orbits.push(M.orbitCircle(Math.hypot(p.sysAu[0], p.sysAu[1], p.sysAu[2])));
     }
-    if (!earthListed) { addPlanet('Earth', this.solarData.earth); orbits.push(M.orbitCircle(Math.hypot(...this.solarData.earth))); }
-    this.planets = planets;
-    const bodies = s.bodies || [];
-    this.bodies = bodies.map((b) => ({ kind: 'body', name: b.name || null, number: b.number, cls: b.class, vmag: b.vmag, dh: b.dh_au, dg: b.dg_au, pos: [b.x, b.y, b.z] }));
-    for (const b of bodies) {
-      const c = bodyRgb(b.class);
-      pts.push(b.x, b.y, b.z, 3, 0.9, c[0], c[1], c[2]);
-    }
-    this._pickSig = '';
-    this.counts.planets = planets.length; this.counts.bodies = bodies.length;
-    this._put('points', new Float32Array(pts), pts.length / 8);
     const lines = linesToBuf(orbits, [0.6, 0.7, 0.95, 0.18]);
     this._put('lineSolar', lines.data, lines.n);
-    const { ra, dec, radius } = this.target, e = this.solarData.earth;
-    const cone = M.coneLines(ra, dec, radius, 8).map((pl) => pl.map((q) => [q[0] + e[0], q[1] + e[1], q[2] + e[2]]));
-    const cb = linesToBuf(cone, [1, 0.82, 0.55, 0.4]);
+    let cb = { data: new Float32Array(0), n: 0 };
+    if (e) {
+      const { ra, dec, radius } = this.target;
+      cb = linesToBuf(M.coneLines(ra, dec, radius, 8).map((pl) => pl.map((q) => [q[0] + e[0], q[1] + e[1], q[2] + e[2]])), [1, 0.82, 0.55, 0.4]);
+    }
     this._put('coneSolar', cb.data, cb.n);
+    this._refreshVisible(); this._rebuildPoints();
     if (this.scene === 'solar') this.cam = this._startCam('solar');
+    return r;
   }
-  get hasSolar() { return !!this.solarData; }
+  /** Earth's heliocentric position in AU from its record (the patch's cone is drawn around it), or null. */
+  _earthAu() {
+    const p = this.store.earth && this.store.earth.position.xyz_au;
+    return Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) ? p.slice(0, 3) : null;
+  }
+  /** The static small-body buffer: the visible 'point' entries of the Sun's system, in AU. Rebuilt when layers, evidence or data change. */
+  _rebuildPoints() {
+    const vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: 'system', inHost: (h) => h === SUN_HOST.key, pxPerRad: this.pxPerRad });
+    const pts = [];
+    for (const e of vis) {
+      if (e.renderer !== 'point') continue;
+      const c = e.spec.color(e.o);
+      pts.push(e.sysAu[0], e.sysAu[1], e.sysAu[2], e.spec.pointSize(e.o), 0.9, c[0], c[1], c[2]);
+    }
+    this._put('points', new Float32Array(pts), pts.length / 8);
+  }
+  get hasSolar() { return this.store.hasSolar; }
+  /** The kinds' layers are toggles: turning one off hides its objects, labels and picks, and clears a selection in it. */
+  setLayer(id, on) {
+    if (!(id in this.layers)) return;
+    this.layers[id] = !!on;
+    saveLayers(this.layers);
+    this._ver++; this._pickSig = ''; this._near = null;
+    this._refreshVisible(); this._refreshGroups(); this._rebuildPoints();
+    if (this.sel && this.sel.kind !== 'star' && (layerOf(this.sel.kind) === id && !on || !this._valid(this.sel))) { this.sel = null; this._cardSig = ''; }
+    this.hooks.onLayers(this.layers);
+  }
   /** 'solar' while the camera is in the Sun's system frame, otherwise 'stars'. */
-  get scene() { return this.cam.frame === 'system' && this.cam.host.key === 'sun' ? 'solar' : 'stars'; }
+  get scene() { return this._inSun() ? 'solar' : 'stars'; }
   get fovDeg() { return this.fov; }
 
   _rebuildStars() {
@@ -287,7 +297,9 @@ export class Scene3D {
     }
     for (let i = 0; i < n; i++) { gal[7 * i] = pos[3 * i]; gal[7 * i + 1] = pos[3 * i + 1]; gal[7 * i + 2] = pos[3 * i + 2]; }
     this.st = { n, pos, gal, data: gal, meta };
-    this.namedIdx = named; this._pickSig = ''; this.models.clear(); this.dyn.clear(); this.sel = null; this.ap = null;
+    this.namedIdx = named; this._pickSig = ''; this.models.clear(); this.dyn.clear();
+    if (this.sel && this.sel.kind === 'star') this.sel = null;         // star indices changed; an object selection keeps its id
+    if (this.ap && this.ap.type === 'star') this.ap = null;
     this.counts.gaia = rows.length; this.counts.ctx = ctx.length;
     if (this.cam.frame === 'system') this.cam.host = { ...this.cam.host };
     this._syncStarFrame();
@@ -306,7 +318,10 @@ export class Scene3D {
     this._put('stars', st.data, st.n);
   }
   _starPc(i) { const p = this.st.pos; return [p[3 * i], p[3 * i + 1], p[3 * i + 2]]; }
-  _starKey(i) { const m = this.st.meta[i]; return m.kind === 'sun' ? 'sun' : m.kind === 'gaia' ? 'g:' + m.id : 'c:' + m.hip; }
+  _starKey(i) { const m = this.st.meta[i]; return m.kind === 'sun' ? 'ss:sun' : m.kind === 'gaia' ? 'gdr3:' + m.id : 'hip:' + m.hip; }
+  /** Index of the star with this schema id ('ss:sun', 'gdr3:…', 'hip:…'), or -1 when it is not loaded. */
+  _starIdx(key) { for (let i = 0; i < this.st.n; i++) if (this._starKey(i) === key) return i; return -1; }
+  _starSel(i) { return { kind: 'star', id: this._starKey(i), idx: i }; }
   _starName(i) {
     const m = this.st.meta[i], s = this.sys.get(this._starKey(i));
     if (s && s.payload && s.payload.name) return s.payload.name;
@@ -342,9 +357,9 @@ export class Scene3D {
     const { ra, dec } = this.target;
     const { yaw, pitch: p0 } = M.yawPitchFromDir(M.radecToXyz(ra, dec, 1));
     const pitch = clamp(p0, -1.5, 1.5);                         // same limit as mouse look: up = +z must not be parallel to the view
-    if (scene === 'solar' && this.solarData) {
+    if (scene === 'solar' && this.store.hasSolar) {
       // Near Earth, a little sunward and above the ecliptic, looking at it: the Moon, the Sun's glare and the orbits in view.
-      const e = this.solarData.earth, eps = M.OBLIQUITY_DEG * D2R;
+      const e = this._earthAu() || [1, 0, 0], eps = M.OBLIQUITY_DEG * D2R;
       const nep = [0, -Math.sin(eps), Math.cos(eps)];
       const toSun = M.norm(e.map((v) => -v)), side = M.norm(M.cross(nep, toSun));
       const off = M.norm([0, 1, 2].map((k) => 0.5 * toSun[k] + 0.8 * side[k] + 0.3 * nep[k]));
@@ -352,24 +367,29 @@ export class Scene3D {
       const v = M.yawPitchFromDir(sub3(e, pos));
       return F.makeCam({ frame: 'system', host: SUN_HOST, pos, yaw: v.yaw, pitch: clamp(v.pitch, -1.5, 1.5), speed: 0.002 });
     }
-    return F.makeCam({ pos: [0, 0, 0], yaw, pitch, speed: RANGE.galaxy.speed, disarm: 'sun' });
+    return F.makeCam({ pos: [0, 0, 0], yaw, pitch, speed: F.rangeOf('galaxy').speed, disarm: SUN_HOST.key });
   }
   setScene(name) {
-    if (name === 'solar' && !this.solarData) return;
+    if (name === 'solar' && !this.store.hasSolar) return;
     if (this._outro) return;                                    // leaving the page: the camera is on its way out
     this._takeOver();
     this.ap = null; this.sel = null; this.hover = null; this.card.hidden = true; this._cardT = 0;
     this.cam = this._startCam(name);
-    this._syncStarFrame();
+    this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null;
+    this._refreshVisible(); this._refreshGroups();
     this.hooks.onScene(this.scene);
   }
   toggleScene() { this.setScene(this.scene === 'stars' ? 'solar' : 'stars'); }
   resetView() { this.setScene(this.scene); }
-  setEvidence(on) { this.evidence = !!on; this._cardSig = ''; this.hooks.onEvidence(this.evidence); }
+  setEvidence(on) {
+    this.evidence = !!on; this._cardSig = ''; this._ver++; this._pickSig = '';
+    this._refreshVisible(); this._refreshGroups(); this._rebuildPoints();
+    this.hooks.onEvidence(this.evidence);
+  }
   toggleEvidence() { this.setEvidence(!this.evidence); }
   /** T: auto-throttle (speed follows the distance to the nearest surface) or the old fixed speed. */
   toggleAutoSpeed() {
-    if (this.autoSpeed) { const r = RANGE[this.cam.frame]; this.cam.speed = clamp(this._cruise(), r.min, r.max); }   // carry the current speed over
+    if (this.autoSpeed) { const r = F.rangeOf(this.cam.frame); this.cam.speed = clamp(this._cruise(), r.min, r.max); }   // carry the current speed over
     this.autoSpeed = !this.autoSpeed;
     this._hudT = 0;
   }
@@ -382,6 +402,9 @@ export class Scene3D {
     if (e.ctrlKey || e.altKey) return;                          // leave Ctrl+F, Ctrl+R and friends alone
     if (this._outro) return;                                    // leaving the page: no more steering
     this._takeOver();
+    // Space and Enter press the focused button of a panel that owns its keys (the layers panel); flying keys still work there.
+    const t = e.target;
+    if ((code === 'Space' || code === 'Enter') && t && t.closest && t.closest('[data-own-keys]')) return;
     if (MOVE_KEYS.has(code)) { this.keys.add(code); this.ap = null; e.preventDefault(); return; }
     if (e.repeat) { if (code === 'Tab') e.preventDefault(); return; }
     if (code === 'Tab') { e.preventDefault(); this.toggleScene(); return; }
@@ -457,7 +480,7 @@ export class Scene3D {
   }
   _wheel(e) {
     e.preventDefault();
-    const cam = this.cam, r = RANGE[cam.frame];
+    const cam = this.cam, r = F.rangeOf(cam.frame);
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
     const k = Math.exp(-dy * 0.0015);                         // logarithmic: equal steps, equal ratios
     if (this.autoSpeed) this.throttle = clamp(this.throttle * k, THROTTLE.min, THROTTLE.max);
@@ -489,8 +512,8 @@ export class Scene3D {
   _cruise() {
     const cam = this.cam;
     if (!this.autoSpeed) return cam.speed;
-    const u = F.unitsPerPc(cam);
-    return autoThrottleSpeed(this._nearBody().dAhead, this.throttle, { min: AUTO_MIN_PC * u, max: AUTO_MAX_PC * u });
+    const u = F.unitsPerPc(cam), a = F.levelOf(cam.frame).autoPc;
+    return autoThrottleSpeed(this._nearBody().dAhead, this.throttle, { min: a.min * u, max: a.max * u });
   }
   /**
    * The nearest surface to the camera, in frame units, cached per frame: { name, d, dAhead, spheres }. Galaxy frame: stars.
@@ -544,10 +567,12 @@ export class Scene3D {
       const rAu = this._modelFor(host).radiusAu, dist = Math.hypot(...cam.pos);
       spheres.push({ c: [0, 0, 0], r: rAu });
       eat(this._starName(host), Math.max(0, dist - rAu), -cam.pos[0], -cam.pos[1], -cam.pos[2], dist);
-      if (this._inSun()) for (const q of this.planets) {
-        spheres.push({ c: q.pos, r: q.rAu });
-        const dx = q.pos[0] - cam.pos[0], dy = q.pos[1] - cam.pos[1], dz = q.pos[2] - cam.pos[2], dist2 = Math.hypot(dx, dy, dz);
-        eat(q.name, Math.max(0, dist2 - q.rAu), dx, dy, dz, dist2);
+      for (const e of this._vis) {                            // the kinds that collide (planets, the Moon) in this system
+        if (!e.spec.collide || !e.sysAu) continue;
+        const rObj = e.spec.arriveAu(e.o), c = e.sysAu;
+        spheres.push({ c, r: rObj });
+        const dx = c[0] - cam.pos[0], dy = c[1] - cam.pos[1], dz = c[2] - cam.pos[2], dist2 = Math.hypot(dx, dy, dz);
+        eat(e.o.name, Math.max(0, dist2 - rObj), dx, dy, dz, dist2);
       }
     } else {
       if (bi >= 0) {
@@ -571,40 +596,77 @@ export class Scene3D {
   }
 
   // ------------------------------------------------------------------ autopilot
-  /** A selection -> what the autopilot needs: { world pc or AU position, radius in AU, name }. */
+  /**
+   * A selection -> what the autopilot needs. Stars: { type 'star', idx, pc, rAu, name }. Objects (from the store, so it also works
+   * from another frame): { type 'object', host, pos (AU in the host's frame), rAu, name }. Groups: { type 'group', host, pc, name }.
+   */
   _resolve(sel) {
     if (!sel) return null;
-    if (sel.t === 'star' && this.st.meta[sel.idx]) {
+    if (sel.kind === 'star') {
+      if (!this.st.meta[sel.idx]) return null;
       const md = this._modelFor(sel.idx);
       return { type: 'star', idx: sel.idx, pc: this._starPc(sel.idx), rAu: md.radiusAu, name: this._starName(sel.idx) };
     }
-    if (sel.t === 'planet') {
-      const p = this.planets.find((q) => q.name === sel.name);
-      return p ? { type: 'planet', pos: p.pos, rAu: p.rAu, name: p.name } : null;
+    if (sel.kind === 'group') {
+      const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host];
+      return g ? { type: 'group', host, pc: g.pcPos, name: g.name } : null;
     }
-    if (sel.t === 'body' && this.bodies[sel.idx]) { const b = this.bodies[sel.idx]; return { type: 'body', pos: b.pos, rAu: 0, name: b.name || `(${b.number})` }; }
-    return null;
+    const o = this.store.get(sel.id), pl = o && this.store.placement(sel.id), spec = o && kindSpec(o.kind);
+    if (!o || !spec || !pl || !pl.sysAu) return null;
+    return { type: 'object', host: o.host, pos: pl.sysAu, rAu: spec.arriveAu(o), name: o.name, o };
   }
-  _inSun() { return this.cam.frame === 'system' && this.cam.host.key === 'sun'; }
+  _inSun() { return this.cam.frame === 'system' && this.cam.host.key === SUN_HOST.key; }
+  _inHost(hostId) { return this.cam.frame === 'system' && this.cam.host.key === hostId; }
   _goFromCrosshair() {
     const px = (GO_DEG * D2R) * this.pxPerRad;
     this._go(this._pickAt(this.cssW / 2, this.cssH / 2, px) || this.sel);
   }
+  /** What "Go there" does for this selection (see planGo): 'star' | 'fly' | 'solar-scene' | 'via-host' | 'fly-galaxy'. */
+  _planFor(sel) {
+    const cam = this.cam;
+    const target = sel.kind === 'star' ? { kind: 'star' } : sel.kind === 'group' ? { kind: 'group', id: sel.id } : { kind: sel.kind, id: sel.id, host: (this.store.get(sel.id) || {}).host };
+    return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null }).type;
+  }
   _go(sel) {
+    if (!sel) return;
+    const plan = this._planFor(sel);
+    if (plan === 'star') this._goStar(sel, null);
+    else if (plan === 'fly') this._flyTo(sel);
+    else if (plan === 'solar-scene') {
+      this.setScene('solar');
+      if (this.scene !== 'solar' || sel.kind === 'group') return;
+      if (sel.kind === 'sun') { this.sel = this._starSel(0); this._cardSig = ''; this._goStar(this.sel, null); return; }   // in its own frame the Sun is star 0
+      this.sel = sel; this._cardSig = ''; this._cardT = 0;      // setScene cleared it: keep the target's card pinned
+      this._refreshVisible(); this._refreshGroups();
+      this._flyTo(sel);
+    } else if (plan === 'via-host') {
+      const o = sel.kind === 'group' ? null : this.store.get(sel.id), hostId = sel.kind === 'group' ? String(sel.id).replace(/^group:/, '') : o && o.host;
+      const idx = hostId ? this._starIdx(hostId) : -1;
+      if (idx >= 0) this._goStar(this._starSel(idx), sel);       // the host star first; on arrival the trip to the object starts
+    }
+    // 'fly-galaxy': nothing yet (no kind needs it in this phase)
+  }
+  /** The star trip, run in galaxy parsecs (doubles keep the last few AU exact), so crossing into the star's system frame needs no restart. */
+  _goStar(sel, then) {
     const t = this._resolve(sel), cam = this.cam;
-    if (!t) return;
-    if (t.type !== 'star' && !this._inSun()) return;           // planets only exist in the Sun's frame
-    const dir = M.dirFromYawPitch(cam.yaw, cam.pitch), stopAu = arrivalDistance(t.rAu), obj = new Autopilot();
-    // Stars: the whole trip runs in galaxy parsecs (doubles keep the last few AU exact), so crossing into the star's
-    // system frame needs no restart. Planets and small bodies run in the Sun's AU frame.
-    if (t.type === 'star') obj.start({ from: F.worldPc(cam), fromDir: dir, to: t.pc, stopAt: stopAu / AU_PER_PC });
-    else obj.start({ from: cam.pos.slice(), fromDir: dir, to: t.pos, stopAt: stopAu });
-    this.ap = { obj, sel, type: t.type, unitsPerPc: t.type === 'star' ? 1 : AU_PER_PC };
+    if (!t || t.type !== 'star') return;
+    const obj = new Autopilot();
+    obj.start({ from: F.worldPc(cam), fromDir: M.dirFromYawPitch(cam.yaw, cam.pitch), to: t.pc, stopAt: arrivalDistance(t.rAu) / AU_PER_PC });
+    this.ap = { obj, sel, type: 'star', then, unitsPerPc: 1 };
+    cam.vel = [0, 0, 0];
+  }
+  /** An in-frame trip to an object of the camera's system, in AU, retargeted each frame. */
+  _flyTo(sel) {
+    const t = this._resolve(sel), cam = this.cam;
+    if (!t || t.type !== 'object' || !this._inHost(t.host)) return;
+    const obj = new Autopilot();
+    obj.start({ from: cam.pos.slice(), fromDir: M.dirFromYawPitch(cam.yaw, cam.pitch), to: t.pos, stopAt: arrivalDistance(t.rAu) });
+    this.ap = { obj, sel, type: 'object', host: t.host, then: null, unitsPerPc: AU_PER_PC };
     cam.vel = [0, 0, 0];
   }
   _stepAutopilot(dt) {
     const ap = this.ap, cam = this.cam; if (!ap) return;
-    if (ap.type !== 'star' && !this._inSun()) { this.ap = null; return; }
+    if (ap.type !== 'star' && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
     const t = this._resolve(ap.sel);
     if (!t) { this.ap = null; return; }
     if (ap.type !== 'star') ap.obj.retarget(t.pos);
@@ -612,22 +674,29 @@ export class Scene3D {
     cam.pos = ap.type === 'star' ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.slice()) : r.pos.slice();
     const v = M.yawPitchFromDir(r.dir);
     cam.yaw = v.yaw; cam.pitch = clamp(v.pitch, -1.5, 1.5); cam.vel = [0, 0, 0];
-    if (r.done) { this.ap = null; this._arrived(t); }
+    if (r.done) { this.ap = null; this._arrived(t, ap.then); }
   }
-  _arrived(t) {
+  _arrived(t, then) {
     const cam = this.cam, upc = F.unitsPerPc(cam);
-    const surfAu = this._surfaceAu();
-    cam.speed = clamp(suggestSpeed(surfAu * (upc / AU_PER_PC), upc), RANGE[cam.frame].min, RANGE[cam.frame].max);
+    const surfAu = this._surfaceAu(), r = F.rangeOf(cam.frame);
+    cam.speed = clamp(suggestSpeed(surfAu * (upc / AU_PER_PC), upc), r.min, r.max);
     if (t.type === 'star' && cam.frame === 'system') this.hooks.onHud(this._hudData());
+    // a chained trip (to an object of the star just reached): only once we are in that star's frame, and never to a group
+    if (then && then.kind !== 'group' && t.type === 'star' && cam.frame === 'system' && cam.host.key === this._starKey(t.idx)) {
+      this._refreshVisible(); this._refreshGroups();
+      this.sel = then; this._cardSig = ''; this._cardT = 0;
+      this._go(then);
+    }
   }
   /** The sphere whose surface is nearest the camera: { name, au } (au = Infinity when in the galaxy frame). */
   _nearest() {
     const cam = this.cam;
     if (cam.frame !== 'system') return { name: null, au: Infinity };
     let best = { name: this._starName(cam.host.idx), au: Math.max(0, Math.hypot(...cam.pos) - this._modelFor(cam.host.idx).radiusAu) };
-    if (this._inSun()) for (const p of this.planets) {
-      const au = Math.max(0, Math.hypot(...sub3(p.pos, cam.pos)) - p.rAu);
-      if (au < best.au) best = { name: p.name, au };
+    for (const e of this._vis) {
+      if (!e.spec.collide || !e.sysAu) continue;
+      const au = Math.max(0, Math.hypot(...sub3(e.sysAu, cam.pos)) - e.spec.arriveAu(e.o));
+      if (au < best.au) best = { name: e.o.name, au };
     }
     return best;
   }
@@ -636,13 +705,13 @@ export class Scene3D {
   /** After a frame switch: the free-flight speed that suits the new surroundings, and the star buffer. */
   _onFrameChange(kind) {
     const cam = this.cam;
-    this._syncStarFrame(); this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
+    this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
+    this._refreshVisible(); this._refreshGroups();                // the visible set depends on the frame
     if (kind === 'enter') {
       this._system(cam.host.idx);
-      cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), RANGE.system.min, RANGE.system.max);
-      if (this.sel && this.sel.t !== 'star') this.sel = null;
-    } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), RANGE.galaxy.min, RANGE.galaxy.max);
-    if (this.ap && this.ap.type !== 'star') this.ap = null;
+      cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), F.rangeOf('system').min, F.rangeOf('system').max);
+    } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), F.rangeOf('galaxy').min, F.rangeOf('galaxy').max);
+    if (this.ap && this.ap.type !== 'star') this.ap = null;     // a trip inside a system ends when the camera leaves it
   }
 
   // ------------------------------------------------------------------ arriving from and leaving for a flat picture
@@ -792,13 +861,12 @@ export class Scene3D {
   }
   _matrices(dt) {
     const cam = this.cam;
-    const want = cam.frame === 'system' ? FOV_SYSTEM : this.fovStars;
+    const L = F.levelOf(cam.frame), want = L.fov || this.fovStars;
     if (!this._intro && !this._outro) this.fov += (want - this.fov) * (dt > 0 ? 1 - Math.exp(-dt * 3) : 0);
     const dir = M.dirFromYawPitch(cam.yaw, cam.pitch);
     const aspect = this.canvas.width / this.canvas.height;
     this.R = M.lookRotation(dir, Z_UP);                          // rotation only: translation is subtracted before this
-    const [n, f] = cam.frame === 'system' ? [1e-9, 1e12] : [1e-9, 1e9];
-    this.vp = M.mul4(M.perspective(this.fov * D2R, aspect, n, f), this.R);
+    this.vp = M.mul4(M.perspective(this.fov * D2R, aspect, L.near, L.far), this.R);
     this.tanY = Math.tan(this.fov * D2R / 2); this.tanX = this.tanY * aspect;
     this.pxPerRad = (this.cssH / 2) / this.tanY;
   }
@@ -859,6 +927,7 @@ export class Scene3D {
     const dt = this._last ? Math.min(0.05, (t - this._last) / 1000) : 0;
     this._last = t; this._t = t / 1000; this._frameNo++;
     this._resize();
+    this._refreshVisible();                                      // once per frame: reused by drawing, labels, picking and validity
     this._step(dt);
     this._stepAutopilot(dt);
     this._stepIntro(dt); this._stepSnap(dt);
@@ -868,12 +937,23 @@ export class Scene3D {
     const sw = F.stepFrame(this.cam, cands);
     if (sw) { this._onFrameChange(sw); cands = this._scan(); }
     this._matrices(dt);
+    this._refreshGroups();
     // exposure: eased toward what the brightest thing in view needs
     this.expoTarget = M.exposureFor(this._brightest(cands));
     this.expo = dt > 0 ? M.easeExposure(this.expo, this.expoTarget, dt) : this.expoTarget;
     this._draw(cands, t);
     this._overlay(t);
   }
+
+  /** The visible object entries for this frame and the camera's frame. Cheap: the store is a few hundred records at most. */
+  _refreshVisible() {
+    const cam = this.cam;
+    this._vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: cam.frame, inHost: (h) => cam.frame === 'system' && cam.host.key === h, pxPerRad: this.pxPerRad });
+    for (const e of this._vis) {
+      if (e.renderer === 'billboard' && !this._warned.has(e.kind)) { this._warned.add(e.kind); console.warn(`scene3d: the billboard renderer is not implemented (kind ${e.kind} is skipped)`); }
+    }
+  }
+  _refreshGroups() { this._groups = groupState(this.store, this._vis, this.cam, this.pxPerRad); }
 
   // ------------------------------------------------------------------ drawing
   _draw(cands, t) {
@@ -882,7 +962,7 @@ export class Scene3D {
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     this._drawSky();
-    const sun = this._inSun();
+    const sun = this._inSun(), vis = this._vis, groups = this._groups;
     const bodies = [];                                            // spheres to draw, with their crossfade weight
     const dynStars = [], dynPts = [], skip = new Int32Array(16).fill(-1);
     this.dyn.clear();
@@ -899,21 +979,25 @@ export class Scene3D {
       dynStars.push(rel[0], rel[1], rel[2], this.st.gal[7 * c.idx + 3], col[0] * wPoint, col[1] * wPoint, col[2] * wPoint);
       if (s > 0 && !inside) bodies.push({ kind: 0, rel, dist: distAu, rAu, s, md, idx: c.idx, units: cam.frame === 'system' ? 1 : AU_PER_PC });
     });
-    if (sun) {
-      for (const p of this.planets) {
-        const relv = sub3(p.pos, cam.pos), dist = Math.hypot(...relv), angPx = M.angRadius(p.rAu, dist) * this.pxPerRad, s = M.sphereWeight(angPx);
-        this.dyn.set('p:' + p.name, angPx);
-        const size = p.name === 'Earth' ? 9 : p.name === 'Moon' ? 4 : 6.5;
-        if (dist > p.rAu) dynPts.push(relv[0], relv[1], relv[2], size, 1 - s, p.rgb[0], p.rgb[1], p.rgb[2]);
-        if (s > 0 && dist > p.rAu) bodies.push({ kind: 1, rel: relv, dist, rAu: p.rAu, s, p });
-      }
+    let nMark = 0;
+    for (const e of vis) {
+      if (e.renderer === 'sphere') {                              // a point that cross-fades into a ray-traced sphere
+        const rAu = e.spec.arriveAu(e.o), relv = framePos(e, cam), dist = Math.hypot(relv[0], relv[1], relv[2]);
+        const angPx = M.angRadius(rAu, dist) * this.pxPerRad, s = M.sphereWeight(angPx), c = e.spec.color(e.o);
+        this.dyn.set(e.id, angPx);
+        if (dist > rAu) dynPts.push(relv[0], relv[1], relv[2], e.spec.pointSize(e.o), 1 - s, c[0], c[1], c[2]);
+        if (s > 0 && dist > rAu) bodies.push({ kind: 1, rel: relv, dist, rAu, s, e });
+      } else if (e.renderer === 'marker' && !(e.host && groups[e.host] && groups[e.host].grouped)) nMark++;
     }
+    for (const g of Object.values(groups)) if (g.grouped) nMark++;
     // lines
-    if (cam.frame === 'galaxy') this._drawLines('lineStars');
-    else if (sun) { this._drawLines('lineSolar'); this._drawLines('coneSolar'); }
+    if (cam.frame === 'galaxy') { if (this.layers.cone) this._drawLines('lineStars'); }
+    else if (sun) { if (this.layers.orbits) this._drawLines('lineSolar'); if (this.layers.cone) this._drawLines('coneSolar'); }
     this._drawStars('stars', skip);
     if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
-    if (sun) { this._drawPoints(this.gpu.points, [0, 0, 0].map((_, i) => cam.pos[i])); if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts)); }
+    if (sun) { this._drawPoints(this.gpu.points, cam.pos); }
+    if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
+    if (nMark) this._drawDynPoints(this._markerData(vis, groups, nMark));
     // spheres, far to near, premultiplied "over"
     bodies.sort((a, b) => b.dist - a.dist);
     if (bodies.length) {
@@ -923,8 +1007,25 @@ export class Scene3D {
     if (hdr) hdr.finish({ strength: this.bloomK * (0.1 + 0.2 * clamp(-Math.log10(this.expo) / 4, 0, 1)), exposure: 1, threshold: this.bloomT });
     else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
+  /** Galaxy-frame markers: a camera-relative point per ungrouped marker entry (positions in doubles), one per grouped host. */
+  _markerData(vis, groups, n) {
+    const cam = this.cam, out = new Float32Array(n * 8);
+    let k = 0;
+    const put = (rel, size, c) => { out[k++] = rel[0]; out[k++] = rel[1]; out[k++] = rel[2]; out[k++] = size; out[k++] = 1; out[k++] = c[0]; out[k++] = c[1]; out[k++] = c[2]; };
+    for (const e of vis) {
+      if (e.renderer !== 'marker' || (e.host && groups[e.host] && groups[e.host].grouped)) continue;
+      const rel = framePos(e, cam);
+      if (rel) put(rel, e.spec.markerPx(e.o), e.spec.color(e.o));
+    }
+    for (const [host, g] of Object.entries(groups)) {
+      if (!g.grouped) continue;
+      const rel = framePos({ galPc: g.pcPos, host, group: true }, cam);
+      if (rel) put(rel, GROUP_PX_SIZE, GROUP_RGB);
+    }
+    return k === out.length ? out : out.subarray(0, k);
+  }
   _drawSky() {
-    if (!this.skyTex) return;
+    if (!this.skyTex || !this.layers.mw) return;
     const gl = this.gl, pr = this.prog.sky, u = pr.u, R = this.R;
     const dSun = Math.hypot(...F.worldPc(this.cam));
     const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) / (1 + (dSun / MW_FADE_PC) ** 2);
@@ -1011,7 +1112,8 @@ export class Scene3D {
   _drawBody(b, t) {
     const gl = this.gl, pr = this.prog.body, u = pr.u;
     const cv = M.rotateView(this.R, b.rel).map((v) => v / b.rAu);
-    const ext = b.kind === 0 ? (this.evidence ? 1.1 : 3) : b.p.name === 'Saturn' && !this.evidence ? 2.4 : 1.1;
+    const sp = b.kind === 1 ? b.e.spec.sphere(b.e.o, { evidence: this.evidence }) : null;   // rgb, pole, features, ext of a sphere kind
+    const ext = b.kind === 0 ? (this.evidence ? 1.1 : 3) : sp.ext;
     const rect = M.quadRect(cv, ext, this.tanX, this.tanY);
     if (!rect) return;
     gl.useProgram(pr.p);
@@ -1041,16 +1143,14 @@ export class Scene3D {
       gl.uniform1f(u.u_glow, this.evidence ? 0 : 0.35 * surf);
       gl.uniform1f(u.u_ring, 0); gl.uniform1f(u.u_band, 0); gl.uniform1f(u.u_atm, 0);
     } else {
-      const p = b.p, L = M.norm(p.pos.map((v) => -v)), pole = POLE[p.name] ? M.radecToXyz(POLE[p.name][0], POLE[p.name][1], 1) : Z_UP;
+      const L = M.norm(b.e.sysAu.map((v) => -v)), pole = sp.pole ? M.radecToXyz(sp.pole[0], sp.pole[1], 1) : Z_UP;
       const Lv = M.rotateView(R, L), Pv = M.rotateView(R, pole);
       gl.uniform1i(u.u_kind, 1);
-      gl.uniform3f(u.u_col, p.rgb[0], p.rgb[1], p.rgb[2]);
+      gl.uniform3f(u.u_col, sp.rgb[0], sp.rgb[1], sp.rgb[2]);
       gl.uniform3f(u.u_light, Lv[0], Lv[1], Lv[2]); gl.uniform3f(u.u_pole, Pv[0], Pv[1], Pv[2]);
       gl.uniform1f(u.u_u, 0); gl.uniform1f(u.u_surf, 0.5); gl.uniform1f(u.u_glow, 0);
       gl.uniform1f(u.u_gran, 1); gl.uniform1f(u.u_gamp, 0); gl.uniform1f(u.u_spots, 0); gl.uniform1f(u.u_seed, 0);
-      gl.uniform1f(u.u_ring, p.name === 'Saturn' ? 1 : 0);
-      gl.uniform1f(u.u_band, p.name === 'Jupiter' || p.name === 'Saturn' ? 1 : 0);
-      gl.uniform1f(u.u_atm, p.name === 'Earth' || p.name === 'Venus' ? 1 : 0);
+      gl.uniform1f(u.u_ring, sp.features.ring); gl.uniform1f(u.u_band, sp.features.band); gl.uniform1f(u.u_atm, sp.features.atm);
     }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
@@ -1066,92 +1166,88 @@ export class Scene3D {
     if (nx < -1.1 || nx > 1.1 || ny < -1.1 || ny > 1.1) return null;
     return [(nx * 0.5 + 0.5) * this.cssW, (0.5 - ny * 0.5) * this.cssH];
   }
-  /** Object under (px, py) in CSS px within maxPx: a planet, else the brightest star, else a small body. null for none. */
+  /**
+   * What is under (px, py) in CSS px within maxPx, or null: { kind: 'star', id, idx } | { kind, id } | { kind: 'group', id }.
+   * One star candidate (the brightest in reach, priority 20) and one object candidate (pickObjects) go through choosePick:
+   * planets and the group marker (10) beat stars (20), which beat small bodies (30).
+   */
   _pickAt(px, py, maxPx) {
-    const cam = this.cam, sun = this._inSun();
-    if (sun) {
-      let best = null, bestD = Infinity;
-      for (const p of this.planets) {
-        const q = this._proj(sub3(p.pos, cam.pos)); if (!q) continue;
-        const d = Math.hypot(q[0] - px, q[1] - py), reach = Math.max(maxPx, this.dyn.get('p:' + p.name) || 0);
-        if (d <= reach && d < bestD) { bestD = d; best = { t: 'planet', name: p.name }; }
-      }
-      if (best) return best;
-    }
-    const st = this.st;
-    let bi = -1, bm = Infinity;
+    const cam = this.cam, st = this.st;
+    let bi = -1, bm = Infinity, bd = 0;
     for (let i = 0; i < st.n; i++) {
       const rel = F.relFromCam(cam, [st.pos[3 * i], st.pos[3 * i + 1], st.pos[3 * i + 2]]);
       const q = this._proj(rel); if (!q) continue;
-      const reach = Math.max(maxPx, this.dyn.get(i) || 0);
-      if (Math.hypot(q[0] - px, q[1] - py) > reach) continue;
+      const reach = Math.max(maxPx, this.dyn.get(i) || 0), d = Math.hypot(q[0] - px, q[1] - py);
+      if (d > reach) continue;
       const distPc = Math.hypot(...rel) / F.unitsPerPc(cam), m = M.apparentMag(st.gal[7 * i + 3], distPc);
-      if (m < bm) { bm = m; bi = i; }
+      if (m < bm) { bm = m; bi = i; bd = d; }
     }
-    if (bi >= 0) return { t: 'star', idx: bi };
-    if (sun) {
-      let best = null, bestD = maxPx;
-      this.bodies.forEach((b, i) => {
-        const q = this._proj(sub3(b.pos, cam.pos)); if (!q) return;
-        const d = Math.hypot(q[0] - px, q[1] - py);
-        if (d <= bestD) { bestD = d; best = { t: 'body', idx: i }; }
-      });
-      return best;
-    }
-    return null;
+    const cands = [];
+    if (bi >= 0) cands.push({ sel: this._starSel(bi), priority: kindSpec('star').pick.priority, d: bd });
+    cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0 }));
+    const win = choosePick(cands);
+    return win ? win.sel : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
   }
   _select(sel) {
     this.sel = sel; this._cardSig = ''; this._cardT = 0;
-    if (sel.t === 'star') this._system(sel.idx);
+    if (sel.kind === 'star') this._system(sel.idx);
+    else if (sel.kind === 'sun') this._system(0);
   }
-  _selKey(sel) { return sel ? (sel.t === 'star' ? 's' + sel.idx : sel.t === 'planet' ? 'p' + sel.name : 'b' + sel.idx) : ''; }
-  _selPos(sel) {   // camera-relative position
+  _selKey(sel) { return sel ? (sel.kind === 'star' ? 's' + sel.idx : sel.kind + ':' + sel.id) : ''; }
+  _entry(id) { for (const e of this._vis) if (e.id === id) return e; return null; }
+  /** Camera-relative position of a selection in the camera's frame, or null when it is not drawn. */
+  _selPos(sel) {
     const cam = this.cam;
-    if (sel.t === 'star') return F.relFromCam(cam, this._starPc(sel.idx));
-    return sub3(sel.t === 'planet' ? this.planets.find((p) => p.name === sel.name).pos : this.bodies[sel.idx].pos, cam.pos);
+    if (sel.kind === 'star') return F.relFromCam(cam, this._starPc(sel.idx));
+    if (sel.kind === 'group') { const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host]; return g ? framePos({ galPc: g.pcPos, host, group: true }, cam) : null; }
+    const e = this._entry(sel.id);
+    return e ? framePos(e, cam) : null;
   }
   _valid(sel) {
     if (!sel) return false;
-    if (sel.t === 'star') return !!this.st.meta[sel.idx];
-    if (!this._inSun()) return false;
-    return sel.t === 'planet' ? this.planets.some((p) => p.name === sel.name) : !!this.bodies[sel.idx];
+    if (sel.kind === 'star') return !!this.st.meta[sel.idx];
+    if (sel.kind === 'group') { const g = this._groups[String(sel.id).replace(/^group:/, '')]; return !!(g && g.grouped); }
+    return !!this._entry(sel.id);
   }
   _hoverPick() {
     const c = this.cam, h = this.hover;
-    const sig = `${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${c.frame}|${this.cssW}x${this.cssH}`;
+    const sig = `${this._ver}|${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${c.frame}|${this.cssW}x${this.cssH}`;
     if (sig !== this._pickSig) { this._pickSig = sig; this._pickSel = this._pickAt(h.x, h.y, PICK_PX); }
     return this._pickSel;
   }
   _fromYou(rel) {
     const u = F.unitsPerPc(this.cam), dpc = Math.hypot(...rel) / u;
-    if (this.cam.frame === 'system' && dpc < 0.02) return `${fmtNum(dpc * AU_PER_PC)} AU`;
+    if (dpc < 0.02) return `${fmtNum(dpc * AU_PER_PC)} AU`;    // solar-system objects seen from the Stars scene read in AU too
     return `${fmtNum(dpc)} pc · ${fmtNum(dpc * LY)} ly`;
   }
-  /** In the evidence view the card lists no illustrative rows. */
-  _evRows(rows) { return this.evidence ? rows.filter((r) => r[2] !== 'illustrative') : rows; }
   _renderCard(sel, pinned) {
-    const onGo = pinned ? () => this._go(sel) : undefined, rel = this._selPos(sel);
-    if (sel.t === 'star') {
+    const rel = this._selPos(sel);
+    if (sel.kind === 'star') {
+      const onGo = pinned ? () => this._go(sel) : undefined;
       const m = this.st.meta[sel.idx], md = this._modelFor(sel.idx), s = this._system(sel.idx), dSun = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(sel.idx));
       const sub = m.kind === 'sun' ? 'The Sun' : m.kind === 'gaia' ? `${fmtNum(dSun)} pc · ${fmtNum(dSun * LY)} ly from the Sun` : 'Bright star (XHIP parallax)';
       renderStarCard(this.card, md, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo,
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
-    } else if (sel.t === 'planet') {
-      const p = this.planets.find((q) => q.name === sel.name), dSun = Math.hypot(...p.pos);
-      renderBodyCard(this.card, { title: p.name, onGo, rows: this._evRows([
-        ['Radius', `${fmtNum(M.PLANET_KM[p.name] || 0)} km`, 'measured'],
-        ['Distance from Sun', `${fmtNum(dSun)} AU`, 'measured'],
-        ['From you', this._fromYou(rel), 'illustrative'],
-        ['Colour and lighting', 'illustrative', 'illustrative'],
-      ]) });
-    } else {
-      const b = this.bodies[sel.idx];
-      renderBodyCard(this.card, { title: `${b.number != null ? b.number + ' ' : ''}${b.name || 'Small body'}`, onGo, rows: this._evRows([
-        ['Distance from Sun', `${fmtNum(b.dh)} AU`, 'catalogue'], ['Distance from Earth', `${fmtNum(b.dg)} AU`, 'catalogue'],
-        ['From you', this._fromYou(rel), 'illustrative'], ['Visual mag', Number.isFinite(b.vmag) ? b.vmag.toFixed(1) : 'n/a', 'catalogue'],
-        ['Class', b.cls || 'n/a', 'catalogue'],
-      ]) });
+      return;
     }
+    const plan = this._planFor(sel), goLabel = plan === 'solar-scene' ? 'Show in the Solar system' : 'Go there';
+    const onGo = pinned && plan !== 'fly-galaxy' ? () => this._go(sel) : undefined;
+    if (sel.kind === 'group') {
+      const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host];
+      const names = this._vis.filter((e) => e.host === host).sort((a, b) => a.spec.pick.priority - b.spec.pick.priority).map((e) => e.o.name);
+      const sub = names.length ? `In this view: ${names.slice(0, 6).join(', ')}${names.length > 6 ? ` and ${names.length - 6} more` : ''}` : null;
+      const rows = Object.entries(g.byKind).map(([k, n]) => { const sp = kindSpec(k); const noun = sp ? sp.noun[n === 1 ? 0 : 1] : k; return [noun.charAt(0).toUpperCase() + noun.slice(1), String(n), 'measured', 'objects in this view']; });
+      renderBodyCard(this.card, { title: g.name, subtitle: sub, rows, onGo, goLabel });
+      return;
+    }
+    if (sel.kind === 'sun') {                                     // the Sun's marker: star 0's card, placed where the marker is
+      const s = this._system(0);
+      renderStarCard(this.card, this._modelFor(0), { title: this._starName(0), subtitle: 'The Sun', distFromCameraText: this.evidence || !rel ? null : this._fromYou(rel), onGo, goLabel,
+        loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
+      return;
+    }
+    const e = this._entry(sel.id), c = e.spec.card(e.o, { fromYou: this.evidence ? null : this._fromYou(rel), evidence: this.evidence, fmtNum });
+    renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel });
   }
   _updateCard(t) {
     let sel = null, pinned = false;
@@ -1170,7 +1266,7 @@ export class Scene3D {
     this.card.hidden = false;
     this.card.classList.toggle('pinned', pinned);
     if (pinned) { this.card.style.transform = ''; return; }
-    const p = this._proj(this._selPos(sel));
+    const rel = this._selPos(sel), p = rel && this._proj(rel);
     if (!p) return hide();
     const cw = this.card.offsetWidth || 240, ch = this.card.offsetHeight || 120;
     let x = p[0] + 16, y = p[1] + 16;
@@ -1182,25 +1278,19 @@ export class Scene3D {
     const out = [], cam = this.cam, st = this.st;
     const hostPx = cam.frame === 'system' && !this._inSun() ? this.dyn.get(cam.host.idx) || 0 : 0;   // no labels on top of a star's disc
     const hostP = hostPx > 20 ? this._proj(F.relFromCam(cam, cam.host.pc)) : null;
-    for (const i of this.namedIdx) {
-      const rel = F.relFromCam(cam, this._starPc(i)), p = this._proj(rel); if (!p) continue;
-      if (hostP && Math.hypot(p[0] - hostP[0], p[1] - hostP[1]) < hostPx * 1.5) continue;
-      const mag = M.apparentMag(st.gal[7 * i + 3], Math.hypot(...rel) / F.unitsPerPc(cam));
-      if (mag > 6) continue;
-      out.push({ x: p[0], y: p[1], key: mag, text: st.meta[i].name });
-    }
-    if (this._inSun()) {
-      for (const pl of this.planets) {
-        const p = this._proj(sub3(pl.pos, cam.pos)); if (!p || (this.dyn.get('p:' + pl.name) || 0) > 30) continue;   // no label on a visible disc
-        out.push({ x: p[0], y: p[1], key: pl.kind === 'moon' ? 50 : 0, text: pl.name });   // Earth wins over the Moon beside it
+    const sunMarker = cam.frame === 'galaxy' && this._vis.some((e) => e.id === SUN_HOST.key);        // the marker is labelled "Sun": not twice
+    if (this.layers.starNames) {
+      for (const i of this.namedIdx) {
+        if (i === 0 && sunMarker) continue;
+        const rel = F.relFromCam(cam, this._starPc(i)), p = this._proj(rel); if (!p) continue;
+        if (hostP && Math.hypot(p[0] - hostP[0], p[1] - hostP[1]) < hostPx * 1.5) continue;
+        const mag = M.apparentMag(st.gal[7 * i + 3], Math.hypot(...rel) / F.unitsPerPc(cam));
+        if (mag > 6) continue;
+        out.push({ x: p[0], y: p[1], key: mag, text: st.meta[i].name });
       }
-      const bodies = [];
-      this.bodies.forEach((b) => {
-        const p = this._proj(sub3(b.pos, cam.pos)); if (!p) return;
-        bodies.push({ x: p[0], y: p[1], key: 100 + (Number.isFinite(b.vmag) ? b.vmag : 30), text: b.name || `(${b.number})` });
-      });
-      return out.concat(bodies.sort((a, b) => a.key - b.key).slice(0, MAX_BODY_LABELS));
     }
+    const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0 });
+    for (const l of L) out.push(l);
     return out;
   }
   _overlay(t) {
@@ -1225,7 +1315,7 @@ export class Scene3D {
     }
     lab.shadowBlur = 0;
     if (this.sel && this._valid(this.sel)) {                      // ring around the selected object while it is still a speck
-      const p = this._proj(this._selPos(this.sel)), px = this.dyn.get(this.sel.t === 'star' ? this.sel.idx : 'p:' + this.sel.name) || 0;
+      const rel = this._selPos(this.sel), p = rel && this._proj(rel), px = this.dyn.get(this.sel.kind === 'star' ? this.sel.idx : this.sel.id) || 0;
       if (p && px < 14) { lab.strokeStyle = 'rgba(242, 184, 75, 0.85)'; lab.lineWidth = 1.5; lab.beginPath(); lab.arc(p[0], p[1], 11, 0, Math.PI * 2); lab.stroke(); }
     }
     if (this.locked) {                                            // crosshair
@@ -1250,12 +1340,13 @@ export class Scene3D {
     this._xhT = t;
     const sel = this._pickAt(this.cssW / 2, this.cssH / 2, XHAIR_DEG * D2R * this.pxPerRad);
     if (!sel || !this._valid(sel)) return (this._xh = null);
-    if (sel.t === 'star') this._system(sel.idx);                // prefetch: you may be about to fly there
-    const rel = this._selPos(sel), d = Math.hypot(...rel), u = F.unitsPerPc(this.cam);
+    if (sel.kind === 'star') this._system(sel.idx);             // prefetch: you may be about to fly there
+    const rel = this._selPos(sel); if (!rel) return (this._xh = null);
+    const d = Math.hypot(...rel), u = F.unitsPerPc(this.cam), e = sel.kind === 'star' || sel.kind === 'group' ? null : this._entry(sel.id);
     // Distance to the surface, like the HUD's Nearest row (radius in frame units).
-    const rad = sel.t === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : sel.t === 'planet' ? (this.planets.find((q) => q.name === sel.name) || {}).rAu || 0 : 0;
+    const rad = sel.kind === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : e ? e.spec.arriveAu(e.o) * u / AU_PER_PC : 0;
     const surf = d > 0 ? rel.map((v) => v * Math.max(0, d - rad) / d) : rel;
-    const name = sel.t === 'star' ? this._starName(sel.idx) : sel.t === 'planet' ? sel.name : (this.bodies[sel.idx].name || `(${this.bodies[sel.idx].number})`);
+    const name = sel.kind === 'star' ? this._starName(sel.idx) : sel.kind === 'group' ? this._groups[String(sel.id).replace(/^group:/, '')].name : e.o.name;
     const short = name.length > 28 && /^Gaia/i.test(name) ? 'Gaia …' + name.slice(-8) : name;
     return (this._xh = { name: short, dist: this._fromYou(surf), sel });
   }
@@ -1267,7 +1358,7 @@ export class Scene3D {
       surfaceAu: inSys ? near.au : null,
       sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), auto: this.autoSpeed, throttle: this.throttle,
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
-      limit: this.limit, locked: this.locked, counts: { ...this.counts }, evidence: this.evidence,
+      limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };
   }

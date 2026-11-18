@@ -1,0 +1,15 @@
+{
+  "id": "ongc:NGC0224", "kind": "galaxy", "name": "Andromeda Galaxy", "designations": ["M31", "NGC 224", "UGC 454"],
+  "host": null, "parent": null,
+  "position": { "model": "fixed", "ra": 10.6847, "dec": 41.2690, "epoch": 2000.0, "method": "cepheid",
+    "dist": { "v": 0.765, "lo": 0.745, "hi": 0.785, "unit": "Mpc", "src": "placeholder (NED-D median)", "tier": "measured" } },
+  "size": { "radius": null,
+            "angular": { "major": { "v": 3.17, "unit": "deg", "src": "placeholder (OpenNGC)", "tier": "catalogue" },
+                         "minor": { "v": 1.0, "unit": "deg", "src": "placeholder", "tier": "catalogue" },
+                         "pa": { "v": 35, "unit": "deg", "src": "placeholder", "tier": "catalogue" } } },
+  "props": { "type": { "v": "SA(s)b", "src": "placeholder (OpenNGC)", "tier": "catalogue" } },
+  "provenance": { "source": "static:ongc-galaxies", "dataset": "ongc-galaxies", "catalogue": "OpenNGC + NED-D",
+    "version": "<pinned>", "citation": "Mattiazzi 2023 (OpenNGC); Steer et al. 2017 (NED-D)", "url": "https://github.com/mattiaverga/OpenNGC" },
+  "evidence": "measured",
+  "render": { "mag": 3.4 }
+}

@@ -138,8 +138,9 @@ export const LINE_FS = `#version 300 es
 precision highp float;
 in vec4 v_col;
 out vec4 o;
+uniform float u_a;                                         // an overall alpha (the cone outline fades with galaxyFade)
 ${INVT}
-void main(){ o = vec4(invT3(v_col.rgb * v_col.a), 1.0); }`;
+void main(){ o = vec4(invT3(v_col.rgb * v_col.a * u_a), 1.0); }`;
 
 // Impostor spheres: a screen rectangle per body (u_rect, NDC), a ray-sphere intersection per pixel. u_c is the sphere
 // centre in view space in units of the sphere's radius, computed on the CPU in doubles, so it is exact from 1 R to kpc.
@@ -513,6 +514,109 @@ void main(){
   o = vec4(col, a);
 }`;
 
-export const SPRITE_UNIFORMS_STAR = ['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_dpr', 'u_maxPt', 'u_sig', 'u_skip'];
+// Galaxy and Milky Way billboards (docs/object-framework.md sections 18.6.1 and 18.7, illustrative looks). Like the nebula quads, a quad per item is built on
+// the CPU in clip space (galaxyQuad in scene3d-galaxy.js): a_uv is the position in the projected ellipse's own units (rho = length 1 on its edge), a_d the
+// position in disc coordinates (the inverse of the affine image of the disc's two axes: arms and the bar live there), a_col rgb and the alpha, a_p = (mode,
+// seed, bulge share, face-on weight), a_q = (arm pitch tan, or a group's blob count; bar half-length; bar angle; disc scale length). mode 0 a disc (spirals,
+// S0, the Milky Way): bulge, exponential disc, two log-spiral arms (pitch > 0), a bar, a dark lane when seen edge-on; 1 an elliptical; 2 an irregular
+// (clumpy); 3 a group (soft blobs). Colours: a warm bulge and bar, the item's own colour for the disc. Additive, no depth.
+export const GALAXY_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec2 a_uv;
+layout(location=2) in vec2 a_d;
+layout(location=3) in vec4 a_col;
+layout(location=4) in vec4 a_p;
+layout(location=5) in vec4 a_q;
+out vec2 v_uv;
+out vec2 v_d;
+out vec4 v_col;
+out vec4 v_p;
+out vec4 v_q;
+void main(){
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+  v_uv = a_uv; v_d = a_d; v_col = a_col; v_p = a_p; v_q = a_q;
+}`;
+export const GALAXY_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec2 v_d;
+in vec4 v_col;
+in vec4 v_p;
+in vec4 v_q;
+out vec4 o;
+uniform float u_k;
+${TONE_GLSL}
+float hash21(vec2 p, float s){
+  p = fract(p*vec2(123.34, 456.21) + s*17.13);
+  p += dot(p, p + 45.32 + s);
+  return fract(p.x*p.y);
+}
+float vnoise(vec2 p, float s){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0 - 2.0*f);
+  return mix(mix(hash21(i, s), hash21(i + vec2(1,0), s), f.x), mix(hash21(i + vec2(0,1), s), hash21(i + vec2(1,1), s), f.x), f.y);
+}
+float fbm(vec2 p, float s){
+  float a = 0.5, t = 0.0, n = 0.0;
+  for (int i = 0; i < 3; i++) { t += a*vnoise(p, s); n += a; p = p*2.03 + 7.1; a *= 0.5; }
+  return t/n;
+}
+void main(){
+  float rho = length(v_uv);
+  float mode = v_p.x, seed = v_p.y, bulgeShare = v_p.z, face = v_p.w;
+  float scl = max(v_q.w, 0.05);
+  float edge = 1.0 - smoothstep(0.85, 1.25, rho);                       // the quad reaches 1.3: nothing may be left at its edge
+  vec3 base = v_col.rgb, warm = mix(base, vec3(1.0, 0.82, 0.58), 0.65);
+  vec3 col = base;
+  float I = 0.0;
+  if (mode < 0.5) {
+    float bulge = exp(-pow(rho/0.16, 0.7));
+    float disc = exp(-rho/scl);
+    vec2 d = v_d;
+    float r = length(d);
+    if (v_q.x > 0.0) {                                                   // two log-spiral arms in disc coordinates
+      float th = atan(d.y, d.x);
+      float arm = pow(0.5 + 0.5*cos(2.0*(th - log(max(r, 0.12)/0.12)/v_q.x) + seed*6.2832), 2.0);
+      float clump = 0.7 + 0.6*fbm(d*7.0, seed);
+      float amt = face*smoothstep(0.05, 0.2, r)*(1.0 - smoothstep(0.9, 1.2, r));
+      disc *= mix(1.0, (0.3 + 1.5*arm)*clump, amt);
+    } else disc *= 0.85 + 0.3*fbm(v_uv*5.0, seed);
+    float bar = 0.0;
+    if (v_q.y > 0.0) {                                                   // a bar along the disc azimuth v_q.z
+      float cb = cos(v_q.z), sb = sin(v_q.z);
+      vec2 b = vec2(d.x*cb + d.y*sb, -d.x*sb + d.y*cb);
+      bar = exp(-pow(abs(b.x)/v_q.y, 4.0) - pow(b.y/(v_q.y*0.3), 2.0))*face;
+    }
+    float lane = 1.0 - (1.0 - face)*0.65*exp(-pow(v_uv.y/0.10, 2.0))*smoothstep(0.08, 0.35, abs(v_uv.x));   // edge-on: a dark mid-plane lane
+    float wb = bulgeShare*1.6*bulge + bar*0.9;
+    float wd = (1.0 - bulgeShare)*disc*lane;
+    I = wb + wd;
+    col = (warm*wb + base*wd)/max(I, 1e-4);
+  } else if (mode < 1.5) {
+    I = 1.1*exp(-4.2*pow(rho + 0.003, 0.3));                              // an elliptical: a de Vaucouleurs-like cusp and halo
+  } else if (mode < 2.5) {
+    float n = fbm(v_uv*5.5, seed);
+    I = exp(-rho/scl)*(0.35 + 1.9*n*n);                                   // an irregular: clumps in an exponential
+  } else {
+    int nb = int(v_q.x + 0.5);                                            // a group: soft blobs inside the ellipse
+    for (int i = 0; i < 3; i++) {
+      if (i >= nb) break;
+      float a = seed*1.7 + float(i)*2.4 + 1.0;
+      vec2 c = vec2(cos(a), sin(a))*(0.42 + 0.1*float(i));
+      vec2 q = v_uv - c;
+      I += exp(-dot(q, q)/(0.045 + 0.02*float(i - 2*(i/2))));
+    }
+  }
+  I *= edge;
+  vec3 c = col*(v_col.a*u_k*I);
+  if (max(c.r, max(c.g, c.b)) < 1e-5) discard;
+#ifdef LDR
+  c = srgb(tonemap(c));
+#endif
+  o = vec4(c, 1.0);
+}`;
+
+export const SPRITE_UNIFORMS_STAR =['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_dpr', 'u_maxPt', 'u_sig', 'u_skip'];
 export const BODY_UNIFORMS = ['u_rect', 'u_tan', 'u_c', 'u_col', 'u_light', 'u_pole', 'u_v2w', 'u_kind', 'u_u', 'u_surf', 'u_glow', 'u_time',
   'u_evid', 'u_w', 'u_ext', 'u_pix', 'u_ring', 'u_band', 'u_atm', 'u_gran', 'u_gamp', 'u_spots', 'u_seed'];

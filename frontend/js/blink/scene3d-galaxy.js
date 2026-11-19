@@ -52,11 +52,20 @@
 //                      40 kpc from the Sun as the stars fade
 //         mode         'marker' in the Evidence view: no glow, no outline, only the centre marker (markerOnly, alpha 0, lineAlpha 0)
 //       The frame-independent contract of galaxyItem holds here too.
+//   galaxySurfacePc(o, distPc) -> pc       the surface distance a galaxy gives the auto-throttle (renderer, section 18.5.1): the distance from the centre minus the
+//       semi-major axis, floored at GALAXY_INSIDE_K (5 %) of the distance so the speed never reaches zero inside it; the Milky Way counts only from outside its
+//       drawn disc (inside it the stars set the speed: Infinity)
+//   galaxyCoords(item, dx, dy) -> { u, v, du, dv }   the shader's coordinates of the screen offset (dx, dy) px from the item's centre: u, v in the projected ellipse
+//       (unit on the ellipse), du, dv in the disc plane (the inverse of the affine map; 0 when the map is singular)
+//   galaxyShaderParams(item) -> { mode, bulge, pitch, barHalf, barAz, scale, face, blobs }   the look as numbers for the galaxy fragment shader: mode 0 disc
+//       (spirals, S0, the Milky Way), 1 elliptical, 2 irregular, 3 group; face 0..1 the disc's face-on weight (0 edge-on: a dark lane replaces the arms)
+//   galaxyQuad(item, W, H, { quad = 1.3 }) -> Float32Array | null   6 vertices of GALAXY_VERTEX_FLOATS (18) floats: clip x y, u v, du dv, r g b alpha, mode, seed,
+//       bulge, face, pitch (the blob count for a group), barHalf, barAz, scale. The screen bounding box of the item's ellipse, cut to the viewport
 import * as F from './scene3d-frames.js';
 import { smoothstep, radecToXyz, cross, norm } from './scene3d-math.js';
 import { hashUnit, skyBasis } from './scene3d-orbits.js';
 import { INF_PC, relOfEntry, skyFade, projectAxes } from './scene3d-nebula.js';
-import { galaxyLook } from './scene3d-registry.js';
+import { galaxyLook, galaxySemiMajorPc, isMilkyWay } from './scene3d-registry.js';
 
 export const GALAXY_MIN_PX = 3, GALAXY_SKY_FADE_PC = 1e5, GALAXY_FADE_PC = [2e4, 4e4], MW_DISC_SCALES = 6;
 const D2R = Math.PI / 180;
@@ -67,7 +76,16 @@ export function galaxyFade(cam) {
   return 1 - smoothstep(GALAXY_FADE_PC[0], GALAXY_FADE_PC[1], d);
 }
 
-const ARCMIN_PER = { arcmin: 1, arcsec: 1 / 60, deg: 60 };
+export const GALAXY_INSIDE_K = 0.05, GALAXY_VERTEX_FLOATS = 18;
+export function galaxySurfacePc(o, distPc) {
+  if (isMilkyWay(o)) {
+    const q = o.props && o.props.thin_disc_scale_length, R = MW_DISC_SCALES * (q && Number.isFinite(q.v) ? q.v : MW_DEFAULTS.thin_disc_scale_length);
+    return distPc > R ? distPc - R : Infinity;
+  }
+  return Math.max(distPc - (galaxySemiMajorPc(o) || 0), GALAXY_INSIDE_K * distPc);
+}
+
+const ARCMIN_PER ={ arcmin: 1, arcsec: 1 / 60, deg: 60 };
 const arcminOf = (q) => (q && Number.isFinite(q.v) && ARCMIN_PER[q.unit || 'arcmin'] ? q.v * ARCMIN_PER[q.unit || 'arcmin'] : null);
 const num = (q) => (q && Number.isFinite(q.v) ? q.v : null);
 const scale = (v, k) => [v[0] * k, v[1] * k, v[2] * k];
@@ -168,5 +186,54 @@ export function milkyWayItem(e, cam, ctx = {}) {
   const fade = smoothstep(1, 3, dist / R);
   return { ...base, mode: 'glow', alpha: MW_ALPHA * fade * present, fade, lineAlpha: 0, dashed: false, pxRadius: pj.semiMajorPx, semiMajorPx: pj.semiMajorPx, semiMinorPx: pj.semiMinorPx,
     angle: pj.angle, cov: pj.cov, affine: { a: pj.ax[0], b: pj.ax[1], c: pj.ax[2] }, inside: false, markerOnly: pj.semiMajorPx < GALAXY_MIN_PX };
+}
+
+// ------------------------------------------------------------------ the renderer's quad
+/** The shader coordinates of a screen offset from the item's centre (see the header). */
+export function galaxyCoords(it, dx, dy) {
+  const ct = Math.cos(it.angle || 0), sn = Math.sin(it.angle || 0), a = Math.max(it.semiMajorPx, 1e-6), b = Math.max(it.semiMinorPx, 0.5);
+  const out = { u: (dx * ct + dy * sn) / a, v: (-dx * sn + dy * ct) / b, du: 0, dv: 0 };   // the inverse of px = c + u a (cos, sin) + v b (-sin, cos), y down
+  const m = it.affine;
+  if (m) {
+    const det = m.a[0] * m.b[1] - m.a[1] * m.b[0];
+    if (Math.abs(det) > 1e-9) { out.du = (dx * m.b[1] - dy * m.b[0]) / det; out.dv = (m.a[0] * dy - m.a[1] * dx) / det; }
+  }
+  return out;
+}
+
+const TAN = (deg) => Math.tan(deg * D2R);
+export function galaxyShaderParams(it) {
+  const sh = it.shape || {}, m = it.affine;
+  let face = 1;
+  if (m) {
+    const det = Math.abs(m.a[0] * m.b[1] - m.a[1] * m.b[0]), a2 = m.a[0] * m.a[0] + m.a[1] * m.a[1];
+    face = a2 > 0 ? smoothstep(0.03, 0.15, det / a2) : 0;   // |det| / |a|^2 is about the cosine of the inclination
+  }
+  const P = { mode: 0, bulge: 0.3, pitch: 0, barHalf: 0, barAz: 0, scale: 0.28, face, blobs: 0 };
+  if (it.billboard === 'milky_way') {
+    return { ...P, bulge: sh.bulge != null ? sh.bulge : 0.3, pitch: TAN(sh.pitchDeg || 15), barHalf: it.bar.halfLength, barAz: Math.PI / 2 - it.bar.angle, scale: it.disc.scaleLength };
+  }
+  if (it.look === 'elliptical') return { ...P, mode: 1, bulge: 1 };
+  if (it.look === 'irregular') return { ...P, mode: 2, bulge: 0, scale: 0.35 };
+  if (it.look === 'group') return { ...P, mode: 3, bulge: 0, blobs: sh.blobs || 2 };
+  const spiral = it.look === 'spiral' || it.look === 'barred_spiral';
+  return { ...P, bulge: sh.bulge != null ? sh.bulge : 0.3, pitch: spiral ? TAN(sh.pitchDeg || 15) : 0, barHalf: sh.bar ? 0.32 : 0, barAz: sh.barAzimuth || 0 };
+}
+
+export function galaxyQuad(it, W, H, { quad = 1.3 } = {}) {
+  if (!it.screen || !(it.semiMajorPx > 0)) return null;
+  const a = it.semiMajorPx, b = Math.max(it.semiMinorPx, 0.5), th = it.angle || 0, ct = Math.cos(th), sn = Math.sin(th);
+  const ex = quad * (Math.abs(a * ct) + Math.abs(b * sn)), ey = quad * (Math.abs(a * sn) + Math.abs(b * ct));
+  const x0 = Math.max(0, it.screen[0] - ex), x1 = Math.min(W, it.screen[0] + ex), y0 = Math.max(0, it.screen[1] - ey), y1 = Math.min(H, it.screen[1] + ey);
+  if (!(x1 > x0 && y1 > y0)) return null;
+  const P = galaxyShaderParams(it), data = new Float32Array(6 * GALAXY_VERTEX_FLOATS);
+  let k = 0;
+  for (const [cx, cy] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
+    const px = cx < 0 ? x0 : x1, py = cy < 0 ? y0 : y1, c = galaxyCoords(it, px - it.screen[0], py - it.screen[1]);
+    data.set([px / W * 2 - 1, 1 - py / H * 2, c.u, c.v, c.du, c.dv, it.rgb[0], it.rgb[1], it.rgb[2], it.alpha, P.mode, it.seed * 97.0, P.bulge, P.face,
+      P.mode === 3 ? P.blobs : P.pitch, P.barHalf, P.barAz, P.scale], k);
+    k += GALAXY_VERTEX_FLOATS;
+  }
+  return data;
 }
 

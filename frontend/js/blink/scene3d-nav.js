@@ -89,7 +89,15 @@ export function suggestSpeed(distToNearestSurface, unitsPerPc, hiPc = 100) {
   return clamp(distToNearestSurface / 3, lo, hi);
 }
 
-export const C_PC_PER_S = 9.716e-9;        // light speed in parsecs per second
+/**
+ * The manual speed carried across a frame switch (frame units per second): the same physical speed, scaled by the ratio of the levels' units per parsec
+ * and clamped to the new level's [min, max]. floorPc (pc/s) keeps a camera that has just left a star's system from crawling in the new level.
+ */
+export function carrySpeed(speed, fromPerPc, toPerPc, { min = 0, max = Infinity, floorPc = 0 } = {}) {
+  return clamp(Math.max((speed * toPerPc) / fromPerPc, floorPc * toPerPc), min, max);
+}
+
+export const C_PC_PER_S = 9.716e-9;       // light speed in parsecs per second
 export const C_AU_PER_S = 0.0020040;       // and in AU per second
 export const THROTTLE = { min: 0.02, max: 20, def: 1 };
 
@@ -126,7 +134,8 @@ export function fmtTimesC(n) {
   if (n < 0.01) return '<0.01× c';
   if (n < 1000) return `${n < 10 ? n.toFixed(2).replace(/\.?0+$/, '') : Math.round(n)}× c`;
   const units = [[1e15, 'quadrillion'], [1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']];
-  for (const [v, name] of units) if (n >= v) return `${(n / v).toPrecision(2).replace(/\.0$/, '')} ${name}× c`;
+  // two significant figures, never in exponent form ('1.0e+2' for 100 thousand): the cosmos speeds reach hundreds of quadrillions of c
+  for (const [v, name] of units) if (n >= v) return `${Number((n / v).toPrecision(2)).toLocaleString('en-US')} ${name}× c`;
   return `${Math.round(n)}× c`;
 }
 

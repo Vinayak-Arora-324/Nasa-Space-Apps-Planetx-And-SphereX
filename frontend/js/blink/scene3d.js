@@ -1,20 +1,24 @@
 // Scene3D: WebGL2 renderer and fly controls for scene3d.html.
 //
-// One camera model (yaw and pitch, world +z is celestial north) and two kinds of frame (scene3d-frames.js):
+// One camera model (yaw and pitch, world +z is celestial north) and three levels of frame (scene3d-frames.js):
 //   galaxy - parsecs, origin at the Sun: Gaia stars at their parallax distances plus the bright XHIP stars
 //   system - AU, origin at a host star (the Sun included): the host is a sphere, and the Sun's planets are spheres too
+//   cosmos - megaparsecs, origin at the Sun, entered beyond 60 kpc: galaxies, the Milky Way and supermassive black holes only (section 18.5). What has no
+//            cosmos renderer (stars, clusters, nebulae, ...) fades out with galaxyFade between 20 and 40 kpc, so it is gone before the frame switches.
 // Everything is drawn camera-relative. Stars are additive points; stars near the camera and the planets are drawn from
 // positions computed in doubles; bodies big enough to see as discs are ray-traced spheres (impostors) on screen quads.
 // Scene brightness goes into an RGBA16F target (when the browser can) and is bloomed and tonemapped at the end.
 import * as M from './scene3d-math.js';
 import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
-import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
+import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE, carrySpeed } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
-import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows } from './scene3d-registry.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows, gaiaDataRow, isMilkyWay } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
   objectStarParams, starValuesFromRecord, resolveStarAliases, preferredStarPlacement, starSignature, billboardItems, lensingItems, markerPoints, mergeStarSystem,
-  MW_FADE_PC, skyFade, fromYouFor, visibleCounts } from './scene3d-objects.js';
+  MW_FADE_PC, skyFadeOf, fromYouFor, visibleCounts, galaxyFade, withSmbh, presenceOf, GALAXY_PICK_MIN } from './scene3d-objects.js';
+import { galaxyQuad, galaxySurfacePc, GALAXY_VERTEX_FLOATS } from './scene3d-galaxy.js';
+import { fmtDistPc } from './scene3d-format.js';
 import { orbitPath } from './scene3d-orbits.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
@@ -49,6 +53,9 @@ const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;
 // Nebula glows (illustrative look): NEB_K x the exposure, capped, like the cluster glows; the Evidence outline is at a fixed level (BB_RING).
 // The dark pass multiplies its alpha by NEB_DARK (it only darkens the Milky Way glow behind it).
 const NEB_K = 0.45, NEB_MAX = 0.9, NEB_DARK = 1.6, NEB_QUAD = 1.3, NEB_PX_MAX = 2e5, LOOK_TURN_S = 0.8;
+const GAL_K = NEB_K, GAL_MAX = NEB_MAX;   // galaxy glows: the nebulae's brightness law (illustrative), the same exposure factor and cap
+const WORLD_TRIPS = new Set(['star', 'galaxy', 'point']);   // autopilot trips in world parsecs: they cross frame switches
+const FLY_POINT_STOP_PC = 1;   // a flight to a point (the Milky Way's face-on view) ends this far from it
 const LENS_PX_MAX = 2e4;   // a drawn shadow is never wider than this (CSS px) however close the camera is
 const NEB_MODE = { emission: 0, reflection: 1, planetary: 2, snr: 3, dark: 4 };   // the nebula shader's a_mode (10 and 11: Evidence outline, solid and dashed)
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
@@ -104,6 +111,7 @@ export class Scene3D {
     this.store = new ObjectStore();                              // planets, the Moon, small bodies (later catalogues): /api/objects
     this._ver = 0;                                               // bumps when layers, evidence or objects change (the pick cache key)
     this._vis = []; this._groups = {}; this._warned = new Set(); this.pxPerRad = 1;
+    this._visAll = []; this._bb = []; this._gf = 1;            // _visAll: every visible entry; _vis: the same minus the supermassive black holes not resolved (smbhVisible); _bb: this frame's billboard items; _gf: galaxyFade
     this.st = { n: 0, pos: new Float64Array(0), data: new Float32Array(0), gal: new Float32Array(0), meta: [] };
     this.counts = { gaia: 0, ctx: 0, obj: 0 };
     this.keys = new Set(); this.touch = new Map(); this.pinch = null;
@@ -147,17 +155,18 @@ export class Scene3D {
     this.prog = {
       star: makeProgram(gl, S.STAR_VS, S.STAR_FS, S.SPRITE_UNIFORMS_STAR, d),
       point: makeProgram(gl, S.POINT_VS, S.SPRITE_FS, ['u_vp', 'u_eye', 'u_dpr'], d),
-      line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye'], d),
+      line: makeProgram(gl, S.LINE_VS, S.LINE_FS, ['u_vp', 'u_eye', 'u_a'], d),
       body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
       sky: makeProgram(gl, S.SKY_VS, S.SKY_FS, ['u_tan', 'u_sky', 'u_v2w', 'u_k'], d),
       bb: makeProgram(gl, S.BB_VS, S.BB_FS, ['u_vp', 'u_k', 'u_dpr'], d),
       nebula: makeProgram(gl, S.NEBULA_VS, S.NEBULA_FS, ['u_k', 'u_dpr'], d),
+      galaxy: makeProgram(gl, S.GALAXY_VS, S.GALAXY_FS, ['u_k'], d),
       lens: makeProgram(gl, S.LENS_VS, S.LENS_FS, [], d),
     };
     this.skyTex = null;
     if (this.mwImg) this._uploadSky();
     this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
-    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer(), nebula: gl.createBuffer(), lens: gl.createBuffer() };
+    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer(), nebula: gl.createBuffer(), galaxy: gl.createBuffer(), lens: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
   }
@@ -383,11 +392,16 @@ export class Scene3D {
     this._syncStarFrame();
     this._refreshObjectBuffers();                                 // the resolver re-placed the hosted records
   }
-  /** Fill the star buffer for the camera's frame: parsecs in the galaxy frame, AU relative to the host in a system frame. */
+  /**
+   * Fill the star buffer for the camera's frame: parsecs in an unhosted frame (the galaxy frame draws them; the cosmos frame keeps the same buffer and
+   * draws none, so a switch between those two uploads nothing), AU relative to the host in a system frame.
+   */
   _syncStarFrame() {
     const st = this.st;
-    if (this.cam.frame === 'galaxy') st.data = st.gal;
-    else {
+    if (!F.isHosted(this.cam.frame)) {
+      st.data = st.gal;
+      if (this.cpu.stars && this.cpu.stars.data === st.gal) return;
+    } else {
       const d = new Float32Array(st.gal), h = this.cam.host.pc;
       for (let i = 0; i < st.n; i++) {
         d[7 * i] = (st.pos[3 * i] - h[0]) * AU_PER_PC; d[7 * i + 1] = (st.pos[3 * i + 1] - h[1]) * AU_PER_PC; d[7 * i + 2] = (st.pos[3 * i + 2] - h[2]) * AU_PER_PC;
@@ -601,8 +615,9 @@ export class Scene3D {
     return autoThrottleSpeed(this._nearBody().dAhead, this.throttle, { min: a.min * u, max: a.max * u });
   }
   /**
-   * The nearest surface to the camera, in frame units, cached per frame: { name, d, dAhead, spheres }. Galaxy frame: stars.
-   * System frame: the host, the Sun's planets and any other star. d is the plain nearest surface (the HUD shows it).
+   * The nearest surface to the camera, in frame units, cached per frame: { name, d, dAhead, spheres, starPc }. Unhosted frames: stars (while they are drawn,
+   * galaxyFade > 0) and galaxies (galaxySurfacePc), in this frame's units, so the speed is one function of the scene on both sides of the 40 / 60 kpc switch;
+   * starPc is the nearest star's surface in pc. System frame: the host, the Sun's planets and any other star. d is the plain nearest surface (the HUD shows it).
    * dAhead is what the auto-throttle uses: each surface's distance divided by headingWeight(angle from where you look),
    * so a star beside or behind you counts as farther, and you do not crawl past every star on the way to a faraway one
    * (stars farther than NEAR_PC count only when your path runs close to them, see corridorDistance).
@@ -625,8 +640,9 @@ export class Scene3D {
       const e = Math.max(d, floorD || 0) / headingWeight(c);
       if (e < ahead) ahead = e;
     };
-    let bi = -1, b2 = Infinity, ei = -1, e2 = Infinity;
-    for (let i = 0; i < st.n; i++) {
+    let bi = -1, b2 = Infinity, ei = -1, e2 = Infinity, starPc = Infinity;
+    const starsOn = sys || galaxyFade(cam) > 0;                // beyond 40 kpc the stars are not drawn, so they are not surfaces either (section 18.5.1)
+    for (let i = 0; starsOn && i < st.n; i++) {
       if (i === host) continue;
       const dx = p[3 * i] - w[0], dy = p[3 * i + 1] - w[1], dz = p[3 * i + 2] - w[2], d2 = dx * dx + dy * dy + dz * dz;
       if (d2 < b2) { b2 = d2; bi = i; }
@@ -665,17 +681,26 @@ export class Scene3D {
         if (b2 < 0.25) this._system(bi);
         const dx = p[3 * bi] - w[0], dy = p[3 * bi + 1] - w[1], dz = p[3 * bi + 2] - w[2], dist = Math.sqrt(b2);
         raw = { name: this._starName(bi), d: Math.max(0, dist - rPcOf(bi, b2)) };
+        starPc = raw.d;
       }
       if (ei >= 0) {
         const dx = p[3 * ei] - w[0], dy = p[3 * ei + 1] - w[1], dz = p[3 * ei + 2] - w[2], dist = Math.hypot(dx, dy, dz);
         eat(undefined, Math.max(0, dist - rPcOf(ei, dist * dist)), dx, dy, dz, dist);
       }
-      if (dis >= 0) {
+      if (dis >= 0 && starsOn) {
         const dx = p[3 * dis] - w[0], dy = p[3 * dis + 1] - w[1], dz = p[3 * dis + 2] - w[2], dist = Math.hypot(dx, dy, dz);
         eat(undefined, Math.max(0, dist - rPcOf(dis, dist * dist)), dx, dy, dz, dist, F.LEAVE_PC);
       }
+      // Galaxies and the Milky Way are surfaces in both unhosted frames (galaxySurfacePc; direction-only ones have no distance and are not surfaces).
+      for (const e of this._visAll) {
+        if (e.kind !== 'galaxy' || !e.galPc) continue;
+        const dx = e.galPc[0] - w[0], dy = e.galPc[1] - w[1], dz = e.galPc[2] - w[2], dist = Math.hypot(dx, dy, dz), d = galaxySurfacePc(e.o, dist);
+        if (Number.isFinite(d)) eat(e.o.name, d, dx, dy, dz, dist);
+      }
+      // everything above is in parsecs: this frame's units are 1 / unitsPerPc of that (Mpc in the cosmos frame), the HUD and the throttle read them
+      raw = { name: raw.name, d: raw.d * u }; ahead *= u;       // (starPc stays in pc)
     }
-    this._near = { name: raw.name, d: raw.d, dAhead: ahead, u, spheres }; this._nearNo = this._frameNo;
+    this._near = { name: raw.name, d: raw.d, dAhead: ahead, u, spheres, starPc }; this._nearNo = this._frameNo;
     return this._near;
   }
 
@@ -786,14 +811,15 @@ export class Scene3D {
   _stepAutopilot(dt) {
     const ap = this.ap, cam = this.cam; if (!ap) return;
     if (ap.type === 'look') { this._stepLook(dt); return; }
-    const world = ap.type === 'star' || ap.type === 'galaxy';          // trips in world parsecs: they cross frame switches
+    const world = WORLD_TRIPS.has(ap.type);                            // trips in world parsecs: they cross frame switches
     if (!world && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
     const t = this._resolve(ap.sel);
     if (!t) { this.ap = null; return; }
     if (ap.type === 'galaxy') ap.obj.retarget(t.pc);
     else if (ap.type !== 'star') ap.obj.retarget(t.pos);
     const r = ap.obj.step(dt);
-    cam.pos = world ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.slice()) : r.pos.slice();
+    // world pc -> the camera's frame units: AU from the host in a system frame, otherwise parsecs times the level's units per parsec (Mpc in the cosmos frame)
+    cam.pos = world ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.map((v) => v * F.unitsPerPc(cam))) : r.pos.slice();
     const v = M.yawPitchFromDir(r.dir);
     cam.yaw = v.yaw; cam.pitch = clamp(v.pitch, -1.5, 1.5); cam.vel = [0, 0, 0];
     if (r.done) { this.ap = null; this._arrived(t, ap.then); }
@@ -802,7 +828,8 @@ export class Scene3D {
     const cam = this.cam, upc = F.unitsPerPc(cam);
     const surfAu = this._surfaceAu(), r = F.rangeOf(cam.frame);
     // At a cluster (stopped 2 x r50 out) the nearest "surface" is a star, so a third of the stop distance is the comfortable pace.
-    cam.speed = clamp(t.type === 'galaxy' ? suggestSpeed(t.stopPc * upc, upc) : suggestSpeed(surfAu * (upc / AU_PER_PC), upc), r.min, r.max);
+    const hiPc = F.levelOf(cam.frame).autoPc.max;                     // the level's cap (1e8 pc/s out here), so a galaxy trip gets a speed that suits its size
+    cam.speed = clamp(t.type === 'galaxy' ? suggestSpeed(t.stopPc * upc, upc, hiPc) : suggestSpeed(surfAu * (upc / AU_PER_PC), upc, hiPc), r.min, r.max);
     if (t.type === 'star' && cam.frame === 'system') this.hooks.onHud(this._hudData());
     // a chained trip (to an object of the star just reached): only once we are in that star's frame, and never to a group
     if (then && then.kind !== 'group' && t.type === 'star' && cam.frame === 'system' && cam.host.key === this._starKey(t.idx)) {
@@ -825,16 +852,20 @@ export class Scene3D {
   }
   /** Distance from the camera to the nearest sphere surface, in AU (Infinity when there is none). */
   _surfaceAu() { return this._nearest().au; }
-  /** After a frame switch: the free-flight speed that suits the new surroundings, and the star buffer. */
-  _onFrameChange(kind) {
-    const cam = this.cam;
+  /**
+   * After a frame switch (prev: the frame the camera came from): the free-flight speed that suits the new surroundings, and the star buffer. Entering a
+   * hosted level (a star's system) picks a speed from the nearest surface and fetches the star's system; every other switch carries the manual speed across
+   * through the ratio of the levels' units per parsec (carrySpeed), clamped to the new range, so no switch jumps in speed.
+   */
+  _onFrameChange(kind, prev) {
+    const cam = this.cam, to = F.levelOf(cam.frame), from = F.levelOf(prev);
     this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
     this._refreshObjectBuffers();                                 // the visible set and the per-host buffers depend on the frame and the host
-    if (kind === 'enter') {
+    if (to.hosted) {
       this._system(cam.host.idx);
-      cam.speed = clamp(suggestSpeed(this._surfaceAu(), AU_PER_PC), F.rangeOf('system').min, F.rangeOf('system').max);
-    } else cam.speed = clamp(Math.max(cam.speed / AU_PER_PC, 0.05), F.rangeOf('galaxy').min, F.rangeOf('galaxy').max);
-    if (this.ap && this.ap.type !== 'star' && this.ap.type !== 'galaxy') this.ap = null;     // a trip inside a system ends when the camera leaves it
+      cam.speed = clamp(suggestSpeed(this._surfaceAu(), to.perPc), to.range.min, to.range.max);
+    } else cam.speed = carrySpeed(cam.speed, from.perPc, to.perPc, { ...to.range, floorPc: from.hosted ? 0.05 : 0 });   // 0.05 pc/s: leaving a system is not a crawl
+    if (this.ap && !WORLD_TRIPS.has(this.ap.type)) this.ap = null;     // a trip inside a system ends when the camera leaves it
   }
 
   // ------------------------------------------------------------------ arriving from and leaving for a flat picture
@@ -1005,6 +1036,7 @@ export class Scene3D {
   /** Stars within NEAR_PC of the camera: nearest first handled by stepFrame, all of them drawn exactly. */
   _scan() {
     const st = this.st, w = F.worldPc(this.cam), out = [], r2 = NEAR_PC * NEAR_PC, p = st.pos;
+    if (this.cam.frame === 'cosmos') return out;                  // 60 kpc from the Sun: no star is near
     for (let i = 0; i < st.n; i++) {
       const dx = p[3 * i] - w[0], dy = p[3 * i + 1] - w[1], dz = p[3 * i + 2] - w[2], d2 = dx * dx + dy * dy + dz * dz;
       if (d2 < r2) out.push({ idx: i, key: this._starKey(i), name: this._starName(i), pc: [p[3 * i], p[3 * i + 1], p[3 * i + 2]], distPc: Math.sqrt(d2) });
@@ -1027,6 +1059,10 @@ export class Scene3D {
       const edge = Math.atan(Math.hypot(this.tanX, this.tanY)), out = (ang - edge) / 0.5;
       return out <= 0 ? v : Math.min(v, V_EXPO) * Math.max(0, 1 - out);
     }
+    // The stars fade out with galaxyFade (20 to 40 kpc), so the exposure target scales their intensities by it and reaches the cosmos frame's value
+    // (nothing bright in view: exposureFor(0) = 1) before the switch. From 40 kpc out there is nothing to scan.
+    const gf = this._gf;
+    if (!(gf > 0)) return 0;
     for (const c of cands) v = Math.max(v, vOf(c.idx, c.distPc, this._modelFor(c.idx).radiusAu));
     if (this._frameNo % 3 === 0 || !this.vScan) {                 // the full scan is the costly part: every third frame
       const dir = M.dirFromYawPitch(cam.yaw, cam.pitch), p = st.pos, g = st.gal;
@@ -1042,7 +1078,7 @@ export class Scene3D {
       }
       this.vScan = Math.max(best, 1e-9);
     }
-    return Math.max(v, this.vScan);
+    return Math.max(v, this.vScan) * gf;
   }
   _frame(t) {
     if (!this.running) return;
@@ -1057,9 +1093,12 @@ export class Scene3D {
     this._stepOutro(dt);
     this._trackSpeed(dt);
     let cands = this._scan();
-    const sw = F.stepFrame(this.cam, cands);
-    if (sw) { this._onFrameChange(sw); cands = this._scan(); }
+    const prevFrame = this.cam.frame, sw = F.stepFrame(this.cam, cands);
+    if (sw) { this._onFrameChange(sw, prevFrame); cands = this._scan(); }
     this._matrices(dt);
+    this._gf = F.isHosted(this.cam.frame) ? 1 : galaxyFade(this.cam);   // 1 near the Sun, 0 from 40 kpc out (section 18.5.4)
+    for (const e of this._visAll) { if (e.galaxyFade != null) e.galaxyFade = this._gf; else if (e.mwFade != null) e.mwFade = 1 - this._gf; }
+    this._bb = this._billboards();                                // cluster, nebula and galaxy items; they also feed markers and picking; sets this._vis
     this._refreshGroups();
     // exposure: eased toward what the brightest thing in view needs
     this.expoTarget = M.exposureFor(this._brightest(cands));
@@ -1076,7 +1115,9 @@ export class Scene3D {
     const cam = this.cam, sig = `${this._ver}|${cam.frame}|${cam.frame === 'system' ? cam.host.key : ''}`;
     if (sig === this._visSig) return;
     this._visSig = sig;
-    this._vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: cam.frame, inHost: (h) => cam.frame === 'system' && cam.host.key === h, pxPerRad: this.pxPerRad });
+    // cam: in the galaxy frame the entries of kinds without a cosmos renderer carry galaxyFade (the Milky Way billboard 1 - galaxyFade); _frame refreshes them
+    // every frame. _vis is _visAll until _billboards removes the supermassive black holes that are not resolved yet (smbhVisible).
+    this._visAll = this._vis = visibleObjects(this.store, { layers: this.layers, evidence: this.evidence, frame: cam.frame, cam, inHost: (h) => cam.frame === 'system' && cam.host.key === h, pxPerRad: this.pxPerRad });
   }
   _refreshGroups() { this._groups = groupState(this.store, this._vis, this.cam, this.pxPerRad); }
 
@@ -1087,11 +1128,12 @@ export class Scene3D {
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     this._drawSky();
-    const bb = this._billboards();                                // cluster and nebula items; they also feed markers and picking
+    const bb = this._bb;                                          // cluster, nebula and galaxy items (_billboards, once a frame); they also feed markers and picking
     this._drawNebulae(bb, true);                                  // dark nebulae: right after the Milky Way glow, before every other glow and star
     this._drawBillboards(bb);                                     // cluster glows and rings
-    this._drawNebulae(bb, false);                                 // emission, reflection, planetary and SNR glows, and the Evidence outlines
-    const sun = this._inSun(), inSys = cam.frame === 'system', vis = this._vis, groups = this._groups;
+    this._drawNebulae(bb, false);                                 // emission, reflection, planetary and SNR glows, and the Evidence outlines (galaxy outlines too)
+    this._drawGalaxies(bb);                                       // galaxy and Milky Way glows (the Evidence view draws their outlines above)
+    const sun = this._inSun(), inSys = cam.frame === 'system', vis = this._vis, groups = this._groups, gf = this._gf, starsOn = inSys || gf > 1e-3;   // starsOn: not in the cosmos frame, and not once galaxyFade has taken them out
     const bufOk = inSys && this._bufHost === cam.host.key;       // points and lineSys belong to the camera's host (rebuilt on every frame change)
     const bodies = [];                                            // spheres to draw, with their crossfade weight
     const dynStars = [], dynPts = [], skip = new Int32Array(16).fill(-1);
@@ -1122,13 +1164,15 @@ export class Scene3D {
       }
     }
     // lines
-    if (cam.frame === 'galaxy') { if (this.layers.cone) this._drawLines('lineStars'); }
-    else if (inSys) {                                             // orbits of the current host; the cone outline is the Sun's only (it is Earth's patch)
+    if (!inSys) { if (this.layers.cone && starsOn) this._drawLines('lineStars', gf); }   // the cone outline fades with the stars
+    else {                                                        // orbits of the current host; the cone outline is the Sun's only (it is Earth's patch)
       if (bufOk && this.layers.orbits) this._drawLines('lineSys');
       if (sun && this.layers.cone) this._drawLines('coneSolar');
     }
-    this._drawStars('stars', skip);
-    if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
+    if (starsOn) {
+      this._drawStars('stars', skip);
+      if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
+    }
     if (bufOk) this._drawPoints(this.gpu.points, cam.pos);
     if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
     this._drawLensing(lens);                                      // after the stars, "over" blending: the black disc hides what is behind it
@@ -1145,19 +1189,23 @@ export class Scene3D {
     else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
   /**
-   * The cluster billboard items for this frame (billboardItems), in the galaxy frame only. The nearest star's distance feeds the fade
-   * that hides a cluster before the camera enters a star's system frame (clusters are not drawn there). It also tells each entry
-   * whether it has collapsed to a marker (< 2 px), which picking reads (pickPriority).
+   * The billboard items for this frame (billboardItems: clusters, nebulae, galaxies and the Milky Way), in the galaxy and cosmos frames. The nearest star's
+   * distance feeds the fade that hides a cluster before the camera enters a star's system frame (clusters are not drawn there). It also tells each entry
+   * whether it has collapsed to a marker (< 2 px), which picking reads (pickPriority). Then this._vis becomes this._visAll without the supermassive black holes
+   * that are not resolved yet (smbhVisible: in the cone, selected, or their galaxy's item is inside the view or 40 px across; section 18.8.3).
    */
   _billboards() {
-    if (this.cam.frame !== 'galaxy') return [];
-    const hasBb = this._vis.some((e) => e.renderer === 'billboard');
-    if (!hasBb) return [];
-    const near = this.cam.disarm ? Infinity : this._nearBody().d;    // while leaving the start star (the Sun) it is not "about to enter" anything
-    // project: null only for points behind the camera (a nebula needs the ends of its axes even where they fall off screen)
-    const items = billboardItems(this._vis, this.cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, nearPc: near, project: this._pjAll });
-    const by = new Map(items.map((i) => [i.id, i]));
-    for (const e of this._vis) if (e.renderer === 'billboard') { const it = by.get(e.id); e.markerOnly = !!(it && it.markerOnly); }
+    const cam = this.cam;
+    if (F.isHosted(cam.frame)) { this._vis = this._visAll; return []; }
+    let items = [];
+    if (this._visAll.some((e) => e.renderer === 'billboard')) {
+      const near = cam.disarm ? Infinity : this._nearBody().starPc;    // while leaving the start star (the Sun) it is not "about to enter" anything
+      // project: null only for points behind the camera (a nebula needs the ends of its axes even where they fall off screen)
+      items = billboardItems(this._visAll, cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, nearPc: near, project: this._pjAll });
+      const by = new Map(items.map((i) => [i.id, i]));
+      for (const e of this._visAll) if (e.renderer === 'billboard') { const it = by.get(e.id); e.markerOnly = !!(it && it.markerOnly); }
+    }
+    this._vis = withSmbh(this._visAll, items, { selectedId: this.sel && this.sel.kind !== 'star' ? this.sel.id : null });
     return items;
   }
   /**
@@ -1166,7 +1214,7 @@ export class Scene3D {
    * and before the stars. An item whose r50 is under 2 px (markerOnly) or that has faded out draws no quad: its marker is enough.
    */
   _drawBillboards(items) {
-    const quads = items.filter((it) => it.billboard !== 'nebula' && (it.markerOnly ? false : (it.mode === 'outline' ? it.lineAlpha : it.alpha) > 1e-3));
+    const quads = items.filter((it) => !it.billboard && (it.markerOnly ? false : (it.mode === 'outline' ? it.lineAlpha : it.alpha) > 1e-3));   // clusters only: nebulae and galaxies carry `billboard`
     if (!quads.length) return;
     const cam = this.cam, f = M.dirFromYawPitch(cam.yaw, cam.pitch), r = M.norm(M.cross(f, Z_UP)), u = M.cross(r, f);
     const data = new Float32Array(quads.length * 6 * 10);
@@ -1206,7 +1254,7 @@ export class Scene3D {
   _drawNebulae(items, dark) {
     const ev = this.evidence, quads = [];
     for (const it of items) {
-      if (it.billboard !== 'nebula' || it.markerOnly || it.inside || !it.screen || it.semiMajorPx == null) continue;
+      if (!(it.billboard === 'nebula' || (ev && it.billboard === 'galaxy')) || it.markerOnly || it.inside || !it.screen || it.semiMajorPx == null) continue;   // galaxies: only their Evidence outline is drawn here
       if ((!ev && it.look === 'dark') !== dark) continue;   // the Evidence view draws every outline in the additive pass
       if ((ev ? it.lineAlpha : it.alpha) > 1e-3) quads.push(it);
     }
@@ -1251,6 +1299,34 @@ export class Scene3D {
     gl.blendFunc(gl.ONE, gl.ONE);
   }
   /**
+   * The galaxy and Milky Way glows (sections 18.6.1 and 18.7, illustrative looks): one clip-space quad per item from galaxyQuad (the item's screen ellipse, its
+   * disc coordinates and the look's numbers), drawn by the galaxy shader, additive, after the nebulae and before the stars. Items that are markers only
+   * (under 3 px), inside, or faded out draw no quad (the marker is enough). Nothing is drawn in the Evidence view: _drawNebulae draws the measured outline.
+   * The Milky Way's alpha already carries (1 - galaxyFade) and every size goes through unitsPerPc, so the same galaxy is drawn identically in the galaxy and
+   * the cosmos frame.
+   */
+  _drawGalaxies(items) {
+    if (this.evidence) return;
+    const parts = [];
+    for (const it of items) {
+      if ((it.billboard !== 'galaxy' && it.billboard !== 'milky_way') || it.markerOnly || it.inside || it.alpha <= 1e-3) continue;
+      const q = galaxyQuad(it, this.cssW, this.cssH, { quad: NEB_QUAD });
+      if (q) parts.push(q);
+    }
+    if (!parts.length) return;
+    const data = new Float32Array(parts.length * 6 * GALAXY_VERTEX_FLOATS);
+    parts.forEach((q, i) => data.set(q, i * q.length));
+    const gl = this.gl, pr = this.prog.galaxy, st = 4 * GALAXY_VERTEX_FLOATS;
+    gl.useProgram(pr.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.galaxy);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+    const attrs = [[2, 0], [2, 8], [2, 16], [4, 24], [4, 40], [4, 56]];   // clip xy, ellipse uv, disc uv, rgba, (mode seed bulge face), (pitch bar bar-angle scale)
+    attrs.forEach(([n, off], i) => { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, n, gl.FLOAT, false, st, off); });
+    gl.uniform1f(pr.u.u_k, Math.min(GAL_K * this.expo, GAL_MAX));
+    gl.drawArrays(gl.TRIANGLES, 0, data.length / GALAXY_VERTEX_FLOATS);
+    for (let i = 4; i < 6; i++) gl.disableVertexAttribArray(i);   // attributes 4 and 5 are not used by the other programs' layouts
+  }
+  /**
    * Black-hole lensing looks (section 17.9, illustrative): per item a screen-aligned quad of half-size 4 x its drawn shadow radius, built here from the
    * item's screen centre (the shader draws the disc, ring, halo and accretion disc). Premultiplied "over", so the black disc hides the stars behind it.
    * The disc's position angle is arbitrary but stable (seeded from the id); its inclination is the record's i (60 degrees when unknown).
@@ -1289,7 +1365,7 @@ export class Scene3D {
     if (!this.skyTex || !this.layers.mw) return;
     const gl = this.gl, pr = this.prog.sky, u = pr.u, R = this.R;
     const dSun = Math.hypot(...F.worldPc(this.cam));
-    const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) / (1 + (dSun / MW_FADE_PC) ** 2);
+    const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) / (1 + (dSun / MW_FADE_PC) ** 2) * this._gf;   // x galaxyFade: gone before the cosmos frame
     if (k < 1e-5) return;
     gl.useProgram(pr.p);
     gl.bindVertexArray(this.vaoEmpty);
@@ -1301,10 +1377,11 @@ export class Scene3D {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
-  _drawLines(key) {
+  _drawLines(key, alpha = 1) {
     const g = this.gpu[key]; if (!g || !g.n) return;
     const gl = this.gl, pr = this.prog.line, cam = this.cam;
     gl.useProgram(pr.p);
+    gl.uniform1f(pr.u.u_a, alpha);
     gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.lines, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, STRIDE.lines, 12);
@@ -1318,7 +1395,7 @@ export class Scene3D {
     gl.uniformMatrix4fv(u.u_vp, false, this.vp);
     gl.uniform3f(u.u_eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(u.u_toPc, cam.frame === 'system' ? 1 / AU_PER_PC : 1);
-    gl.uniform1f(u.u_expo, this.expo);
+    gl.uniform1f(u.u_expo, this.expo * this._gf);               // the peak intensity is linear in it: the stars fade out with galaxyFade (20 to 40 kpc)
     gl.uniform1f(u.u_limit, this.limit);
     gl.uniform1f(u.u_dpr, this.dpr);
     gl.uniform1f(u.u_maxPt, this.maxPt);
@@ -1442,7 +1519,8 @@ export class Scene3D {
   _pickAt(px, py, maxPx) {
     const cam = this.cam, st = this.st;
     let bi = -1, bm = Infinity, bd = 0;
-    for (let i = 0; i < st.n; i++) {
+    const starsPick = cam.frame === 'system' || this._gf >= GALAXY_PICK_MIN;   // faded-out stars (and every star in the cosmos frame) are not picked
+    for (let i = 0; starsPick && i < st.n; i++) {
       const rel = F.relFromCam(cam, [st.pos[3 * i], st.pos[3 * i + 1], st.pos[3 * i + 2]]);
       const q = this._proj(rel); if (!q) continue;
       const reach = Math.max(maxPx, this.dyn.get(i) || 0), d = Math.hypot(q[0] - px, q[1] - py);
@@ -1452,7 +1530,7 @@ export class Scene3D {
     }
     const cands = [];
     if (bi >= 0) cands.push({ sel: this._starSel(bi), priority: kindSpec('star').pick.priority, d: bd });
-    cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0, skyFade: skyFade(cam) }));
+    cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0, skyFade: skyFadeOf(cam), galaxyFade: this._gf }));
     const win = choosePick(cands);
     return win ? this._pickTarget(win.sel) : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
   }
@@ -1491,9 +1569,7 @@ export class Scene3D {
     return this._pickSel;
   }
   _fromYou(rel) {
-    const u = F.unitsPerPc(this.cam), dpc = Math.hypot(...rel) / u;
-    if (dpc < 0.02) return `${fmtNum(dpc * AU_PER_PC)} AU`;    // solar-system objects seen from the Stars scene read in AU too
-    return `${fmtNum(dpc)} pc · ${fmtNum(dpc * LY)} ly`;
+    return fmtDistPc(Math.hypot(...rel) / F.unitsPerPc(this.cam));   // by value, not by frame: AU, pc, kpc or Mpc (section 18.5.2); solar-system objects read in AU too
   }
   /**
    * The planet list of a host star's card (renderStarCard's `children`), or null for a star without any. It lists every child of
@@ -1580,8 +1656,8 @@ export class Scene3D {
     const out = [], cam = this.cam, st = this.st;
     const hostPx = cam.frame === 'system' && !this._inSun() ? this.dyn.get(cam.host.idx) || 0 : 0;   // no labels on top of a star's disc
     const hostP = hostPx > 20 ? this._proj(F.relFromCam(cam, cam.host.pc)) : null;
-    const sunMarker = cam.frame === 'galaxy' && this._vis.some((e) => e.id === SUN_HOST.key);        // the marker is labelled "Sun": not twice
-    if (this.layers.starNames) {
+    const sunMarker = !F.isHosted(cam.frame) && this._vis.some((e) => e.id === SUN_HOST.key);        // the marker is labelled "Sun": not twice
+    if (this.layers.starNames && (cam.frame === 'system' || this._gf >= GALAXY_PICK_MIN)) {          // not labelled once galaxyFade has taken the stars below 0.25
       for (const i of this.namedIdx) {
         if (i === 0 && sunMarker) continue;
         const rel = F.relFromCam(cam, this._starPc(i)), p = this._proj(rel); if (!p) continue;
@@ -1591,7 +1667,7 @@ export class Scene3D {
         out.push({ x: p[0], y: p[1], key: mag, text: st.meta[i].name });
       }
     }
-    const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0, skyFade: skyFade(cam) });
+    const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0, skyFade: skyFadeOf(cam), galaxyFade: this._gf });
     for (const l of L) out.push(l);
     return out;
   }
@@ -1662,15 +1738,16 @@ export class Scene3D {
     const key = this._hostKey();
     return key && key !== SUN_HOST.key ? hostCountText(this.store, key, { evidence: this.evidence, layers: this.layers }) : '';
   }
-  /** Visible object counts by kind in the galaxy frame ({} elsewhere), for the HUD's exoplanet and cluster phrases. */
-  _visCounts() { return this.cam.frame === 'galaxy' ? visibleCounts(this._vis) : { counts: {}, direct: {} }; }
+  /** Visible object counts by kind in the unhosted frames ({} in a system), for the HUD's exoplanet, cluster and galaxy phrases; faded-out entries are not counted. */
+  _visCounts() { return F.isHosted(this.cam.frame) ? { counts: {}, direct: {} } : visibleCounts(this._vis.filter((e) => presenceOf(e) >= GALAXY_PICK_MIN)); }
   _hudData() {
     const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody(), vc = this._visCounts();
     return {
-      scene: this.scene, frame: cam.frame, unit: inSys ? 'AU' : 'pc',
+      scene: this.scene, frame: cam.frame, unit: F.levelOf(cam.frame).unit,
       hostName: inSys ? near.name : null,
       surfaceAu: inSys ? near.au : null,
-      sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), auto: this.autoSpeed, throttle: this.throttle,
+      sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), cruisePc: this._cruise() / F.unitsPerPc(cam), auto: this.autoSpeed, throttle: this.throttle,
+      starsOn: inSys || this._gf > 0,
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
       hostCount: this._hostCountText(), visCounts: vc.counts, visDirect: vc.direct,

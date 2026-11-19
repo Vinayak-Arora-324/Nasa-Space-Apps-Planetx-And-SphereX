@@ -4,11 +4,10 @@
 // This is the first view of a spot picked on the sphere; its SPHEREx frames load only from "Watch this patch change".
 import { getScene3D, getObjects, getCoverage } from '../api.js';
 import { Scene3D, fmtNum } from './scene3d.js';
-import { contextStars, LY_PER_PC as LY } from './scene3d-math.js';
-import { AU_PER_PC } from './scene3d-frames.js';
+import { contextStars } from './scene3d-math.js';
 import { layers as layerList, kinds as kindList, kindSpec, beyondKinds } from './scene3d-registry.js';
-import { kindsPhrase, countPhrase, capNotes, creditItems, datasetCounts } from './scene3d-objects.js';
-import { C_PC_PER_S, fmtTimesC } from './scene3d-nav.js';
+import { kindsPhrase, countPhrase, capNotes, creditItems, datasetCounts, starCreditItem } from './scene3d-objects.js';
+import { fmtDistPc, fmtSpeedPc } from './scene3d-format.js';
 import { fmtRA, fmtDec, fmtDeg, separation } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -86,12 +85,13 @@ function onHud(h) {
   const stars = h.scene === 'stars';
   if (h.scene !== pageScene) { pageScene = h.scene; refreshWarn(); }
   document.querySelectorAll('[data-only]').forEach((el) => { el.hidden = el.dataset.only !== h.scene; });
+  // distances and speeds by value, not by frame (fmtDistPc / fmtSpeedPc: AU, pc, kpc or Mpc), so nothing jumps when the camera switches level (section 18.5.2)
   $('hud-where').textContent = h.frame === 'system'
     ? `Near ${h.hostName} · ${fmtNum(h.surfaceAu)} AU from its surface`
-    : `Interstellar · ${fmtNum(h.dist)} pc from the Sun`;
-  $('hud-dist').textContent = `${h.dist < 0.02 ? fmtNum(h.dist * AU_PER_PC) + ' AU' : fmtNum(h.dist) + ' pc · ' + fmtNum(h.dist * LY) + ' ly'}${h.scene === 'solar' && solarDate ? ' · ' + solarDate : ''}`;
+    : `${h.frame === 'cosmos' ? 'Intergalactic' : 'Interstellar'} · ${fmtDistPc(h.dist).split(' · ')[0]} from the Sun`;
+  $('hud-dist').textContent = `${fmtDistPc(h.dist)}${h.scene === 'solar' && solarDate ? ' · ' + solarDate : ''}`;
   const moving = h.speedPc > 1e-15;
-  $('hud-speed').textContent = `${moving ? `${fmtNum(h.speed)} ${h.unit}/s · ≈ ${fmtTimesC(h.speedPc / C_PC_PER_S)}` : `0 · cruise ${fmtNum(h.cruise)} ${h.unit}/s`}${h.flying ? ' · autopilot' : ''}`;
+  $('hud-speed').textContent = `${moving ? fmtSpeedPc(h.speedPc) : `0 · cruise ${fmtSpeedPc(h.cruisePc).split(' · ')[0]}`}${h.flying ? ' · autopilot' : ''}`;
   $('hud-mode').textContent = h.auto ? `Auto speed · ${fmtNum(h.throttle, 2)}/s of the way to the nearest surface · T switches` : 'Manual speed · wheel sets it · T switches';
   $('hud-near').textContent = h.nearName && h.nearText ? `${h.nearName} · ${h.nearText}` : 'n/a';
   $('hud-ev').textContent = `${h.ev >= 0 ? '+' : '−'}${Math.abs(h.ev).toFixed(1)} EV`;
@@ -117,8 +117,8 @@ function starsCountText(h, c) {
   const gaia = c.gaia ? `${c.gaia.toLocaleString('en-US')} Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around`
     : gaiaState === 'error' ? `No Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around` : 'Gaia stars loading…';
   const status = scene ? scene.store.kindStatus : {}, vis = h.visCounts || {}, direct = h.visDirect || {};
-  const beyond = h.frame === 'galaxy' ? beyondKinds().filter((k) => vis[k] > 0).map((k) => countPhrase([k], vis, status, direct)) : [];
-  return [gaia, ...beyond].join(' · ');
+  const beyond = h.frame !== 'system' ? beyondKinds().filter((k) => vis[k] > 0).map((k) => countPhrase([k], vis, status, direct)) : [];
+  return [h.starsOn === false ? '' : gaia, ...beyond].filter(Boolean).join(' · ');   // 40 kpc out the stars are not drawn: only what is (galaxies there)
 }
 function setEvidenceUi(on) {
   $('btn-evidence').setAttribute('aria-pressed', String(!!on));
@@ -128,14 +128,17 @@ function setEvidenceUi(on) {
  * The credits line (section 17.2): `credit · licence` for every dataset that has records in the cone and a credit (OpenNGC's CC BY-SA 4.0 for the
  * nebulae). Shown in both scenes, small; the licence name links to its page in a new tab.
  */
-function refreshCredits(sources) {
+let creditSources = [];   // the last objects payload's sources: the Gaia star credit is added when the stars arrive, which can be after them
+function refreshCredits(sources = creditSources) {
+  creditSources = sources;
   const box = $('credits');
   box.textContent = '';
-  const items = scene ? creditItems(sources, datasetCounts(scene.store)) : [];
+  // skyScope: the galaxies and supermassive black holes of the context set count even outside the cone; the Gaia star item (section 18.12) is client-side
+  const items = scene ? creditItems(sources, datasetCounts(scene.store, { skyScope: true }), [starCreditItem(scene.counts.gaia > 0)]) : [];
   items.forEach((it, i) => {
     if (i) box.append(' | ');
     if (!it.licenceName || !it.licence || !/^https?:\/\//i.test(it.licence)) { box.append(it.text); return; }
-    box.append(`${it.credit} · `);
+    box.append(it.text.endsWith(it.licenceName) ? it.text.slice(0, -it.licenceName.length) : `${it.credit} · `);   // "Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · " keeps its lead-in
     const a = document.createElement('a');
     a.href = it.licence; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = it.licenceName;
     box.append(a);
@@ -223,6 +226,7 @@ async function loadStars() {
     const p = await getScene3D({ ra, dec, radius });
     if (p.stars) {
       scene.setGaia(p.stars);
+      refreshCredits();   // the Gaia star credit
       scene.reveal();   // only moves the camera on an untouched arrival from the sphere or the frames
       const shown = Array.isArray(p.stars.rows) ? p.stars.rows.length : 0;
       gaiaWarn = [

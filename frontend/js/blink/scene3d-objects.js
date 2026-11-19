@@ -798,10 +798,17 @@ export function creditItems(sources, counts = null, extra = []) {
 }
 /** The credits line of the 3D view: the items of creditItems joined with ' | ', '' when there are none. extra: client-side items, e.g. [starCreditItem(hasGaia)]. */
 export const creditsLine = (sources, counts = null, extra = []) => creditItems(sources, counts, extra).map((i) => i.text).join(' | ');
-/** { dataset: n } of the store's records that are in the cone, by record provenance.dataset (the counts creditsLine wants). */
-export function datasetCounts(store) {
+/**
+ * { dataset: n } of the store's records that are in the cone, by record provenance.dataset (the counts creditsLine wants). skyScope: true also counts the
+ * records of a sky-scope kind (galaxies) and the supermassive black holes that came in a sky tile without being in the cone (the context set, section 18.11),
+ * so the credits stay up while those are what is on screen.
+ */
+export function datasetCounts(store, { skyScope = false } = {}) {
   const out = {};
-  for (const r of store.recs) { const ds = r.o.provenance && r.o.provenance.dataset; if (ds && r.o.in_cone === true) out[ds] = (out[ds] || 0) + 1; }
+  for (const r of store.recs) {
+    const ds = r.o.provenance && r.o.provenance.dataset;
+    if (ds && (r.o.in_cone === true || (skyScope && (r.spec.galaxyScope === 'sky' || isSupermassive(r.o))))) out[ds] = (out[ds] || 0) + 1;
+  }
   for (const s of store.stars.values()) { const ds = s.provenance && s.provenance.dataset; if (ds && s.in_cone === true) out[ds] = (out[ds] || 0) + 1; }
   return out;
 }

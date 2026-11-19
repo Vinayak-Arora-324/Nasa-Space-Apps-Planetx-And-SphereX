@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, awaiting approval.**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -14,7 +14,7 @@ and comets) onto it. It adds no catalogues. Phases 1–3 should each need only a
 | 0 | framework; planets, Moon, asteroids, comets migrated; solar markers in the Stars scene; layer panel | — |
 | 1 | exoplanets (NASA Exoplanet Archive → Gaia DR3 hosts), clusters (Hunt & Reffert 2023) | `orbit` position model, `billboard` renderer, chained autopilot via a host star |
 | 2 | nebulae (OpenNGC, Sharpless), black holes (Sgr A*, Gaia BH1/2/3, X-ray binaries) | direction-only records (`dist: null`), illustrative appearance with measured placement |
-| 3 | galaxies (OpenNGC, UNGC, NED distances) | the `cosmos` (Mpc) frame |
+| 3 | galaxies (OpenNGC, UNGC, Cosmicflows-4 distances; **Phase 3 change**: NED-D rejected, §18.4.1), the Milky Way, supermassive black holes | the `cosmos` (Mpc) frame |
 
 ## 1. Decisions at a glance
 
@@ -53,7 +53,7 @@ or carried inside a Quantity.
 **Quantity**: `{ "v": number | string, "lo"?: number, "hi"?: number, "unit"?: string, "src": string, "tier": Tier }`.
 Here `Tier` is one of `measured`, `catalogue`, `inferred`, `illustrative`, the same tiers and glyphs as
 `scene3d-physics.js` `TIER_INFO`. Allowed units: `km au pc Mpc deg arcmin arcsec mag K d yr Gyr Msun Mjup Mearth
-Rsun Rjup Rearth arcsec/h`. `lo`/`hi` are a 1σ or 16–84 % interval, as `src` says.
+Rsun Rjup Rearth arcsec/h` (**Phase 2/3 change:** plus `mas`, `km/s` and `mag/arcsec2`, §18.9). `lo`/`hi` are a 1σ or 16–84 % interval, as `src` says.
 
 ### 2.2 Position models
 
@@ -70,6 +70,7 @@ Rsun Rjup Rearth arcsec/h`. `lo`/`hi` are a 1σ or 16–84 % interval, as `src` 
   **Phase 2 change (§17.5, §17.7):** a direction-only record must have `host: null`, `method: null` and no `size.radius` unless that radius is a `measured` or `catalogue` value of its own (§17.7). It is drawn at infinity in the galaxy frame, faded with the camera's distance from the Sun like the Milky Way glow.
 - `dist.unit` is `pc` or `Mpc`.
 - `method` is one of `parallax`, `bailer-jones`, `cluster-parallax`, `photometric`, `kinematic`, `cepheid`, `trgb`, `sbf`, `tully-fisher`, `redshift`, `orbit-fit`, `assumed`. It is shown on cards and drives the evidence rule.
+  **Phase 3 change (§18.4.3, §18.9):** plus `maser`, `sn-ia`, `sn-ii`, `supernova`, `fundamental-plane`, `horizontal-branch`, `rr-lyrae`, `cmd`, `brightest-stars`, `pnlf` and `group-member`; a distance whose method is in `DERIVED_METHODS` may not be `measured` or `catalogue`. Records may carry `alt_distances`, the candidates not used.
 - `pm` (`{pmra, pmdec}` in mas/yr) is optional and reserved. It is not applied in Phase 0.
 
 **`state`**: a position evaluated by the server at the response's `mjd` (TDB).
@@ -146,7 +147,7 @@ The star renderer uses the same ids as frame-host keys. `_starKey` changes from 
 | `cluster` | 1 | static `hr23` | null | `n_members`, `age`, `r50`, `extinction` |
 | `nebula` | 2 | static `nebulae` (OpenNGC + Sharpless merged, §17.3) | null | `type`, `vmag`, `bmag`, `sh2_form`, `sh2_struct`, `sh2_bright`, `central_star` (**Phase 2 change**: no `surface_brightness`) |
 | `black_hole` | 2 | static `bh-curated` | null, or the companion star (hosted `orbit`, §17.8) | `mass`, `type`, `state`, `companion_mass`, `companion` |
-| `galaxy` | 3 | static `ongc` / `ungc` (+ NED distances) | null | `type`, `mag_b`, `v_helio` |
+| `galaxy` | 3 | static `galaxies` (OpenNGC + UNGC merged, Cosmicflows-4 and UNGC distances; **Phase 3 change**, §18.3) | null | `type`, `hubble`, `mag_b`, `mag_v`, `surface_brightness`, `v_helio`, `redshift`, `v_cmb` (and the Milky Way's, §18.7) |
 
 Stars are kind `star`. It is used for ids and dispatch, but never sent as an object record in Phase 0. Phase 1 may
 send `star` records for exoplanet hosts missing from the star payload (§13).
@@ -192,6 +193,7 @@ The record's `evidence` describes **where the object is drawn**:
   - **Phase 0 makes no visible change here.** Planet bands, atmospheres and rings are tagged `illustrative` in the planet kind's sphere spec (`features: {band, atm, ring}`). Whether the Evidence view drops them is one constant in `scene3d-registry.js`, `EVIDENCE_HIDES_FEATURES = false`. Today the ring is clipped by the quad extent while bands and atmosphere still show, and that is kept. Hiding them all is a follow-up (§13).
   - Card rows with tier `illustrative` are dropped, as now.
   - Derived records stay visible. Their markers get a hollow style hook, which Phase 0 has no records to use (§7.1).
+- **Phase 3 change (§18.4.3):** the method → evidence table for galaxy distances; SN Ia, Tully–Fisher, fundamental-plane and Hubble-flow distances are `derived`, enforced by `DERIVED_METHODS`.
 - **Group markers** (§9) count only records that pass the current evidence and layer filters. An exoplanet hidden in the Evidence view still shows as "3 planets" on its host's card, because its existence is measured. This is a Phase 1 card detail.
 
 ## 4. Endpoint contract
@@ -338,7 +340,7 @@ template for Phase 1 build scripts).
 ```
 **Tile** `tiles/11-14.json`: `{ "format": "space-maps.object-tiles/1", "tile": "11-14", "objects": [ records ] }`.
 
-Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`. **Phase 1 change (§16.3):** records of a hosted kind (`exoplanet`) may instead use an `orbit` position with a `host` and `position.host_radec`, and are tiled by that direction. **Phase 2 change (§17.7):** `black_hole` is a hosted kind too.
+Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`. **Phase 1 change (§16.3):** records of a hosted kind (`exoplanet`) may instead use an `orbit` position with a `host` and `position.host_radec`, and are tiled by that direction. **Phase 2 change (§17.7):** `black_hole` is a hosted kind too. **Phase 3 change (§18.9):** `manifest.sky_tiles` names tiles every query returns whatever the cone (the galaxy context set, the supermassive black holes).
 
 **Reproducibility.**
 - `write_dataset()` writes sorted keys, a stable record order (by id), `separators=(",", ":")` and no timestamps (the build stamp is the script version plus `source_sha256`, not the build time).
@@ -385,6 +387,9 @@ Phase 0 registers `planet`, `moon`, `dwarf_planet`, `asteroid` and `comet`.
 >
 > **Phase 2 change (§17.5, §17.6, §17.9):** specs gain `billboard: 'cluster' | 'nebula'`, and there is a new renderer,
 > `lensing`. Direction-only entries (`atInfinity`) are drawn by the galaxy-frame renderers at infinity, and `go` may plan `look`.
+>
+> **Phase 3 change (§18.5, §18.6):** `frames.cosmos`; `billboard` may be a function and gains `'galaxy'` and `'milky_way'`;
+> per-kind `skyFadePc`; `galaxyScope: 'sky'` for galaxies; every record without a `cosmos` renderer fades with `galaxyFade`.
 
 `star` is registered with the same fields, plus `builtin: true`. Its pick, position, card and go come from
 `scene3d.js`'s columnar star code, not the store, which keeps the special case explicit. Kinds the server sends that
@@ -448,6 +453,8 @@ stable, a selection survives a refreshed objects payload, which fixes the stale 
 The last case is implemented and unit-tested in Phase 0, so Phase 1 exoplanets need no autopilot work. It has no real
 data in Phase 0.
 
+**Phase 3 change (§18.6.2, §18.7):** galaxies fly to 3 radii (`fly-galaxy`), the Milky Way to a face-on view 60 kpc above its centre.
+
 **Phase 2 change (§17.5):** a direction-only target plans `{ type: 'look', dir }`. The camera turns to face it and does
 not move ("Turn to it").
 
@@ -479,7 +486,7 @@ export const LEVELS = [
     range: { min: 1e-6, max: 1e3, speed: 0.2 }, autoPc: { min: 1e-12, max: 100 }, fov: 60 },
   { name: 'galaxy', unit: 'pc',  perPc: 1,                                                 // host: none (origin = Sun)
     range: { min: 0.01, max: 1e4, speed: 2 },   autoPc: { min: 1e-12, max: 100 } },
-  // Phase 3, not registered in Phase 0:
+  // Phase 3, not registered in Phase 0 (Phase 3 change: registered, with the values of section 18.5.1):
   // { name: 'cosmos', unit: 'Mpc', perPc: 1e-6, enterPc: 6e4, leavePc: 4e4 (from the Sun, i.e. leave the galaxy beyond 60 kpc),
   //   range: { min: 1e-6, max: 100, speed: 0.01 }, autoPc: { min: 1, max: 1e8 } },
 ];
@@ -496,6 +503,7 @@ export function makeFrames(levels) → { unitsPerPc, worldPc, relFromCam, toFram
   - In `cosmos` the Gaia points collapse into the Milky Way object. That is an illustrative billboard in Phase 3, and in the Evidence view only a marker.
   - Near and far clip planes come from the level (`near`/`far`, today 1e-9 and 1e12/1e9).
   - The HUD unit comes from `unit`.
+- **Phase 3 change (§18.5):** `cosmos` is registered; the galaxy level's `range.max` and `autoPc.max` rise to 1e8 pc/s; what each level draws is §18.5.4.
 - **Phase 0 deliverable.** The frame functions are table-driven and take the level list as data. The old exports (`ENTER_PC`, `LEAVE_PC`, `toSystemPos`, `stepFrame`, …) stay as the two-level instance, so the existing tests pass unchanged. A new test builds a three-level table (with a synthetic outer level) and checks the enter/leave round trips, hysteresis and `worldPc` precision across all three.
 
 ## 9. Solar-system objects in the Stars scene
@@ -1623,7 +1631,7 @@ CDS (`vizier.cds.unistra.fr`). The mirror actually used goes into `SOURCE.json`.
   - `manifest.provenance` gains **`credit`** (the verbatim line), **`licence_name`** (`"CC BY-SA 4.0"`) and keeps **`licence`** (the URL). `/api/objects` already returns each dataset's provenance in `sources`, so the frontend needs no new endpoint.
   - **In the app:** every nebula card has a `Data` row, "OpenNGC (Mattia Verga), CC BY-SA 4.0" (plus "Sharpless 1959 via VizieR" when merged or Sharpless-only). The 3D view gets a **credits line** listing `credit · licence_name` for every dataset that returned records in the current cone and has a `credit`. It is generic, so the galaxy files need no new code.
 - VizieR tables carry the VizieR terms URL and the catalogue citation, as in Phase 1.
-- `bh-curated` cites each paper per record. Its seven companion rows hold **Gaia DR3 values, which ESA distributes under CC BY-NC 3.0 IGO** ("Credit: ESA, Gaia DPAC"; commercial use needs ESA's authorisation), as the build found on ESA's licence pages on 2026-11-19. The design had assumed no licence condition applied. So the manifest has `credit: "Credit: ESA, Gaia DPAC"` and `licence_name: "CC BY-NC 3.0 IGO (Gaia DR3 values)"`, which puts the credit on the credits line, and both `bh-curated` folders carry a `LICENSE.md` saying which values that covers.
+- `bh-curated` cites each paper per record. Its seven companion rows hold **Gaia DR3 values, which ESA distributes under CC BY-NC 3.0 IGO** ("Credit: ESA, Gaia DPAC", which **Phase 3 changes** to "Credit: ESA/Gaia/DPAC" everywhere, §18.12; commercial use needs ESA's authorisation), as the build found on ESA's licence pages on 2026-11-19. The design had assumed no licence condition applied. So the manifest has `credit: "Credit: ESA, Gaia DPAC"` and `licence_name: "CC BY-NC 3.0 IGO (Gaia DR3 values)"`, which puts the credit on the credits line, and both `bh-curated` folders carry a `LICENSE.md` saying which values that covers.
   - The licence applies to Gaia data everywhere in the app, including the live star layer and Phase 1's Gaia-derived files. Settling that repository-wide is a follow-up (§17.15).
 
 ### 17.3 Nebula records and the cross-catalogue merge
@@ -1958,7 +1966,7 @@ All additive; the schema stays at version 1.
 
 **`size.radius`:** the Schwarzschild radius `r_s = 2GM/c² = 2.953250 km · M/M☉`, `inferred`, src "Schwarzschild radius from the mass (non-rotating)". Sgr A*: 1.269 × 10⁷ km. BH1: 28.4 km.
 
-**Sgr A\*'s parent and the Milky Way record.** Sgr A*'s `parent` is `null` in Phase 2. Phase 3 adds `gal:milky_way` (the cosmos frame needs it as the collapsed-galaxy billboard, §8) and sets Sgr A*'s parent to it in `bh-curated`. That is a one-line data change.
+**Sgr A\*'s parent and the Milky Way record.** (**Phase 3 change, §18.7:** the parent is `gal:milky_way`; eight supermassive black holes join, §18.8.) Sgr A*'s `parent` is `null` in Phase 2. Phase 3 adds `gal:milky_way` (the cosmos frame needs it as the collapsed-galaxy billboard, §8) and sets Sgr A*'s parent to it in `bh-curated`. That is a one-line data change.
 
 ### 17.9 The `lensing` renderer
 
@@ -1979,6 +1987,8 @@ All additive; the schema stays at version 1.
 - for `disc`, an inclined annulus from `ρ = 1.5` to `4`, brighter on one side (illustrative Doppler beaming).
 
 True gravitational lensing of the background (sampling the framebuffer) is a follow-up.
+
+**Phase 3 change (§18.8.3):** reused at Mpc for supermassive black holes, always enlarged there; the radius goes through `unitsPerPc(cam)`.
 
 **Size honesty.**
 - Inside Gaia BH1's system frame (AU units, camera range down to 1e-6 AU = 150 km), its 28 km horizon reaches true size at about 1,000 km.
@@ -2263,6 +2273,8 @@ Commits:
 
 ### 17.15 Phase 3 checklist (megaparsec frame, galaxies, the Milky Way, supermassive black holes)
 
+**Phase 3 change:** designed in §18; the follow-ups carried forward are in §18.16. The OpenNGC `G` count is 10,481 + 40 (§18.2), and NED-D is replaced by Cosmicflows-4 (§18.4.1).
+
 - [ ] Register the `cosmos` level (§8: `enterPc` 6e4, `leavePc` 4e4 from the Sun, unit Mpc), proved already by the three-level frames test.
 - [ ] `build_objects_galaxies.py`: OpenNGC galaxies (types `G`, `GPair`, `GTrpl`, `GGroup`; 10,482 + 40 `G` rows at the Phase 2 pin) from the same pinned SHA, plus UNGC (Karachentsev et al. 2013, VizieR), plus NED-D redshift-independent distances. Method → evidence: Cepheid/TRGB/SBF/maser → `measured`; Tully–Fisher, redshift (Hubble flow) → `derived`. Licence: CC BY-SA 4.0 again for the OpenNGC part.
 - [ ] Galaxy billboards: reuse the §17.6 projected-ellipse code with a galaxy look (bulge plus disc by Hubble type, illustrative), and surface brightness from OpenNGC `SurfBr` (galaxies only).
@@ -2345,3 +2357,788 @@ The open questions Q1–Q5 were answered as follows, and each condition is folde
 - **Scientific notation** for such values when **|v| ≥ 10⁵ or 0 < |v| < 10⁻³**: `4.297 ± 0.012 × 10⁶ M☉`.
 - **Without an uncertainty:** unchanged, 3 significant figures (`12,700,000 km`).
 - An interval that does not bracket its value is shown as before (`v unit (lo–hi)`). A string bound such as `"< 0.12"` passes through untouched.
+
+## 18. Phase 3: megaparsec frame, galaxies, the Milky Way and supermassive black holes (design)
+
+Status: **design, awaiting approval** (open questions in §18.17). Sections of §1–§17 that Phase 3 changes carry a
+"Phase 3 change" note pointing here. Where this section and an earlier one disagree, this one wins.
+
+Every catalogue fact below was checked against the live source on **2026-11-19**:
+- OpenNGC on GitHub (raw files at the pinned commit, re-hashed; the releases API);
+- VizieR through the CfA mirror (`vizier.cfa.harvard.edu`); CDS (`cdsarc`, `cds.unistra.fr`) answered 404 for the
+  ReadMe and licence pages again, and so did the CfA and IDIA copies of the licence page;
+- NED's NED-D page and the NED-D CSV itself (downloaded and hashed);
+- EDD's home, about and terms pages (`edd.ifa.hawaii.edu`, terms version 2026-10-29);
+- ESA's Gaia licence and DR3 credit pages;
+- arXiv full texts for every physical number (the papers are listed per value; the quotes and their locations are in
+  the research notes and go into each `src`/`where`, as `bh-curated` already does).
+
+### 18.1 Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| `cosmos` level | Registered as the third row of `LEVELS`: unit Mpc, `enterPc` 6e4 and `leavePc` 4e4 from the Sun, as §8 planned. The galaxy level's speed bounds rise so the camera can leave the Galaxy (§18.5). |
+| What is drawn in `cosmos` | Galaxies, the Milky Way billboard and supermassive black holes (Sgr A* included). Stars, clusters, nebulae, exoplanets, stellar-mass black holes and solar markers are **hidden**, and they do not disappear at the frame switch: they fade out with the camera's distance from the Sun between 20 and 40 kpc (`galaxyFade`), so they are already gone when the frame changes (§18.5.4). |
+| Magellanic Clouds | LMC at 49.4 kpc (inside the 40–60 kpc hysteresis band), SMC at 63.9 kpc (beyond it), both Cosmicflows-4 Cepheid distances. Every galaxy is drawn by the same frame-independent code in both frames, so crossing the boundary changes nothing on screen (§18.5.5). |
+| Galaxy sources | **OpenNGC** types `G`, `GPair`, `GTrpl`, `GGroup` at the Phase 2 pin (10,791 rows) and **UNGC** (Karachentsev et al. 2013, VizieR `J/AJ/145/101`, 869 rows), merged at build time into one dataset, **`galaxies`**, by one script, `build_objects_galaxies.py`. Merge ladder as in §17.3: explicit id, committed overrides, positional score (§18.3). |
+| Distance catalogues (at most two) | **Adopted:** (1) **Cosmicflows-4** (Tully et al. 2023, VizieR `J/ApJ/944/94/table2`, 55,877 galaxies, one zero point, per-method moduli with errors, joined by PGC); (2) **UNGC**'s own distances, for Local Volume galaxies Cosmicflows-4 lacks. **Rejected: NED-D** (the file says "All Rights Reserved", last updated 2020, no PGC ids, mixed zero points; §18.4.1). |
+| Choosing a distance | Evidence class first (measured methods, then derived catalogue methods, then the Hubble flow), then "has a published uncertainty", then the smallest fractional uncertainty, then catalogue order (CF4, then UNGC). Never an average. The other candidates go on the card as "not used", with the reason (§18.4.2). |
+| Method → evidence | Measured: maser, Cepheid, TRGB, SBF, horizontal branch, RR Lyrae, CMD fitting. Derived: SN Ia, SN II, Tully–Fisher, fundamental plane, brightest stars, PNLF, group membership, redshift. SN Ia is derived because it is a secondary indicator: an empirical light-curve standardisation calibrated on Cepheid/TRGB hosts (§18.4.3). |
+| Hubble flow | From the OpenNGC (or UNGC) heliocentric velocity, moved to the CMB frame with the Planck 2018 dipole, with **H0 = 74.6** (Cosmicflows-4's own zero point), a **300 km/s** peculiar-velocity floor, and **no distance below v_CMB = 1000 km/s** (direction-only). About 5,930 OpenNGC galaxies are placed this way (§18.4.4). Q2, Q3. |
+| Scope | **Cone plus a sky-wide context set**: the Local Group and neighbours (adopted distance ≤ 3 Mpc), every galaxy brighter than B = 10, the hosts of the curated SMBHs and the Milky Way. About 150 records, sent with every response from a `sky` tile (§18.11). Q4. |
+| Galaxy look | The §17.6 projected-ellipse billboard, with a third axis that tilts the disc to its catalogue inclination. An illustrative bulge-plus-disc look by Hubble type, brightness from OpenNGC `SurfBr`. The Evidence view shows the catalogue outline only (§16.10); galaxies under 3 px are markers (§18.6). |
+| `gal:milky_way` | A curated record in the `galaxies` dataset. Its centre is **Sgr A*'s position and distance, copied by the build from `bh-curated`'s source file**, so R0 = 8277 ± 9 pc exists once. The plane comes from the ICRS definition of Galactic coordinates (Hipparcos Vol. 1 §1.5.3); disc and bar sizes from Bland-Hawthorn & Gerhard 2016. An illustrative billboard; a marker in the Evidence view (§18.7). |
+| Supermassive black holes | Eight in `bh-curated`: **M87\***, NGC 4258\*, M31\*, M32\*, Cen A\*, M81\*, M104\* and NGC 4889\*, each with a direct dynamical (or maser, or EHT) mass. Each has `parent: <galaxy id>`, `host: null`, and its galaxy's position **and distance, copied by the build from the built galaxy record**. The paper's distance is shown as "not used"; dynamical masses are rescaled to the adopted distance, the published value shown beside it (§18.8). Q5. |
+| `lensing` at Mpc | Reused unchanged; always enlarged at Mpc distances, and the card says by how much. |
+| Gaia credit | "Credit: ESA/Gaia/DPAC" on the credits line whenever Gaia stars or Gaia-derived values are on screen, in a `Data` row on every Gaia star card, and in the manifests of `nea-exoplanets`, `hr23-clusters` and `bh-curated`. How the NC term fits the project is **not decided here** (Q1). |
+| Licence | The `galaxies` data files are CC BY-SA 4.0 (OpenNGC-derived), handled exactly as the nebulae (§17.16 item 1); UNGC and CF4 via VizieR, with their citations; EDD's terms followed for CF4 (Q1). |
+
+### 18.2 Builds, pins and licences
+
+`build_objects_galaxies.py` follows `build_objects_nebulae.py` (§17.2): the committed snapshot by default, `--refresh`
+re-downloads and re-verifies against the pins, `--local DIR`, `--check` (byte-identical rebuild plus `verify_dataset`,
+exit 1 on any difference), `SOURCE.json`, `manifest.build.report`, `write_dataset(..., src_table=True,
+record_defaults=...)`.
+
+| Input (in `backend/data/sources/galaxies/`) | Pin (checked 2026-11-19) | Rows |
+|---|---|---|
+| `openngc-36cb178a-NGC.csv.gz`, `openngc-36cb178a-addendum.csv.gz` | The same release (`v20260501`, still the latest release) and commit `36cb178a0f69dba8bfc03a99c10512831edf1c6b` as Phase 2. The raw files re-hash to the pinned `840fe0c9…aa9e` and `1d8f0914…1983`. A copy, not a link to the nebula folder, so each folder's `LICENSE.md` covers its own files (+0.89 MB). | 10,791 galaxy rows: `G` 10,521 (10,481 in `NGC.csv` + 40 in the addendum), `GPair` 231, `GTrpl` 26, `GGroup` 13 (11 + 2). **§17.15 said 10,482 + 40 `G`; the parsed count is 10,481 + 40.** |
+| `ungc-catalog.tsv.gz` | VizieR `J/AJ/145/101/catalog`, `-out.all`, "Updated nearby galaxy catalog (Karachentsev+, 2013)", AJ 145, 101 (arXiv:1303.5328), doi:10.26093/cds/vizier.51450101. | 869 |
+| `cf4-table2.tsv.gz` | VizieR `J/ApJ/944/94/table2` (Tully et al. 2023, ApJ 944, 94, arXiv:2209.11238), columns `PGC, Vcmb, DM…e_DMmas, RAJ2000, DEJ2000` only (1.28 MB gzipped against 3+ MB for every column). | 55,877 |
+| `ungc_ongc_overrides.json` | Hand-written, committed: `[{ungc, ongc \| "gal:milky_way" \| null, reason}]`. | seeded with 3 (§18.3) |
+| `galaxy_names.json` | Curated common names (Andromeda Galaxy, Triangulum Galaxy, Large and Small Magellanic Cloud, Whirlpool, Sombrero, Pinwheel, Bode's Galaxy, Cigar Galaxy, Centaurus A, Messier 87, …), src "curated common name". | — |
+| `milky_way.json` | Hand-written, committed; every number with `{v, lo, hi, unit, src, where}`, refused without them (§18.7). The centre is **not** in it: it names `"centre_from": "bh:Sgr A*"`, and the build copies that record's position and `dist` out of `backend/data/sources/bh-curated/black_holes.json`. | — |
+
+- VizieR TSV header and comment lines are stripped before hashing, as in Phases 1 and 2; mirrors CfA, IDIA, CDS in that order; the mirror used goes into `SOURCE.json`.
+- **Build order.** `galaxies` reads `bh-curated`'s *source* file (Sgr A*); `bh-curated` reads `galaxies`' *built* tiles (the SMBH hosts' distances). There is no cycle: curated source → galaxies → black holes. `build_objects_bh.py --check` fails if the galaxy distance it copied no longer matches the built galaxy record.
+- **Report:** rows read and kept per type; Dup designations folded in; UNGC merges by rule with the **full list of pairs**; UNGC-only records; CF4 joins (PGC and positional) and conflicts; distances **per method and per evidence**; Hubble-flow and direction-only counts (with the reason: no velocity, or below 1000 km/s); the context set's members and count; per-file and total bytes.
+
+**Licences** (`SOURCE.json`, `manifest.provenance`, `LICENSE.md` in both `backend/data/sources/galaxies/` and
+`frontend/data/objects/galaxies/`, a sentence added to the repository `LICENSE` paragraph that names the nebula folders):
+- **OpenNGC**: CC BY-SA 4.0 (`.reuse/dep5`), credit "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC" plus OpenNGC's acknowledgements, as in §17.2. The derived `galaxies` data files are CC BY-SA 4.0; `manifest.provenance.credit` and `licence_name: "CC BY-SA 4.0"` put it on the credits line with no new code, and every galaxy card has a `Data` row.
+- **UNGC and CF4** are VizieR tables, redistributed with their citations and the VizieR terms URL (unreachable today; the earlier phases cite it).
+- **Cosmicflows-4** also lives in EDD. The paper's Data Availability says its tables are "available within the public domain of the Extragalactic Distance Database". EDD's terms (2026-10-29) say: "You may use, analyze and share EDD data for research and education, provided you cite it", ask for the EDD citation (Tully et al. 2009, AJ 138, 323), and say that changed, filtered, converted or combined data must say so and must not be presented as EDD data. We take the table from VizieR but follow those terms anyway: the citations go in `LICENSE.md`, the manifest and the card's `Data` row, and the `src` of every CF4 distance says "converted from the Cosmicflows-4 modulus by Space Maps". Whether "research and education" fits the project is Q1.
+- **NED-D** is not used (§18.4.1), so NED's terms do not apply beyond OpenNGC's own acknowledgement.
+
+### 18.3 Galaxy records and the OpenNGC–UNGC merge
+
+**OpenNGC parsing** reuses the nebula parser (§17.3): `;` CSV with quoted fields, sexagesimal J2000 to 7 decimals,
+`MajAx`/`MinAx` in arcmin, `PosAng` in degrees. `Dup` rows whose master is a kept galaxy add their name to its
+`designations`; `NonEx` rows are dropped. `GPair`, `GTrpl` and `GGroup` rows (268) are ordinary records whose size is
+the group's extent; none of them has a `RadVel`, and only 29 carry a PGC id, so most are direction-only.
+
+**UNGC parsing.** `RAJ2000`/`DEJ2000` sexagesimal; `a26` (arcmin) and `b/a` give `major` and `minor`; there is no PA,
+so `pa` is null (§17.6.1 unknown-PA rule); `Bmag`, `HRV` (km/s), `TT` (T-type), `Dist` (Mpc, 2 decimals) and `f_Dist`
+(method code, §18.4.3).
+
+**Merge rule** (a UNGC row U onto an OpenNGC galaxy N; each N is claimed at most once):
+1. **Identifier.** U's `Name` is an OpenNGC `Name` (both write `NGC0205`, `IC0010`), or `MESSIERnnn` matches N's `M`
+   column. The 2026-11-19 snapshot gives **193** such pairs.
+2. **Overrides** (`ungc_ongc_overrides.json`), seeded with:
+   - `LMC` → `ESO056-115` ("OpenNGC lists the LMC under its ESO number; addendum row");
+   - `SMC` → `NGC0292`;
+   - `Milky Way` → `gal:milky_way` ("the curated record; UNGC's `geom` row at 0.01 Mpc is not used").
+3. **Positional.** N within `s ≤ max(1′, 0.25·MajAx_N)` and, when both have velocities, `|HRV − RadVel| ≤ 150 km/s`;
+   score `s / max(MajAx_N, 1′)`, lowest wins, with the same conflict fallback as §17.3. A research run of a looser rule
+   (`0.5·MajAx`, no velocity test) paired 24 more; the report lists every pair, and reviewers extend the override table,
+   not the code.
+
+**Merged record:** OpenNGC's id, position, size and magnitudes; the UNGC name joins `designations`; UNGC's distance
+becomes a candidate (§18.4). **UNGC-only rows** (652 before overrides, 651 after) become `ungc:<Name>` records with
+UNGC's position and size, for example `ungc:And XVIII`.
+
+**CF4 joins.** OpenNGC rows join CF4 by the `PGC nnnnnn` in `Identifiers` (10,104 rows carry one; **3,946** are in CF4).
+UNGC-only rows have no PGC; they join CF4 positionally within 0.5′ (CF4 positions are given to 1e-4°), only when the
+match is unique; the report lists every pair.
+
+**Names.** The curated map; else OpenNGC's first common name; else `M 31`; else `NGC 4258` / `IC 10` / the UNGC name.
+`designations` keeps M, NGC/IC, UGC, PGC, ESO, the UNGC name and common names, at most 8 (the size budget).
+
+**Record fields** (`kind: "galaxy"`, `host: null`, `parent: null`):
+
+| Field | From | Tier / rule |
+|---|---|---|
+| `position` | `fixed`, OpenNGC or UNGC J2000, `epoch: 2000.0`; `dist` and `method` from §18.4 | `position.tier: catalogue`; the `dist` tier governs |
+| `size.angular` | OpenNGC `MajAx`/`MinAx`/`PosAng`, or UNGC `a26`, `a26·b/a`, `pa: null` | `catalogue` |
+| `size.radius` | placed only: `D·tan(major/2)` in pc, src "half the catalogue major axis at the adopted distance" | `inferred`; always null when direction-only |
+| `props.type` | "Galaxy", "Galaxy pair", "Galaxy triplet", "Group of galaxies" | `catalogue` |
+| `props.hubble` | OpenNGC `Hubble` (string), else UNGC `TT` as "T = 9" | `catalogue` |
+| `props.mag_b`, `props.mag_v` | OpenNGC `B-Mag`, `V-Mag`; UNGC `Bmag` | `catalogue` |
+| `props.surface_brightness` | OpenNGC `SurfBr`: "Mean surface brightness within 25 mag isophot (B-band), expressed in mag/arcsec2" (`NGC_guide.txt`) | `catalogue` |
+| `props.v_helio`, `props.redshift` | OpenNGC `RadVel` (heliocentric, km/s), `Redshift`; UNGC `HRV` | `catalogue` |
+| `props.v_cmb` | Hubble-flow records only: §18.4.4 | `inferred` |
+| `alt_distances` | the candidates not used, at most 4 (new field, §18.9) | each its own tier |
+| `render.mag` | B, else V; ordering and labels only | |
+| `evidence` | from the `dist` tier (§3); `measured` for direction-only records (only the direction is drawn, §17.5) | |
+
+**Change to §2.5:** galaxy `props` keys are `type`, `hubble`, `mag_b`, `mag_v`, `surface_brightness`, `v_helio`,
+`redshift`, `v_cmb`, plus the Milky Way's keys of §18.7.
+
+### 18.4 Distances
+
+#### 18.4.1 Catalogues evaluated
+
+| | **Cosmicflows-4** (adopted) | **NED-D 17.1.0** (rejected) | **UNGC** (adopted, second) |
+|---|---|---|---|
+| Content | 55,877 galaxies; per-method moduli (SN Ia, TF, FP, SBF, SN II, TRGB, Cepheid, maser) and a weighted mean, "all on the absolute scaling established by the combined TRGB, CPLR, and MASER calibrators" (paper §12); `Vcmb`. | 272,573 distances for 147,363 galaxies, "Version 17.1.0 (May 2020)", page last revised 28 May 2020. | 869 Local Volume galaxies; one distance each, `Dist` in Mpc to 0.01, with a method code; **no per-galaxy error**. |
+| Terms | VizieR terms; EDD terms (research and education, cite, say what you changed); the paper calls EDD's tables "public domain". | The CSV's own header: "Copyright (C) 2012-2020 California Institute of Techology - All Rights Reserved". NED's acknowledgement page asks for an acknowledgement in articles and grants no redistribution. **No basis to ship a derived file.** | VizieR terms, citation. |
+| Access / pin | VizieR table id + sha256 of the stripped TSV. | One 41 MB CSV (`NED30.5.1-D-17.1.2-20200415.csv`, sha256 `fe818b6d…1f55`), stable URL. | VizieR table id + sha256. |
+| Identity | PGC number (OpenNGC carries PGC for 10,104 of 10,791). | NED "preferred names" only; matching needs name normalisation. | Names in OpenNGC's own format (`NGC0205`) or `MESSIERnnn`. |
+| Zero point | one, stated | mixed: a "default value of H = 70" and a "fiduciary" LMC modulus of 18.50, with per-row exceptions | TRGB/Cepheid; `h` distances at H0 = 73 |
+| Coverage of the 10,791 OpenNGC galaxies | **3,946** (by PGC): maser 4, Cepheid 66, TRGB 126, SBF 430, SN Ia 258, TF 2,251, FP 1,230, SN II 52 (a galaxy can have several). | **≥ 5,360** by an NGC/IC/Messier name match (a lower bound), 527 with a Cepheid, TRGB, maser, SBF, RR Lyrae, eclipsing-binary or horizontal-branch distance. | 217 merged (193 by name, ~24 by position), plus 651 UNGC-only records. |
+
+NED-D covers more galaxies, but its terms, its age and its mixed zero points rule it out. Two catalogues are adopted:
+CF4 for most placed galaxies and UNGC for Local Volume dwarfs CF4 lacks. A third distance source is not a catalogue:
+the Hubble flow from each galaxy's own velocity (§18.4.4).
+
+**Distances from moduli.** `D = 10^((μ + 5)/5)` pc, `lo`/`hi` from `μ ∓ σ_μ`. CF4's moduli are luminosity-distance
+moduli (its Table 3 calls `Dist` the "Luminosity distance corresponding to DMzp"), so the placed distance is
+`D / (1 + z)` with `z = Vcmb / c`, the same comoving distance the Hubble-flow formula gives. It is under 3 % even at
+Coma, and the src says so. UNGC distances are used as printed; their src says "UNGC gives no per-galaxy error; values
+are rounded to 0.01 Mpc; Sec. 2 quotes 5–10 % for its TRGB, Cepheid and SN distances", and the card shows no interval.
+
+#### 18.4.2 Choosing among a galaxy's distances
+
+Candidates: every CF4 per-method modulus of the galaxy, and its UNGC distance. CF4's combined `DM` ("all
+methodologies") is **not** a candidate: it averages measured and derived methods, so its evidence cannot be stated.
+1. **Evidence class:** measured methods, then derived catalogue methods, then the Hubble flow (§18.4.4), then none.
+2. **Within the class, a candidate with a published uncertainty beats one without** (so UNGC only fills gaps).
+3. **The smallest fractional uncertainty** (`σ_D/D = 0.4605·σ_μ`).
+4. **Catalogue order:** CF4, then UNGC.
+5. A fixed method order for exact ties: maser, Cepheid, TRGB, SBF, horizontal branch, RR Lyrae, CMD, then SN Ia, TF, FP, SN II, the rest.
+
+The others (at most 4) go to `alt_distances`, each with its reason ("not used: larger uncertainty than the Cepheid
+distance", "not used: a derived method; a measured distance exists"). Example, M31: Cepheid 24.397 ± 0.066 is used;
+TRGB 24.53 ± 0.10 and SBF 24.214 ± 0.080 are shown as not used.
+
+#### 18.4.3 Method → evidence
+
+| Method | Codes | `method` | `dist.tier` | Evidence |
+|---|---|---|---|---|
+| Maser | CF4 `DMmas` | `maser` (new) | `measured` | measured |
+| Cepheid | CF4 `DMceph`, UNGC `Cep` | `cepheid` | `measured` | measured |
+| TRGB | CF4 `DMtrgb`, UNGC `TRGB` | `trgb` | `measured` | measured |
+| SBF | CF4 `DMsbf`, UNGC `SBF` | `sbf` | `measured` | measured |
+| Horizontal branch, RR Lyrae, CMD fitting | UNGC `HB`, `RR`, `CMD` | `horizontal-branch`, `rr-lyrae`, `cmd` (new) | `measured` | measured |
+| SN Ia | CF4 `DMsnIa` | `sn-ia` (new) | `inferred` | **derived** |
+| Supernova (type not given) | UNGC `SN` (3 rows) | `supernova` (new) | `inferred` | derived |
+| SN II, Tully–Fisher, fundamental plane | CF4 `DMsnII`, `DMtf`, `DMfp`; UNGC `TF`, `FP` | `sn-ii` (new), `tully-fisher`, `fundamental-plane` (new) | `inferred` | derived |
+| Brightest stars, PNLF, group membership | UNGC `BS`, `PNLF`, `mem` | `brightest-stars`, `pnlf`, `group-member` (new) | `inferred` | derived |
+| Hubble flow | §18.4.4 | `redshift` | `inferred` | derived |
+| UNGC `h`, `h′` (Hubble law at H0 = 73), `txt` ("texture of objects indicating their likely proximity") | — | not used | — | our own Hubble flow, else direction-only |
+| UNGC `geom` | the Milky Way row only | not used (override) | — | — |
+
+**Where SN Ia sits, and why.** A type Ia supernova is a standardisable candle: its peak brightness is corrected by an
+empirical light-curve relation, and the scale is tied to Cepheid and TRGB hosts (CF4 takes "the grouped SN Ia sample"
+as the reference of its method merge, §10.1, and puts the ensemble on an absolute scale through TRGB and Cepheid
+galaxies, §10.2). Its per-galaxy precision can match TRGB, but its placement rests on a relation with real assumptions,
+which is §3's definition of `derived`. SBF is also calibrated on Cepheid/TRGB galaxies; it stays `measured` as the
+Phase 3 checklist says (its calibration is a colour-dependent zero point rather than a standardisation of an event).
+
+**Validator:** a `fixed` distance whose method is in `DERIVED_METHODS` (`redshift`, `tully-fisher`,
+`fundamental-plane`, `sn-ia`, `sn-ii`, `supernova`, `brightest-stars`, `pnlf`, `group-member`) may not carry tier
+`measured` or `catalogue`, so a Hubble-flow or TF distance can never be shown as measured (§18.9).
+
+#### 18.4.4 Hubble-flow distances
+
+For a galaxy with no catalogue distance and a velocity (OpenNGC `RadVel`, or UNGC `HRV`):
+1. **CMB frame.** `v_CMB = v_helio + 369.82 km/s · cos θ`, θ the angle to the solar dipole apex `(l, b) = (264.021°,
+   48.253°)` (Planck 2018 I, A&A 641, A1, Table 2 "Planck 2018" row and §2.1: "v = (369.82 ± 0.11) km/s"). In ICRS
+   the apex is (167.94°, −6.94°). Stored as `props.v_cmb` (`inferred`).
+2. **Threshold.** `v_CMB < 1000 km/s` → no distance: direction-only (§17.5). This covers every blueshifted Local
+   Group member without a catalogue distance. (Q3.)
+3. **Distance.** `z = v_CMB / c`; `D = (c z / H0)·(1 − (1 + q0) z / 2)`, the comoving distance to second order, with
+   `q0 = Ωm/2 − ΩΛ = −0.595` from the `Ωm = 0.27`, `ΩΛ = 0.73` Cosmicflows-4 assumes (its Appendix, Table 4 notes).
+   The correction is 3.4 % at the catalogue's highest redshift (z ≈ 0.17).
+4. **H0 = 74.6 km/s/Mpc**, Cosmicflows-4's own value: "compatible with a value of the Hubble constant of H0 = 74.6
+   km/s/Mpc with the small statistical error of ±0.8 km/s/Mpc but a large potential systematic error of ~3
+   km/s/Mpc" (Tully et al. 2023, abstract). Same scale as the catalogue distances shown beside them. Riess et al.
+   2022's 73.04 ± 1.04 is 2 % lower; Planck 2018 VI's 67.36 ± 0.54 (Table 2, TT,TE,EE+lowE+lensing) would put every
+   Hubble-flow galaxy about 11 % farther, and the card says so. (Q2.)
+5. **Interval.** `σ_D/D = √((σ_v/v_CMB)² + (σ_H0/H0)²)` with `σ_v = 300 km/s` ("The distribution of peculiar
+   velocities with well-constrained distances is approximated by a Gaussian distribution with standard deviation 300
+   km/s", CF4 §13) and `σ_H0 = √(0.8² + 3²) = 3.1`. That is 30 % at the threshold, 9.5 % at 3,500 km/s and 4 % far out.
+6. `method: redshift`, `dist.tier: inferred`, `evidence: derived` (hollow marker, dashed outline). The src names the
+   velocity, the frame, H0 and σ_v.
+
+#### 18.4.5 Expected counts (research run on the 2026-11-19 snapshot; the build report gives the final ones)
+
+| | OpenNGC galaxies (10,791) | UNGC-only (651) |
+|---|---|---|
+| measured | ~592 (CF4 ~575: by first-ranked method maser 4, Cepheid 65, TRGB 105, SBF 401; UNGC ~17) | ~224 (TRGB 197, HB 14, SBF 5, CMD 5, RR 3) before CF4 positional joins |
+| derived, catalogue | ~3,400 (CF4 ~3,369: SN Ia 195, TF 2,107, FP 1,053, SN II 16; UNGC ~33) | ~325 (group membership 149, TF 146, brightest stars 29, FP 1) |
+| derived, Hubble flow | ~5,930 | a few (UNGC requires V_LG < 600 km/s) |
+| direction-only | ~864 (752 without a velocity, 112 below 1000 km/s) | up to ~102 (`h` 80, `h′` 4, `txt` 18) |
+
+At a 3000 km/s threshold the Hubble-flow count drops to ~4,984 and direction-only rises to ~1,810.
+
+### 18.5 The `cosmos` level
+
+#### 18.5.1 The table
+
+```js
+{ name: 'galaxy', unit: 'pc',  perPc: 1,    enterPc: 0,   leavePc: 0,   hosted: false,
+  range: { min: 0.01, max: 1e8, speed: 2 },    autoPc: { min: 1e-12, max: 1e8 }, fov: null, near: 1e-9, far: 1e9 },
+{ name: 'cosmos', unit: 'Mpc', perPc: 1e-6, enterPc: 6e4, leavePc: 4e4, hosted: false,
+  range: { min: 1e-6, max: 100, speed: 0.01 }, autoPc: { min: 1e-12, max: 1e8 }, fov: null, near: 1e-9, far: 1e5 },
+```
+- **Why the galaxy row changes.** `range.max` (1e4 pc/s manual) and `autoPc.max` (100 pc/s auto) are speed caps. At
+  100 pc/s the auto-throttle needs ten minutes to reach 60 kpc once it has left the stars. Both rise to 1e8 pc/s (100
+  Mpc/s), the same as `cosmos`, so the speed is **the same function of the scene on both sides of the switch**. Inside
+  the star field nothing changes: there the throttle × distance to the nearest star (about 1 pc/s) is far below either cap.
+- **Auto-throttle surfaces.** `_nearBody` gains galaxies (centre distance minus `size.radius`, heading-weighted as
+  stars are) and the Milky Way (its illustrative disc extent), in both unhosted frames. Stars count only while
+  `galaxyFade > 0`. Targets, checked in the browser: with throttle 1/s, free flight from the Sun passes 60 kpc within
+  about 10 s, and reaches Virgo within about 20 s (`ln(16.9 Mpc / 50 kpc)` ≈ 6 e-folds of approach).
+- **Autopilot.** Unchanged: trips already run in world parsecs, and `Autopilot.start` lasts `2.5 + 0.6·log10(D/stop)`
+  s, clamped to 8 s. Sun → M87, stopping 3 radii out (52 kpc), is 2.5 + 0.6·log10(16.9e6/5.2e4) ≈ 4.0 s plus the
+  0.8 s turn. `suggestSpeed`'s hard-coded `hi = 100·unitsPerPc` becomes the level's `autoPc.max`, so arriving at a
+  galaxy gives a speed that suits it.
+- **The renderer's frame switch** (`_onFrameChange`) becomes generic: the manual speed scales by `to.perPc/from.perPc`
+  and is clamped to the new range; `_system()` runs only when the new level is hosted (today a cosmos → galaxy
+  'enter' would call it with no host).
+
+#### 18.5.2 HUD units
+
+One formatter in `scene3d-format.js`, chosen by value, not by frame, so nothing jumps at the switch:
+`fmtDistPc(pc)` → AU below 0.02 pc (as now), "350 pc · 1,140 ly", "49.4 kpc · 161,000 ly", "16.9 Mpc · 55.0 million
+ly"; `fmtSpeedPc(pcPerS)` likewise (pc/s, kpc/s, Mpc/s, plus the ×c figure). The where-line reads "In TRAPPIST-1's
+system" / "Interstellar · 8.3 kpc from the Sun" / "Intergalactic · 16.9 Mpc from the Sun".
+
+#### 18.5.3 Renderer audit
+
+`scene3d.js` has about 25 `frame === 'galaxy'` / `!== 'galaxy'` tests. Each becomes one of:
+- **stars and the Gaia patch** (star buffer, star picking and labels, cone outline, intro / reveal / snapshot /
+  flatten, `_brightest`'s star scan): `galaxy` only;
+- **objects** (billboards, markers, groups, lensing, picking, labels, credits, "Go there"): every unhosted level,
+  through a new `F.isHosted(frame)`.
+
+This is a mechanical audit of conditions, not a restructure. If it turns out to need one, I stop and ask.
+
+#### 18.5.4 What is drawn where
+
+`galaxyFade(cam) = 1 − smoothstep(2e4, 4e4, dSun_pc)`, pure, in `scene3d-objects.js`.
+
+| Population | System | Galaxy | Cosmos |
+|---|---|---|---|
+| Gaia and XHIP stars, the Milky Way glow, the cone outline | as now | brightness × `galaxyFade` (the glow is already ≈ 0 there) | not drawn |
+| Clusters, nebulae, exoplanets, stellar-mass black holes, solar markers | as now | alpha × `galaxyFade`; not labelled or picked below 0.25 | not drawn |
+| Galaxies (placed and direction-only) | — | drawn | drawn, identically |
+| `gal:milky_way` billboard | — | alpha × (1 − `galaxyFade`) | drawn |
+| Supermassive black holes (Sgr A* included) | — | drawn (rule §18.8.3) | drawn |
+
+The rule is general: **every record without a `cosmos` renderer fades with `galaxyFade`**, so nothing is drawn in the
+galaxy frame beyond 40 kpc that `cosmos` would not draw. The exposure target multiplies the star intensities it scans by
+`galaxyFade`, so it reaches `cosmos`'s value (no stars in view: `exposureFor(0) = 1`) before the switch.
+
+Direction-only galaxies get their own fade scale: `skyFade` becomes per kind (`spec.skyFadePc`, nebulae 800 pc as now,
+galaxies 1e5 pc). A galaxy without a distance is still roughly where the Sun sees it until the camera has moved a
+good fraction of a megaparsec; 100 kpc from the Sun such a galaxy is at half strength and stops being pickable at
+about 170 kpc.
+
+#### 18.5.5 The Magellanic Clouds at the boundary
+
+- **LMC** (`ongc:ESO056-115`, UNGC `LMC` merged by override): CF4 Cepheid 18.469 ± 0.070 → **49.4 kpc** (47.8–51.0).
+  Its 646′ major axis makes its disc radius 4.6 kpc, so it spans about 44.8–54.0 kpc from the Sun: **entirely inside
+  the 40–60 kpc hysteresis band**. A camera near it can be in either frame, depending on where it came from.
+- **SMC** (`ongc:NGC0292`): CF4 Cepheid 19.029 ± 0.050 → **63.9 kpc** (62.5–65.4), radius 2.8 kpc, spanning about
+  61–67 kpc: just beyond the band.
+- For reference only (not catalogue distances, so not used): Pietrzyński et al. 2019 give the LMC at 49.59 ± 0.09
+  (stat) ± 0.54 (sys) kpc, and Graczyk et al. 2020 the SMC at 62.44 ± 0.47 ± 0.81 kpc.
+
+Why crossing the boundary cannot make them flicker or jump:
+1. Their placement is `galPc` in doubles, and both frames reach the screen through `relFromCam` (pc × `perPc` minus
+   the camera position); the projected position differs only by rounding (< 1e-9 px).
+2. `galaxyItem` and `lensingItems` take frame units and divide by `unitsPerPc(cam)` wherever a physical scale enters,
+   so every size, alpha and fade is frame-independent. No term reads `cam.frame`.
+3. Everything that differs between the frames is gone before the switch: `galaxyFade` is 0 beyond 40 kpc, and the
+   Milky Way billboard is at full strength there in both.
+4. Speed, exposure and HUD text are continuous (§18.5.1, §18.5.2, §18.5.4).
+5. `stepFrame`'s hysteresis is unchanged: out at 60 kpc, back at 40, never flapping.
+
+A test drives the camera along a path through both Clouds and back across the band, in both frames, and asserts
+identical item lists, screen positions, alphas, labels and pick results (§18.14).
+
+#### 18.5.6 The frames test and float32
+
+- The existing three-level test now runs on the **real** `LEVELS` too: enter at 60 kpc, leave at 40, no flapping at 59
+  or 50 kpc, velocity scaled by 1e-6, and `worldPc` preserved to 1e-9 relative across system → galaxy → cosmos →
+  galaxy. Old exports (`ENTER_PC`, `rangeOf`, …) keep their names; the asserted galaxy `range`/`autoPc` values change.
+- **No static float32 buffer holds Mpc coordinates.** Galaxies, the Milky Way, SMBH markers and their billboards are
+  camera-relative doubles cast to float32 per frame, so the error is relative to the distance from the camera
+  (6e-8 · 16.9 Mpc ≈ 1 pc at Virgo seen from the Sun, far below a pixel). The galaxy-frame star buffer (pc) is drawn
+  only while `galaxyFade > 0`, at most 40 kpc out, where float32 gives 2.4e-3 pc, or 2.4e-7 rad for stars ≥ 10 kpc
+  away. A test checks `relFromCam` at 16.9 Mpc for a body 1 kpc from the camera: the float32 cast keeps it to 1e-6.
+
+### 18.6 Renderers
+
+#### 18.6.1 Galaxy billboard (`billboard: 'galaxy'`, new pure module `scene3d-galaxy.js`)
+
+**Geometry (reusing §17.6.1).** The projected-ellipsoid core of `scene3d-nebula.js` is exported as
+`projectAxes(c, [A, B, C], project)` → screen covariance, semi-axes, angle, `inside`. Galaxies call it with:
+- `A = M̂ · r`, the major axis, `r = D·tan(major/2)` (or `INF_PC·tan(major/2)` at infinity);
+- **`B = r·(cos i · m̂ + s·sin i · û)`**, the disc's second axis tilted to the inclination `cos i = minor/major`;
+  `s = ±1` from `hashUnit(id, 'tilt')`, because which side is nearer is not known;
+- `C = n̂ · 0.1 r`, a disc thickness along the disc normal `n̂ = A × B / |A × B|` (spirals, S0, irregulars);
+  ellipticals (`hubble` starting with `E`) use `B = m̂·r·minor/major` and `C = û·|B|`, the nebula depth rule.
+
+Seen from the Sun, `û` projects to ~0, so **the ellipse is exactly the catalogue's major, minor and PA** (to 1e-6 in
+the tests, as for nebulae). From elsewhere you see the disc at a plausible 3D tilt. The tilt sign, the thickness and
+the elliptical depth are illustrative. The item also carries the **disc affine map** `(a, b)` (the screen images of
+`A` and `B`), so the fragment shader can work in disc coordinates for arms and bars.
+
+**Item** `{ id, look, hubble, seed, rel, screen, semiMajorPx, semiMinorPx, angle, affine, inside, alpha, fade,
+skyFade, lineAlpha, markerAlpha, markerOnly, hollow, dashed, atInfinity, mode }`:
+- `markerOnly`: semi-major under 3 px. Seen from the Sun in a 900 px tall view at a 60° field, M87's semi-major
+  axis is 0.8 px (a marker) and M31's about 20 px.
+- `fade = smoothstep(1, 3, dist / r)`, as for nebulae: the glow is full at 3 radii (where "Go there" stops) and gone
+  inside.
+- `hollow`/`dashed`: derived distance, or PA unknown (dashed circle of radius major/2, §17.6.1).
+
+**Brightness (illustrative):** `alpha = clamp(0.35·10^(−0.4(SB − 22.5)), 0.04, 0.6)` with `SB` = `SurfBr`. Without
+`SurfBr`, SB comes from B and the ellipse as for nebulae, converted to mag/arcsec² (+8.89); else 0.1. Surface
+brightness does not depend on distance, so neither does the glow. Times `skyFade` at infinity, `fade` when placed.
+
+**Look** (fragment shader `galaxy`, additive, drawn after the dark-nebula pass and before stars; colours and profiles
+are illustrative, not data):
+
+| Hubble type (first letters) | Bulge share | Disc | Extras | Colour |
+|---|---|---|---|---|
+| `E` | 1 | — | — | warm |
+| `S0`, `SA0`, `SB0` | 0.6 | smooth exponential | — | warm |
+| `Sa` … `Sd`, `SA*`, `SAB*` | 0.45 / 0.3 / 0.15 / 0.05 | exponential | 2-arm log spiral in disc coordinates, pitch 10° (Sa) to 25° (Sd), noise | warm bulge, blue-white disc |
+| `SB*` | as the letter after `SB` | as above | a bar along disc azimuth `hashUnit(id, 'bar')·180°` | as above |
+| `I`, `IB`, `Sm`, `Im`, unknown | 0 | clumpy exponential | fbm clumps | blue |
+| `GPair`, `GTrpl`, `GGroup` | — | 2 or 3 soft blobs inside the ellipse | — | white |
+
+Edge-on (`|det(a, b)|` small against the thickness) falls back to the covariance profile with a dark mid-plane lane.
+
+**Evidence view** (`mode: outline`): the §16.10 / §17.6.2 ring at ρ = 1 of the projected ellipse, solid for a
+measured distance, dashed for a derived one or an unknown PA, plus the centre marker. No glow, no colour.
+
+#### 18.6.2 Registry spec `galaxy`
+
+| Field | Value |
+|---|---|
+| `layer`, `noun` | `galaxies` ("Galaxies", group `beyond`), `['galaxy', 'galaxies']` |
+| `frames` | `{ galaxy: 'billboard', cosmos: 'billboard' }`; `billboard: (o) => o.render.style === 'milky_way' ? 'milky_way' : 'galaxy'` |
+| `galaxyScope` | `'sky'`: the server sends the cone plus the context set (§18.11) |
+| `skyFadePc` | 1e5 |
+| `pick` | `{ priority: 27, marker: 18 }`, centre only, like nebulae |
+| `label` | `key: (o) => (curated or common name ? 0 : 1000) + (render.mag ?? 30)`, max 12 |
+| `go` | `'fly-galaxy'`, `arrivePc = 3 × size.radius`; `'look'` when direction-only |
+| `card` | Type; Morphology; Distance (value, method in words with its catalogue, tier) or "unknown · drawn on the sky as seen from the Sun"; **Other distances · not used** (one row each from `alt_distances`, with the reason); Velocity (heliocentric, redshift; CMB-frame for Hubble-flow ones); Angular size ("178′ × 70′, PA 35°"); Diameter (inferred, placed only); B magnitude; Surface brightness; **Black holes · 1** (child list from `parent`, §18.8.3); From you (placed only); Look ("illustrative, generated from its type and brightness"; dropped in the Evidence view); Data ("OpenNGC (Mattia Verga), CC BY-SA 4.0", plus "Cosmicflows-4 (Tully et al. 2023)" or "UNGC (Karachentsev et al. 2013)" when its distance came from one). Notes: a Hubble-flow note ("From its velocity with H0 = 74.6 km/s/Mpc and a 300 km/s allowance for its own motion; Planck's H0 would put it 11 % farther."), direction-only, PA unknown, a missing UNGC uncertainty. |
+
+#### 18.6.3 Picking, labels and the HUD
+
+Galaxy entries feed `pickObjects` and `labelCandidates` like nebulae (direction-only ones skipped below
+`SKY_PICK_MIN`). The HUD's `beyond` count picks the new kind up with no edit: "463 galaxies (12 direction only)".
+
+### 18.7 The Milky Way (`gal:milky_way`)
+
+A curated record in the `galaxies` dataset, built from `milky_way.json`, always in the `sky` tile.
+
+| Field | Value | Source (`src`, `where`) | Tier |
+|---|---|---|---|
+| `position` | `fixed`, ra 266.4168371, dec −29.0078106, epoch 2000, `method: orbit-fit`, `dist` 8277 (8268–8286) pc | **copied by the build from `bh:Sgr A*`** in `black_holes.json` (GRAVITY 2022, A&A 657, L12, Sec. 4; Reid & Brunthaler 2004/2020); never typed twice | `measured` |
+| `props.ngp_ra`, `props.ngp_dec` | 192.85948°, +27.12825° | Hipparcos and Tycho Catalogues, ESA SP-1200 Vol. 1 §1.5.3, eq. 1.5.9 ("to be regarded as exact quantities") | `catalogue` |
+| `props.l_node` | 32.93192° | same, eq. 1.5.10 | `catalogue` |
+| `props.thin_disc_scale_length` | 2600 ± 500 pc | Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), §5.1 margin box "Rt" | `measured` |
+| `props.thin_disc_scale_height` | 300 ± 50 pc | same, "zt" at R0 | `measured` |
+| `props.thick_disc_scale_length`, `props.thick_disc_scale_height` | 2000 ± 200 pc, 900 ± 180 pc | same, "RT", "zT" | `measured` |
+| `props.bar_half_length` | 5000 ± 200 pc | same, §4.3 "Rlb" | `measured` |
+| `props.bar_angle` | 27 ± 2° | same, §4.2: "The near side of the b/p bulge has its major axis in the first Galactic quadrant (0° < l < 90°). The bar angle between major axis and the Sun-Galactic center line … is φbp = 27° ± 2°" (the long bar: 28°–33°, §4.3) | `measured` |
+| `props.stellar_mass` | 5 ± 1 × 10¹⁰ M☉ | same, §6.4 | `measured` |
+| `props.sun_height` | 25 ± 5 pc | same, §3.3 (z0, Jurić et al. 2008) | `measured` |
+| `size` | `radius: null`, `angular: null` | BHG16 §5.5: "there is no strong evidence for a truncation to date" | — |
+| `render.style` | `milky_way` | | |
+| `evidence` | `measured` (the centre) | | |
+
+- **Disc plane.** The normal is the north Galactic pole of the ICRS definition, through Sgr A*. That convention puts
+  Sgr A* at b = −0.046°, so the drawn plane passes about 7 pc below the Sun; the card gives the measured z0 = 25 ± 5 pc
+  beside it and calls the plane a convention.
+- **Look** (`billboard: 'milky_way'`, illustrative): the same `projectAxes` with the true axes `A` = disc radius along
+  the GC → (l = 90°) direction, `B` = disc radius along the GC → Sun direction, `C` = 300 pc along the pole. The
+  profile is the thin-disc exponential to 6 scale lengths (15.6 kpc), with a 5.0 kpc bar at φ = 27° (its near end at
+  positive l), a bulge, and illustrative arms; all of it is illustrative, the sizes are measured. Alpha × (1 −
+  `galaxyFade`), so it appears between 20 and 40 kpc as the stars fade.
+- **Evidence view:** a solid marker at the centre, nothing else.
+- **Card:** "Milky Way · our Galaxy". Rows: centre distance R0 (with GRAVITY's citation and "the same value Sgr A*'s
+  card shows"), plane (the NGP and node, "IAU convention"), Sun's height, disc and thick-disc scale lengths and
+  heights, bar, stellar mass, Black holes · 1 (Sgr A*), From you, Look ("illustrative: a generic barred spiral drawn
+  to the measured sizes"), Data. The measured rows and the look row are visibly separate (the look row is the one the
+  Evidence view drops).
+- **"Go there":** a flight to a point 60 kpc from the centre along the north pole: a face-on view, ending in `cosmos`.
+- **Sgr A\*:** its `parent` becomes `gal:milky_way` in `black_holes.json` (§17.8's one-line change). A test asserts
+  the Milky Way's `position.dist` and Sgr A*'s are equal, field for field.
+
+### 18.8 Supermassive black holes (`bh-curated`)
+
+#### 18.8.1 The list
+
+Chosen for a direct mass (stellar or gas dynamics, a maser disc, or the EHT shadow), a host in OpenNGC with a
+catalogue distance, and a spread of types and distances. Every number below was re-read in the paper on 2026-11-19.
+
+| Id (name) | Host | Mass as published (assumed D) | Method, paper and location | Why |
+|---|---|---|---|---|
+| `bh:M87*` | `ongc:NGC4486` | 6.5 ± 0.2 (stat) ± 0.7 (sys) × 10⁹ M☉ (D = 16.8 +0.8/−0.7 Mpc) | EHT shadow; EHT Collaboration 2019, ApJL 875, L6 (Paper VI, arXiv:1906.11243), abstract, §9.2 and Table 7; distance §8.1 / Table 9 (TRGB + 2 SBF) | the first imaged black hole |
+| `bh:NGC 4258*` | `ongc:NGC4258` | 3.98 ± 0.04 × 10⁷ M☉ (D = 7.576 ± 0.082 ± 0.076 Mpc) | maser disc; Reid, Pesce & Riess 2019, ApJL 886, L27 (arXiv:1908.05625), Table 2 and abstract | the geometric anchor of the distance ladder |
+| `bh:M31*` | `ongc:NGC0224` | 1.4 × 10⁸ M☉, 1σ range 1.1–2.3 × 10⁸ (D not stated) | stellar dynamics (P3 disc); Bender et al. 2005, ApJ 631, 280 (astro-ph/0509839), abstract and §5 | the nearest large galaxy |
+| `bh:M32*` | `ongc:NGC0221` | 2.4 ± 1.0 × 10⁶ M☉ (D = 0.79 Mpc) | stellar dynamics; van den Bosch & de Zeeuw 2010, MNRAS 401, 1770 (arXiv:0910.0844), §3.1.2 and §3.1 | a small one, next to M31 |
+| `bh:Cen A*` | `ongc:NGC5128` | 5.5 ± 3.0 × 10⁷ M☉, **3σ** (D = 3.5 Mpc) | stellar dynamics; Cappellari et al. 2009, MNRAS 394, 660 (arXiv:0812.1000), abstract and §2 | the nearest radio galaxy |
+| `bh:M81*` | `ongc:NGC3031` | 7.0 +2/−1 × 10⁷ M☉ (D = 3.63 Mpc) | gas dynamics; Devereux et al. 2003, AJ 125, 1226 (doi:10.1086/367595; no arXiv version), abstract and §4, distance §3 | a nearby spiral, low-luminosity AGN |
+| `bh:M104*` | `ongc:NGC4594` | 6.6 ± 0.4 × 10⁸ M☉ (D = 9.8 Mpc) | stellar dynamics; Jardel et al. 2011, ApJ 739, 21 (arXiv:1107.1238), abstract and §1 | the Sombrero |
+| `bh:NGC 4889*` | `ongc:NGC4889` | 2.1 × 10¹⁰ M☉, 68 % 0.55–3.7 × 10¹⁰ (D = 103.2 Mpc, H0 = 70) | stellar dynamics; McConnell et al. 2011, Nature 480, 215 (arXiv:1112.1078), Supplementary Table 4 | one of the most massive known; a **derived** host distance (FP) |
+
+Left out: NGC 1068 (its maser disc is sub-Keplerian, the two papers give 8.0 ± 0.3 × 10⁶ and ~1 × 10⁷ M☉, and it has
+no catalogue distance: it would be direction-only); Circinus, UGC 3789 and other maser hosts, which are not in OpenNGC.
+
+Two paper details are kept in the curated file and the card: Cappellari's interval is 3σ (stored as 1σ = 1.0 × 10⁷,
+src "the paper's 3σ ± 3.0, divided by 3"); McConnell's main text gives 0.6–3.7 × 10¹⁰ and the supplementary table
+0.55–3.7 × 10¹⁰ (the table is used, with the difference noted).
+
+#### 18.8.2 One distance per system (Q5)
+
+- **The galaxy's adopted distance wins**, for the black hole too. The build copies the host galaxy's `ra`, `dec`,
+  `dist`, `method` and evidence into the black-hole record (src "the distance of its host galaxy ongc:NGC4486
+  (Cosmicflows-4 SBF)"), and `--check` fails when they drift apart. A frontend test asserts the two are placed at the
+  same point.
+- **The paper's distance is shown as "not used"**, as `props.dist_published` with the reason: "the mass paper assumed
+  16.8 Mpc; the galaxy's catalogue distance is used so the black hole sits at its galaxy's centre". For the two
+  papers that *measured* their distance (NGC 4258's maser, and EHT's adopted TRGB + SBF), the agreement is shown too:
+  7.586 against 7.576 Mpc, 16.86 against 16.8 Mpc.
+- **Dynamical masses scale with the assumed distance** (each paper says so: "The value of the black-hole mass scales
+  linearly with assumed distance", Gebhardt et al. 2011 §2; "Black hole mass scales as M• ∝ D", Jardel et al. 2011
+  §1; "lengths and masses scale as D", Cappellari et al. 2009 fn. 2; EHT's θg = GM/Dc² is a mass-to-distance ratio).
+  So `props.mass` is the published mass × `D_adopted / D_assumed`, and `props.mass_published` keeps the paper's value.
+  The tier stays `measured` when the adopted distance is measured, and becomes `inferred` when it is derived (NGC
+  4889*).
+- **M31\***: Bender et al. 2005 state no assumed distance (a scale of 3.8 pc per arcsec can be worked out, but it is
+  not a quote), so its mass is **not rescaled**, and the card says why.
+
+Resulting placements (CF4 moduli, research run): M87 16.86 (16.55–17.17) Mpc, SBF; NGC 4258 7.586 (7.482–7.691) Mpc,
+maser; M31 757.5 (734.9–780.9) kpc, Cepheid; M32 776.3 (772.7–779.8) kpc, TRGB; Cen A 3.597 (3.532–3.664) Mpc, TRGB;
+M104 9.120 (8.790–9.462) Mpc, TRGB; NGC 4889 106.0 (85.7–131.0) Mpc before the 1/(1+z) step, FP (derived); M81 is not in
+CF4, so UNGC's Cepheid 3.63 Mpc (no uncertainty given). M87*'s mass becomes 6.5 ± 0.7 × 10⁹ M☉ (×1.003).
+
+#### 18.8.3 Records, frames and visibility
+
+- `kind: black_hole`, `host: null`, `parent: <galaxy id>`, `position: fixed` (copied, above), `size.radius` = r_s
+  (inferred, §17.8), `props`: `mass`, `mass_published`, `dist_published`, `type: "supermassive"`, `state` (e.g.
+  "low-luminosity accretion" for M87*, "active nucleus" only where the paper says so), `render.style: "lensing"`.
+  M87* also gets `props.ring_diameter`: 42 ± 3 μas, written as 4.2 ± 0.3 × 10⁻⁵ arcsec (EHT Paper I, arXiv:1906.11238,
+  abstract), tier `measured`: the one black hole whose size on the sky is itself measured.
+- **The SMBHs and Sgr A\* go in a `sky` tile of `bh-curated`**, so a galaxy of the context set always arrives with its
+  black hole. Stellar-mass black holes stay cone-only.
+- **Frames:** `black_hole` gains `cosmos: (o) => supermassive(o) ? 'lensing' : null`; stellar-mass ones fade with
+  `galaxyFade` like every other population without a cosmos renderer.
+- **Visibility rule** (pure, `smbhVisible(entry, items)`): an SMBH is drawn and pickable when it is `in_cone`
+  (Phase 2's behaviour, so Sgr A* in its cone looks exactly as today), **or** its parent galaxy's billboard item is
+  `inside` or at least 40 px in semi-major axis, **or** it is selected. Otherwise it is listed on its galaxy's card
+  ("Black holes · 1 · M87* · 6.5 × 10⁹ M☉"), from where it can be selected. So M87 from the Sun outside the M87 cone is
+  one marker, and close up the black hole appears at its centre. For the Milky Way, "resolved" also needs the camera
+  40 kpc or more from the Sun, so Sgr A* near the Sun keeps its Phase 2 cone rule.
+- **Lensing at Mpc:** `lensingItems` already scales through frame units; the radius conversion goes through
+  `unitsPerPc(cam)` so the Mpc frame needs no special case. From the Sun M87*'s shadow is about 1e-7 px, so it is always
+  enlarged, and the card's existing note says by how much ("Drawn enlarged ×9e7: its shadow would be 1e-7 px from
+  here.").
+- **"Go there":** `fly-galaxy` to 2 pc, as Sgr A* does today.
+- **Unchanged:** Sgr A*'s record except `parent`, and all stellar-mass records and companions byte for byte; the tests
+  compare them with the Phase 2 fixtures.
+
+### 18.9 Schema and validator changes
+
+All additive; the schema stays at version 1.
+1. `METHODS` += `maser`, `sn-ia`, `sn-ii`, `supernova`, `fundamental-plane`, `horizontal-branch`, `rr-lyrae`, `cmd`,
+   `brightest-stars`, `pnlf`, `group-member`.
+2. `DERIVED_METHODS` (§18.4.3): a `fixed` `dist` with such a method may not have tier `measured` or `catalogue`.
+   `--check` on every existing dataset proves nothing already shipped breaks it.
+3. `UNITS` += `km/s`, `mag/arcsec2`.
+4. `RENDER_STYLES` += `milky_way`, allowed only on `kind: galaxy` and id `gal:milky_way`.
+5. **`alt_distances`** (optional, records with a `fixed` position): a list of at most 4 `{method, dist, reason}`,
+   `method` in `METHODS`, `dist` a numeric Quantity in pc or Mpc with `src`, `reason` a non-empty string; rule 2
+   applies to each.
+6. **Sky tiles** (`objects_static.py`, §6): `manifest.sky_tiles: ["sky"]` names tiles that every query returns
+   whatever the cone, with `in_cone` set truthfully; their records are in no other tile; `verify_dataset` checks the
+   hashes and that no id is in two tiles; `max_extent_deg` ignores them.
+7. `/api/objects` gets Starlette's `GZipMiddleware` (part of FastAPI already; **no new dependency**) for responses over
+   1 KB: a Virgo cone is about 0.6 MB of JSON and about a tenth of that compressed.
+8. No change to `prefer_record` or `PREFER_RECORD_IDS`.
+
+### 18.10 Evidence and tiers of every new field
+
+| Field | Tier | Record evidence |
+|---|---|---|
+| galaxy direction | `catalogue` | `measured` when direction-only |
+| CF4 / UNGC maser, Cepheid, TRGB, SBF, HB, RR Lyrae, CMD distance | `measured` | `measured` |
+| CF4 / UNGC SN Ia, SN II, TF, FP; UNGC BS, PNLF, group membership | `inferred` | `derived` |
+| Hubble-flow distance, `v_cmb` | `inferred` | `derived` |
+| `alt_distances` entries | their own | — |
+| `size.angular`, type, Hubble type, magnitudes, surface brightness, velocity, redshift | `catalogue` | — |
+| galaxy `size.radius` | `inferred` | — |
+| galaxy look, tilt sign, thickness, arms, bar azimuth | illustrative; card row `illustrative` | hidden in the Evidence view |
+| Milky Way centre (= Sgr A*) | `measured` | `measured` |
+| Milky Way plane (NGP, node) | `catalogue` (a definition) | — |
+| Milky Way scale lengths, heights, bar, mass, z0 | `measured` | — |
+| Milky Way look | illustrative; a marker in the Evidence view | — |
+| SMBH placement | the host's | the host's |
+| SMBH mass | `measured`, `inferred` when rescaled by a derived distance | — |
+| `mass_published`, `dist_published` | `measured` (shown as not used) | — |
+| M87* ring diameter | `measured` | — |
+
+### 18.11 Layers, scope and the data budget
+
+```js
+registerLayer({ id: 'galaxies', label: 'Galaxies', group: 'beyond' });   // default on; the Milky Way and SMBHs follow their own layers
+```
+The Milky Way billboard belongs to `galaxies`; SMBHs to `blackHoles`. No sub-switches.
+
+**Scope (Q4).** Three options:
+
+| | What the client gets | Per request |
+|---|---|---|
+| Cone only (as nebulae) | the galaxies in the cone; flying out into `cosmos` from a cone that is not on a cluster shows nearly nothing | 3° cone: median under 10 records; Virgo 5°: 465 |
+| Sky-wide | all ~11,440 records, every time | ~7 MB of JSON: no |
+| **Cone + context set (recommended)** | the cone, plus every record with an adopted distance ≤ 3 Mpc (~118 from UNGC), B ≤ 10 (50), each SMBH host (8) and the Milky Way: ~150 after overlaps, in `tiles/sky.json` | ~150 KB of JSON, ~25 KB compressed, on top of the cone |
+
+**Data budget.** The `galaxies` dataset is at most **7 MB** on disk (about 600 B a record with `src_table`,
+`record_defaults` and at most 8 designations; for comparison `hr23-clusters` is 9.3 MB and `nea-exoplanets` 12 MB).
+Its source snapshot is about 2.3 MB (OpenNGC copies 0.89 MB, CF4 1.28 MB, UNGC 0.07 MB). Tiles are `radec-bands` 10°
+(§6); the Virgo tile is the largest at roughly 0.5 MB, read once and cached in memory. The build report prints the
+real sizes. Over 8 MB, I trim the designation list first.
+
+### 18.12 Gaia credit
+
+The credit text is **"Credit: ESA/Gaia/DPAC"** everywhere (Phase 2's `bh-curated` manifest wrote "Credit: ESA, Gaia
+DPAC"; it changes to the same string). ESA's licence page (checked 2026-11-19): "Gaia data are distributed under the CC
+BY-NC 3.0 IGO license"; the DR3 credit page gives the acknowledgement for publications.
+- **Credits line:** an entry "Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO" whenever the star payload
+  holds Gaia rows. It is a client-side item, since stars come from `/api/scene3d`, not `/api/objects`. Datasets
+  carrying Gaia values add theirs through the existing generic path.
+- **Star cards:** a `Data` row on every Gaia star ("Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO"), and on
+  star records holding Gaia values (the seven companions, NEA hosts with Gaia photometry).
+- **Phase 1 data:** `nea-exoplanets`' manifest gains `credit: "NASA Exoplanet Archive; Gaia DR3 values: Credit:
+  ESA/Gaia/DPAC"` and `licence_name: "CC BY-NC 3.0 IGO (Gaia DR3 values)"`, because its star records carry Gaia DR3
+  ids, positions and G magnitudes from its Gaia side inputs. `hr23-clusters` gains `credit: "Hunt & Reffert 2024, from
+  Gaia DR3 (Credit: ESA/Gaia/DPAC)"` with no licence name, because its values are the authors' derived ones. Both
+  rebuilds change only the manifest; `--check` is re-baselined in the same commit.
+- **`LICENSE`:** one factual sentence naming the folders whose Gaia DR3 values are CC BY-NC 3.0 IGO. What that means
+  for the project's licence is Q1, not decided here.
+
+### 18.13 Example records
+
+Stored as `backend/tests/fixtures/objects/examples/*.json`; the build tests assert the built records equal them. The
+numbers come from the snapshot rows quoted above; where the build's rounding differs in the last digit the fixture
+follows the build and this section is updated in the same commit (§17.12 preamble).
+
+**M31, the Andromeda Galaxy** (OpenNGC + UNGC; CF4 Cepheid: measured):
+```json
+{ "id": "ongc:NGC0224", "kind": "galaxy", "name": "Andromeda Galaxy",
+  "designations": ["M 31", "NGC 224", "UGC 454", "PGC 2557", "MESSIER031"],
+  "host": null, "parent": null,
+  "position": { "model": "fixed", "ra": 10.6847917, "dec": 41.2690556, "epoch": 2000.0, "method": "cepheid", "tier": "catalogue",
+    "dist": { "v": 0.75753, "lo": 0.73485, "hi": 0.78091, "unit": "Mpc", "src": "Cosmicflows-4 (Tully et al. 2023, ApJ 944, 94), table2 PGC 2557: DMceph 24.397 ± 0.066, converted by Space Maps", "tier": "measured" } },
+  "alt_distances": [
+    { "method": "trgb", "dist": { "v": 0.80538, "lo": 0.76913, "hi": 0.84333, "unit": "Mpc", "src": "Cosmicflows-4 table2: DMtrgb 24.53 ± 0.10", "tier": "measured" }, "reason": "not used: larger uncertainty than the Cepheid distance" },
+    { "method": "sbf", "dist": { "v": 0.69631, "lo": 0.67112, "hi": 0.72244, "unit": "Mpc", "src": "Cosmicflows-4 table2: DMsbf 24.214 ± 0.080", "tier": "measured" }, "reason": "not used: larger uncertainty than the Cepheid distance" } ],
+  "size": { "radius": { "v": 19597, "unit": "pc", "src": "half the catalogue major axis at the adopted distance", "tier": "inferred" },
+    "angular": { "major": { "v": 177.83, "unit": "arcmin", "src": "OpenNGC v20260501", "tier": "catalogue" },
+                 "minor": { "v": 69.66, "unit": "arcmin", "src": "OpenNGC v20260501", "tier": "catalogue" },
+                 "pa": { "v": 35, "unit": "deg", "src": "OpenNGC v20260501", "tier": "catalogue" } } },
+  "props": { "type": { "v": "Galaxy", "src": "OpenNGC v20260501 (G)", "tier": "catalogue" },
+             "hubble": { "v": "Sb", "src": "OpenNGC v20260501", "tier": "catalogue" },
+             "mag_b": { "v": 4.29, "unit": "mag", "src": "OpenNGC v20260501", "tier": "catalogue" },
+             "mag_v": { "v": 3.44, "unit": "mag", "src": "OpenNGC v20260501", "tier": "catalogue" },
+             "surface_brightness": { "v": 23.63, "unit": "mag/arcsec2", "src": "OpenNGC v20260501", "tier": "catalogue" },
+             "v_helio": { "v": -300, "unit": "km/s", "src": "OpenNGC v20260501", "tier": "catalogue" },
+             "redshift": { "v": -0.001, "src": "OpenNGC v20260501", "tier": "catalogue" } },
+  "provenance": { "source": "static:galaxies", "dataset": "galaxies", "catalogue": "OpenNGC + UNGC (J/AJ/145/101) + Cosmicflows-4 (J/ApJ/944/94)", "version": "OpenNGC v20260501 (36cb178a)" },
+  "evidence": "measured", "render": { "mag": 4.29 } }
+```
+(M31's distance is 757.5 kpc before the 1/(1+z) step; for a blueshifted galaxy the step uses `Vcmb` of the CF4 row and
+is below 0.1 %, and the build's value goes into the fixture.)
+
+**M87** (CF4 SBF: measured), only what differs in shape:
+```json
+{ "id": "ongc:NGC4486", "name": "Messier 87", "designations": ["M 87", "NGC 4486", "Virgo Galaxy", "UGC 7654", "PGC 41361"],
+  "position": { "model": "fixed", "ra": 187.7059167, "dec": 12.3911111, "epoch": 2000.0, "method": "sbf", "tier": "catalogue",
+    "dist": { "v": 16.858, "lo": 16.550, "hi": 17.171, "unit": "Mpc", "src": "Cosmicflows-4 table2 PGC 41361: DMsbf 31.134 ± 0.040, converted by Space Maps", "tier": "measured" } },
+  "props": { "hubble": { "v": "E", "src": "OpenNGC v20260501", "tier": "catalogue" }, "v_helio": { "v": 1256, "unit": "km/s", "src": "OpenNGC v20260501", "tier": "catalogue" } },
+  "evidence": "measured", "render": { "mag": 9.65 } }
+```
+
+**M87\*** (the host's distance, the EHT mass rescaled ×1.003):
+```json
+{ "id": "bh:M87*", "kind": "black_hole", "name": "M87*", "designations": ["M87*"],
+  "host": null, "parent": "ongc:NGC4486",
+  "position": { "model": "fixed", "ra": 187.7059167, "dec": 12.3911111, "epoch": 2000.0, "method": "sbf", "tier": "catalogue",
+    "dist": { "v": 16.858, "lo": 16.550, "hi": 17.171, "unit": "Mpc", "src": "the distance of its host galaxy ongc:NGC4486 (Cosmicflows-4 SBF)", "tier": "measured" } },
+  "size": { "radius": { "v": 1.926e10, "unit": "km", "src": "Schwarzschild radius from the mass (non-rotating)", "tier": "inferred" }, "angular": null },
+  "props": {
+    "mass": { "v": 6.52e9, "lo": 5.79e9, "hi": 7.25e9, "unit": "Msun", "src": "EHT Collaboration 2019, ApJL 875, L6 (arXiv:1906.11243), abstract: 6.5 ± 0.2 (stat) ± 0.7 (sys) × 10^9 at 16.8 Mpc, errors in quadrature, rescaled to 16.858 Mpc (M ∝ D)", "tier": "measured" },
+    "mass_published": { "v": 6.5e9, "lo": 5.77e9, "hi": 7.23e9, "unit": "Msun", "src": "EHT 2019 Paper VI, at D = 16.8 Mpc", "tier": "measured" },
+    "dist_published": { "v": 16.8, "lo": 16.1, "hi": 17.6, "unit": "Mpc", "src": "EHT 2019 Paper VI, §8.1 (TRGB + two SBF): not used, the galaxy's catalogue distance is used", "tier": "measured" },
+    "ring_diameter": { "v": 4.2e-5, "lo": 3.9e-5, "hi": 4.5e-5, "unit": "arcsec", "src": "EHT Collaboration 2019, ApJL 875, L1 (arXiv:1906.11238), abstract: 42 ± 3 μas", "tier": "measured" },
+    "type": { "v": "supermassive", "src": "curated", "tier": "catalogue" } },
+  "provenance": { "source": "static:bh-curated", "dataset": "bh-curated", "catalogue": "Space Maps curated black holes", "version": "2" },
+  "evidence": "measured", "render": { "style": "lensing" } }
+```
+
+**NGC 12** (no catalogue distance; Hubble flow: derived):
+```json
+{ "id": "ongc:NGC0012", "name": "NGC 12",
+  "position": { "model": "fixed", "ra": 2.1864583, "dec": 4.6125278, "epoch": 2000.0, "method": "redshift", "tier": "catalogue",
+    "dist": { "v": 47.18, "lo": 42.71, "hi": 51.64, "unit": "Mpc", "src": "Hubble flow: v_helio 3886 km/s (OpenNGC) → v_CMB 3527.7 km/s (Planck 2018 dipole), H0 = 74.6 ± 3.1 (Cosmicflows-4), q0 = −0.595, peculiar velocity 300 km/s (Cosmicflows-4 §13)", "tier": "inferred" } },
+  "props": { "v_cmb": { "v": 3527.7, "unit": "km/s", "src": "v_helio + Planck 2018 solar dipole (369.82 km/s toward l 264.021°, b 48.253°)", "tier": "inferred" } },
+  "evidence": "derived" }
+```
+
+**IC 47** (no velocity: direction-only), `"position": {"model": "fixed", "ra": 10.7292083, "dec": -13.7407222, "epoch":
+2000.0, "tier": "catalogue", "dist": null}`, `"size": {"radius": null, …}`, `"evidence": "measured"`.
+
+**And XVIII** (UNGC-only, TRGB with no published uncertainty):
+`"id": "ungc:And XVIII"`, `"position": {"ra": 0.5604167, "dec": 45.0888889, "method": "trgb", "dist": {"v": 1.36,
+"unit": "Mpc", "src": "UNGC (Karachentsev et al. 2013, J/AJ/145/101): Dist 1.36 Mpc, TRGB; no per-galaxy error given,
+values rounded to 0.01 Mpc", "tier": "measured"}}`, size `major` 1.40′, `minor` 1.39′, `pa` null.
+
+**The Milky Way:**
+```json
+{ "id": "gal:milky_way", "kind": "galaxy", "name": "Milky Way", "designations": ["Galaxy", "Milky Way (UNGC)"],
+  "host": null, "parent": null,
+  "position": { "model": "fixed", "ra": 266.4168371, "dec": -29.0078106, "epoch": 2000.0, "method": "orbit-fit",
+    "dist": { "v": 8277, "lo": 8268, "hi": 8286, "unit": "pc", "src": "GRAVITY Collaboration 2022, A&A 657, L12 (arXiv:2112.07478), Sec. 4: R0 = 8277 ± 9 pc (statistical; systematic ≈ 30 pc)", "tier": "measured" } },
+  "size": { "radius": null, "angular": null },
+  "props": {
+    "ngp_ra": { "v": 192.85948, "unit": "deg", "src": "Hipparcos and Tycho Catalogues (ESA 1997, SP-1200) Vol. 1 §1.5.3, eq. 1.5.9 (exact by definition)", "tier": "catalogue" },
+    "ngp_dec": { "v": 27.12825, "unit": "deg", "src": "same, eq. 1.5.9", "tier": "catalogue" },
+    "l_node": { "v": 32.93192, "unit": "deg", "src": "same, eq. 1.5.10", "tier": "catalogue" },
+    "thin_disc_scale_length": { "v": 2600, "lo": 2100, "hi": 3100, "unit": "pc", "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), §5.1: Rt = 2.6 ± 0.5 kpc", "tier": "measured" },
+    "bar_half_length": { "v": 5000, "lo": 4800, "hi": 5200, "unit": "pc", "src": "same, §4.3: Rlb = 5.0 ± 0.2 kpc", "tier": "measured" },
+    "bar_angle": { "v": 27, "lo": 25, "hi": 29, "unit": "deg", "src": "same, §4.2: φbp = 27° ± 2°, near side in the first quadrant", "tier": "measured" } },
+  "provenance": { "source": "static:galaxies", "dataset": "galaxies", "catalogue": "Space Maps curated (Milky Way)", "version": "1" },
+  "evidence": "measured", "render": { "style": "milky_way" } }
+```
+(and the other `props` of §18.7). **Sgr A\*:** §17.12 with `"parent": "gal:milky_way"`, nothing else changed.
+
+### 18.14 Test plan
+
+**Backend** (`uv run pytest`, offline):
+- `test_objects_schema.py`: the §18.13 examples validate; counter-examples fail: a TF or `redshift` distance with tier
+  `measured`; a malformed `alt_distances` (5 entries, unknown method, no reason, a derived method marked measured);
+  `render.style: milky_way` on any other id or kind; unknown units.
+- `test_objects_static.py`: a sky tile is returned for a cone on the far side of the sky, with `in_cone: false`; an id
+  in a sky tile and a cone tile fails `verify_dataset`; `max_extent_deg` ignores sky tiles.
+- `test_build_galaxies.py` (synthetic rows plus the snapshot):
+  - parsing (types, Dup folding, NonEx, UNGC sexagesimal, `a26`·`b/a`);
+  - every merge step (identifier with `NGC0205` and `MESSIER031`, the three overrides, positional with the velocity
+    test, conflict fallback), with the pairs asserted on the snapshot: M31, M32, NGC 205, M81, NGC 4258 and Cen A by
+    name, the LMC and SMC by override, and the UNGC Milky Way row never becoming a record;
+  - CF4 by PGC; the UNGC-only positional join;
+  - the distance ladder: class, has-uncertainty, smallest error, catalogue order, ties; M31 picks Cepheid with TRGB
+    and SBF in `alt_distances`; NGC 4258 picks the maser; M81 falls back to UNGC Cepheid with no interval;
+  - the method → tier table (each row), and UNGC `h`/`h′`/`txt` never used;
+  - modulus → distance and the 1/(1+z) step; the Hubble flow (CMB dipole against a hand-computed direction, the
+    q0 term, the interval, below 1000 km/s → direction-only, a blueshifted galaxy → direction-only);
+  - the LMC at 49.4 kpc and the SMC at 63.9 kpc (±0.1);
+  - the Milky Way's position and `dist` equal Sgr A*'s in `black_holes.json`, field for field; the build fails when
+    `centre_from` names a missing record, or `milky_way.json` has a number without `src`/`where`;
+  - the context set: membership rules, about 150 records, the Milky Way and the 8 hosts in it;
+  - licence: `LICENSE.md` in both folders, `credit`, `licence_name: "CC BY-SA 4.0"`, the CF4/UNGC/EDD citations;
+  - §18.13 records equal the built ones; byte-identical rebuild and `--check`; the report's counts per method and
+    evidence; the size budget (dataset ≤ 7 MB).
+- `test_build_bh.py`: each SMBH's position and distance equal its host's built record; `--check` fails after a
+  galaxy distance is changed; rescaled masses (M87* ×1.0034, M104* ×0.9306), M31* not rescaled; NGC 4889*'s mass
+  `inferred` and placement `derived`; Cen A*'s 3σ → 1σ; every SMBH has `src` and `where` on every number; the SMBHs
+  and Sgr A* are in the sky tile; **Sgr A* differs from Phase 2 only in `parent`, and every stellar-mass record and
+  companion is byte-identical to Phase 2's**; the Gaia credit string.
+- `test_build_nea.py`, `test_build_hr23.py`: the new `credit` (and `licence_name` for NEA); `--check`.
+- `test_objects_api.py`: the M31 cone returns M31 (measured, Cepheid), M32, NGC 205, the context set and M31*; the
+  M87 cone returns M87 and M87* at the same distance; a cone with no galaxies still returns the context set; gzip
+  when asked; `--check` on all **six** datasets.
+
+**Frontend** (`node --test`):
+- `scene3d-frames.test.mjs`: the real three-level `LEVELS`; 60/40 kpc round trips; no flapping; speed and velocity
+  scaling; `worldPc` precision; float32 `relFromCam` at 16.9 Mpc; the new `range`/`autoPc` values.
+- `scene3d-galaxy.test.mjs` (new): from the Sun the screen ellipse equals major, minor and PA to 1e-6 (several PAs,
+  near the pole, an elliptical, a disc); seen from the side, a disc galaxy shows its tilt and thickness; `minor` or
+  `pa` missing; `markerOnly` under 3 px; brightness from `SurfBr` and the fallbacks; `fade` at 1 and 3 radii; looks by
+  Hubble type; outline solid / dashed; the Milky Way item's axes from the NGP and node (the Sun 8,277 pc from the
+  centre, b of Sgr A* = −0.046°), its alpha against `galaxyFade`, a marker only in the Evidence view.
+- `scene3d-objects.test.mjs`: `galaxyFade` at 0, 20, 30, 40, 60 kpc; populations without a cosmos renderer are not
+  drawn in `cosmos` and fade in the galaxy frame; per-kind `skyFade`; **the boundary test of §18.5.5** (a path in and
+  out of the 40–60 kpc band past both Clouds, run in both frames: the same items, screen positions to 1e-6 px, alphas,
+  labels and picks); `smbhVisible` (in cone, resolved parent, selected, the Milky Way's 40 kpc condition);
+  `childrenOf` a galaxy id; the credits line with the Gaia star item; `planGo` for a placed galaxy, a direction-only
+  one ('look') and the Milky Way.
+- `scene3d-registry.test.mjs`: the `galaxies` layer; galaxy cards for measured, derived catalogue, Hubble-flow,
+  direction-only and UNGC-without-error records, with tiers; "not used" rows; the look row dropped in the Evidence
+  view; the Data row; the Milky Way card's measured / illustrative split; the SMBH card (published mass and distance
+  not used, the rescaling factor, the enlargement note, the ring diameter); the Gaia `Data` row on star cards.
+- `scene3d-format.test.mjs`: `fmtDistPc` and `fmtSpeedPc` across AU, pc, kpc and Mpc.
+- `scene3d-nav.test.mjs`: `suggestSpeed` with the level's cap.
+
+**By hand** (the real app, backend started fresh): the list in the brief's "Verify before pushing" (M31, M87 and
+Virgo from `cosmos`, NGC 4258, the LMC boundary, the Galactic Centre, an all-direction-only cone, TRAPPIST-1 / Pleiades /
+Orion regression, the credits line at 375, 768 and 1280 px), plus frame time in the Virgo cone.
+
+### 18.15 Work split
+
+`scene3d.js` has one owner at a time: C1, then C2.
+
+| Slice | Model | Files (exclusive) | Depends on |
+|---|---|---|---|
+| A. Schema, static tiles, gzip | Sonnet | `objects.py`, `objects_static.py`, `main.py` (middleware only), `test_objects_schema.py`, `test_objects_static.py`, schema-level fixtures | this section |
+| G. Galaxy build | Sonnet, after A's commit | `backend/scripts/build_objects_galaxies.py`, `backend/data/sources/galaxies/**` (I write `milky_way.json`, the overrides and the names), `frontend/data/objects/galaxies/**` (both with `LICENSE.md`), `test_build_galaxies.py`, galaxy fixtures | A |
+| H. Black holes | Sonnet, after G's data | `build_objects_bh.py`, `backend/data/sources/bh-curated/**` (I write the SMBH entries), `frontend/data/objects/bh-curated/**`, `test_build_bh.py`, BH fixtures | G |
+| E. Gaia credit in Phase 1 builds | Sonnet, in parallel with G | `build_objects_nea.py`, `build_objects_hr23.py`, their `frontend/data/objects/*/manifest.json`, their tests | A |
+| B. Frontend pure modules | Sonnet, in parallel with A, G, E | `scene3d-frames.js`, `scene3d-objects.js`, `scene3d-nebula.js` (export `projectAxes`), `scene3d-galaxy.js` (new), `scene3d-registry.js`, `scene3d-format.js`, `scene3d-nav.js`, their tests | this section |
+| C1. Renderer: cosmos frame, fades, galaxy billboards, HUD, credits line | Sonnet, after B | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d-card.js`, `scene3d.html`, `scene3d.css` | B, G's data |
+| C2. Renderer: the Milky Way, SMBHs at Mpc, galaxy "Go there", the Gaia star-card row | Sonnet, after C1 | the same files | C1, H's data |
+| D. Docs, mock server, integration, review | me | this doc, `docs/technical-reference.md`, `frontend/dev/mock_server.py`, `test_objects_api.py`, `LICENSE` | all |
+
+Haiku runs both suites after each slice, and `--check` on all six datasets.
+
+Commits: (1) this design; (2) schema and static tiles; (3) galaxy build and data; (4) Gaia credit in Phase 1
+manifests; (5) black holes; (6) frontend pure modules; (7) renderer: cosmos and galaxies; (8) renderer: the Milky Way
+and SMBHs; (9) docs and mock server.
+
+### 18.16 Phase 4 checklist
+
+- [ ] Real image billboards (§17.6.4), preferring tiled sky surveys with proper sky alignment over press images, licence permitting.
+- [ ] True gravitational lensing of the background (§17.9).
+- [ ] `EVIDENCE_HIDES_FEATURES`.
+- [ ] The README `online` marker.
+- [ ] The cluster member-star highlight (§16.12).
+- [ ] Orbit animation over time.
+- [ ] Migrating "Turn back the sky" onto the shared catalogues.
+- [ ] A general evidence rule for all hosted kinds (§17.15, approval condition 2).
+- [ ] Gaia-parallax-based HII-region distances (§17.4).
+- [ ] Whatever Q1 decides about the Gaia NC term and EDD's terms, applied repository-wide.
+- [ ] A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown.
+- [ ] Group-averaged CF4 distances (its `groups` table) as a third option for galaxies with only a TF/FP distance.
+- [ ] A Sun / "you came from here" marker in `cosmos`.
+
+### 18.17 Open questions
+
+1. **Non-commercial terms.** Gaia DR3 is CC BY-NC 3.0 IGO, and EDD's terms allow CF4 data to be used and shared "for
+   research and education". Both are about to be on screen together with CC BY-SA and MIT material. How should the
+   project treat them? *Recommendation:* keep both, label them (credits line, cards, `LICENSE.md`, one sentence in
+   `LICENSE`), treat Space Maps as non-commercial education, and decide before any commercial use (ESA's
+   authorisation, or swapping the Gaia layer). This design implements only the labelling.
+2. **H0 for Hubble-flow distances.** *Recommendation:* CF4's 74.6 ± 0.8 (stat), ~3 (sys), the scale of the catalogue
+   distances shown beside them. Alternatives: SH0ES 73.04 ± 1.04 (2 % farther) or Planck 67.36 ± 0.54 (11 % farther,
+   and inconsistent with the Cepheid-scale neighbours).
+3. **Hubble-flow threshold and frame.** *Recommendation:* the CMB frame and v_CMB ≥ 1000 km/s with a 300 km/s floor
+   (~5,930 placed, ~864 direction-only, intervals ≥ 30 % at the threshold, all hollow/dashed). Alternative: 3000 km/s
+   (~4,984 placed, ~1,810 direction-only), safer against the Local Group's own motion and Virgo infall.
+4. **Scope in `cosmos`.** *Recommendation:* the cone plus the ~150-record context set (D ≤ 3 Mpc, B ≤ 10, SMBH hosts,
+   the Milky Way), ~25 KB compressed per request. Cone-only leaves `cosmos` nearly empty; sky-wide is ~7 MB a request.
+5. **SMBH list and the distance rule.** *Recommendation:* the eight of §18.8.1; the galaxy's catalogue distance wins
+   and the paper's is shown as not used; dynamical masses are rescaled linearly to it, with the published value shown
+   beside (M31* not rescaled, because its paper states no distance). The alternative is to show the paper's mass
+   unscaled, at a distance that is not the one it is drawn at.
+6. **UNGC distances without errors.** About 240 Local Volume dwarfs (most UNGC-only) would be placed from UNGC's
+   TRGB/HB/CMD distances, which have no per-galaxy error and are rounded to 0.01 Mpc (±5 kpc, up to ~12 % for the
+   Milky Way satellites near the 60 kpc boundary). *Recommendation:* keep them `measured`, with no interval on the card
+   and the rounding stated in the src and a card note. The alternative is to mark them `derived` (hollow), which
+   undersells a TRGB distance.

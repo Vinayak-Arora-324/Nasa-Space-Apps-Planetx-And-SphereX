@@ -5,7 +5,7 @@
 //   cam      a scene3d-frames camera { frame, host, pos, ... }; host.key is the star id of the system frame the camera is in.
 //   project  (rel) -> [x, y] | null   the renderer's _proj: CSS px of a camera-relative vector, null when off screen.
 //   ctx      { layers: {id: bool}, evidence: bool, frame: 'system'|'galaxy', inHost(hostId) -> bool, pxPerRad }
-//   entry    one drawn record: { o, spec, renderer, id, kind, host, sysAu, galPc, dir }  (o is the payload record)
+//   entry    one drawn record: { o, spec, renderer, id, kind, host, sysAu, galPc, dir, atInfinity? }  (o is the payload record)
 //   sel      { kind, id } for objects, { kind: 'group', id: 'group:' + hostId } for a group marker.
 //
 // ObjectStore (new ObjectStore({ hostPc(hostId) -> [x, y, z] pc | null })   hostPc is optional, for hosts other than ss:sun)
@@ -45,7 +45,13 @@
 //       Registered, not builtin, has a renderer for ctx.frame (rendererOf: a spec may choose per record), its layer is not off
 //       (a layer missing from ctx.layers counts as on), spec.visible(o, { evidence, layers }) passes, system frame: ctx.inHost(host) and sysAu known; galaxy frame: galPc known, 'cone'
 //       scope needs in_cone === true, and ss:earth is never drawn (it is the observer).
-//   framePos(entry, cam) -> [x, y, z] | null   camera-relative, in the camera's frame units, computed in doubles
+//       PHASE 2: in the galaxy frame a record with a `dir` and no galPc (direction-only: fixed, dist null) whose renderer is 'billboard' or
+//       'marker' is also visible, with entry.atInfinity = true (section 17.5). Never in a system frame (the system test needs sysAu).
+//   framePos(entry, cam) -> [x, y, z] | null   camera-relative, in the camera's frame units, computed in doubles. For atInfinity:
+//       dir * INF_PC * unitsPerPc(cam), the same for every camera position
+//   fromYouFor(entry, rel, fmt) -> string | null   fmt(rel), but null for a direction-only entry (it has no distance: no 'From you' row,
+//       no crosshair distance)
+//   visibleCounts(visible) -> { counts: {kind: n}, direct: {kind: n direction only} }   for the HUD ("12 nebulae (8 direction only)")
 //   groupState(store, visible, cam, pxPerRad, GROUP_PX = 8) -> { [hostKey]: { grouped, count, byKind, pcPos, name, kind, noun, label } }
 //       Galaxy frame only ({} otherwise). grouped: the host's visible records span maxR_AU / dist_AU * pxPerRad < GROUP_PX
 //       (and there are at least two of them for ss:sun, at least one for any other host). pcPos: where the group marker goes
@@ -74,6 +80,13 @@
 //         hollow       evidence 'derived' (hollow marker); dashed: hollow in outline mode; candidate: quality 'candidate'
 //         screen       project(rel) when a projector is given
 //       The renderer sets entry.markerOnly from the item so pickPriority uses the kind's marker priority (16) instead of 25.
+//       PHASE 2: a spec with billboard: 'nebula' goes through nebulaItem (scene3d-nebula.js, documented there: the projected-ellipsoid
+//       item { look, seed, semiMajorPx, semiMinorPx, angle, inside, markerAlpha, ... }); it needs `project` and skips the entry without it.
+//       For nebulae `project` must return null only for points behind the camera (not for off-screen ones). Cluster items are unchanged.
+//   nebulaItem, skyFade, infinityPickable, INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN   re-exported from scene3d-nebula.js. skyFade(cam) =
+//       1 / (1 + (dSun_pc / 800)^2); MW_FADE_PC (800) is the shared constant: scene3d.js imports it from here for the Milky Way glow
+//   lensingItems(visible, cam, { evidence, pxPerRad, project }) -> item[]   section 17.9, see its comment at the end of the file (LENS_MIN_PX = 9)
+//       (PHASE 2: an item's own markerAlpha, when present, replaces that alpha; 'lensing' entries get a marker too, the Evidence view's only look.)
 //   markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb }) -> Float32Array   the dynamic-points data of the galaxy
 //       frame: 8 floats per point (x y z size alpha r g b, camera-relative), one per ungrouped 'marker' entry, one per grouped host
 //       and one per billboard item (the cluster centre marker, alpha 0.5 for candidates, times nearFade). A hollow marker
@@ -95,6 +108,11 @@
 //       hostId in the plan is the resolved key.
 //       { type: 'star' } | { type: 'fly' } (host is the camera's system frame) | { type: 'solar-scene' } (host ss:sun, camera
 //       not in it) | { type: 'via-host', hostId } (star trip to hostId, then fly) | { type: 'fly-galaxy' } (no host: clusters)
+//       | { type: 'look', dir } (a direction-only target: rotate the camera to face dir, do not move; "Turn to it", section 17.5).
+//       A target is direction-only when it is an entry with atInfinity and dir, or when opts.placement(id) (store.placement.bind(store))
+//       gives a dir and no galPc or sysAu.
+//   pickObjects / labelCandidates take an extra option skyFade (the value of skyFade(cam), default 1): direction-only entries are skipped
+//       below SKY_PICK_MIN (0.25) and a direction-only label item carries alpha = skyFade.
 //
 // STAR CARDS (section 16.8)
 //   mergeStarSystem(system, rec) -> system'   the star model's `system` input for a star that has an archive star record (rec) and
@@ -103,11 +121,18 @@
 //       Gaia's is kept / the present one is used. The winner keeps its own src. Notes that the archive value makes false
 //       ('No effective temperature available...', 'FLAME mass / age not available...') are dropped. Without rec, system is returned as is.
 //
+// CREDITS (section 17.2)
+//   creditItems(sources, counts) -> [{ dataset, text, credit, licenceName, licence }]; creditsLine(sources, counts) -> 'credit · licence | ...'
+//       sources: the /api/objects `sources` rows; counts: datasetCounts(store) ({dataset: n of records in the cone}) or omitted (each row's
+//       own count). Only datasets with records and a provenance.credit are listed; the line is '' when there are none.
+//   datasetCounts(store) -> { dataset: n }   records (and star records) with in_cone === true, by provenance.dataset
+//
 // TEXT HELPERS (section 16.11)
-//   countPhrase(kinds, counts, kindStatus) -> string   '23 small bodies' | '2,000 brightest small bodies (more in this cone)' |
+//   countPhrase(kinds, counts, kindStatus, direct = {}) -> string   '23 small bodies' | '2,000 brightest small bodies (more in this cone)' |
 //       '2,000 exoplanets of the brightest hosts (more in this cone)'. kinds: kind names shown as one phrase (dwarf_planet,
 //       asteroid and comet together read 'small bodies'); counts: {kind: n}; kindStatus: the payload's kinds map. '' when n = 0
-//       and nothing is truncated. Numbers use en-US thousands separators.
+//       and nothing is truncated. Numbers use en-US thousands separators. direct ({kind: n}, from visibleCounts) appends '(8 direction only)':
+//       '12 nebulae (8 direction only)', '2,000 nebulae (more in this cone, 8 direction only)'.
 //   capNotes(kindStatus) -> string[]   one sentence per capped kind group: 'Showing the 2,000 brightest small bodies in the
 //       cone; fainter ones are left out.'
 //   hostCountText(store, hostKey, { evidence, layers }) -> string   '7 exoplanets (positions illustrative)'; in the Evidence view
@@ -122,14 +147,23 @@
 //       bp (bpRpFromTeff). null without a positive distance or a direction
 //   starValuesFromRecord(o) -> { teff_k, radius_rsun, mass_msun, age_gyr, spectral_type, dist_pc, g_mag }   the star model's `values`
 //       (starModel input), as Quantities that keep their own tier and src; only what the record has
-//   resolveStarAliases(stars, has) -> { append: record[], alias: Map }   stars: store.stars (id -> record); has(key) -> bool for the
+//   resolveStarAliases(stars, has) -> { append: record[], alias: Map, prefer: Map }   stars: store.stars (id -> record); has(key) -> bool for the
 //       keys the renderer loaded. A record any of whose ids (id, same_as) is loaded maps all its ids to that key; otherwise, when it
-//       has a distance, it is appended and all its ids map to its own id. Records with neither stay unresolved
+//       has a distance, it is appended and all its ids map to its own id. Records with neither stay unresolved.
+//       prefer: loaded key -> the star record, for every loaded star whose record has a usable prefer_record (section 17.8): _rebuildStars
+//       re-places those rows with preferredStarPlacement (appended records are already at the record's distance)
+//   preferredStarDistance(rec) -> { pc, lo, hi, src, tier, notUsed: { plxMas, plxLo, plxHi, pc, pcLo, pcHi, reason } } | null   (registry; re-exported)
+//       rec.prefer_record = { replace: 'dist', reason }, distance in position.dist, Gaia single-star parallax in props.gaia_parallax (mas)
+//   preferredStarPlacement(rec, { xyz, abs } | { dir, d, abs }) -> { pos: [x, y, z] pc, d, abs, gaiaPc } | null   a loaded Gaia row moved to the
+//       curated distance: its direction and apparent G are kept, only the distance (and so the absolute magnitude) changes
+//   (the star card rows for such a star: preferredDistanceRows(rec, { bjPc }) in scene3d-registry.js)
 //   starSignature(stars) -> string   changes when the set of star ids (or their same_as) changes: when _rebuildStars must run again
-import { kindSpec, kinds, SCHEMA_MAJOR, toPc, rendererOf, clusterRgb, layerOf, UNIT_KM } from './scene3d-registry.js';
+import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
-import { radecToXyz, smoothstep } from './scene3d-math.js';
+import { radecToXyz, smoothstep, KM_PER_AU } from './scene3d-math.js';
 import { orbitPlacement, J2000_MJD } from './scene3d-orbits.js';
+import { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, relOfEntry, nebulaItem } from './scene3d-nebula.js';
+export { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, nebulaItem, preferredStarDistance };
 
 const { AU_PER_PC } = F;
 const SUN = 'ss:sun', EARTH = 'ss:earth';
@@ -252,6 +286,7 @@ export function kindsPhrase(ks) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+const AT_INFINITY_RENDERERS = ['billboard', 'marker'];
 export function visibleObjects(store, ctx) {
   const out = [], layers = ctx.layers || {}, ev = { evidence: !!ctx.evidence, layers };
   for (const r of store.recs) {
@@ -262,27 +297,41 @@ export function visibleObjects(store, ctx) {
     if (ctx.frame === 'system') {
       if (!r.sysAu || !ctx.inHost(r.host)) continue;
     } else {
-      if (!r.galPc || r.id === EARTH) continue;
+      if (r.id === EARTH) continue;
+      if (!r.galPc && !(r.dir && AT_INFINITY_RENDERERS.includes(renderer))) continue;   // a direction-only record is drawn at infinity (section 17.5)
       if (spec.galaxyScope === 'cone' && r.o.in_cone !== true) continue;
     }
-    out.push({ o: r.o, spec, renderer, id: r.id, kind: r.kind, host: r.host, sysAu: r.sysAu, galPc: r.galPc, dir: r.dir });
+    const entry = { o: r.o, spec, renderer, id: r.id, kind: r.kind, host: r.host, sysAu: r.sysAu, galPc: r.galPc, dir: r.dir };
+    if (!r.galPc && r.dir && ctx.frame !== 'system') entry.atInfinity = true;
+    out.push(entry);
   }
   return out;
 }
 
 export function framePos(entry, cam) {
+  if (entry.atInfinity) return relOfEntry(entry, cam);
   if (cam.frame === 'system') {
     if (!entry.sysAu) return null;
     return [entry.sysAu[0] - cam.pos[0], entry.sysAu[1] - cam.pos[1], entry.sysAu[2] - cam.pos[2]];
   }
-  return entry.galPc ? F.relFromCam(cam, entry.galPc) : null;
+  return relOfEntry(entry, cam);   // atInfinity: dir * INF_PC * unitsPerPc, the same for every camera position
+}
+
+/** The camera-relative text for the card's `fromYou`: null for a direction-only entry (it has no distance), else fmt(rel). */
+export const fromYouFor = (entry, rel, fmt) => (!entry || entry.atInfinity || !rel ? null : fmt(rel));
+
+/** Counts of the visible entries by kind: { counts: {kind: n}, direct: {kind: n of them direction only} } for the HUD (galaxy frame). */
+export function visibleCounts(visible) {
+  const counts = {}, direct = {};
+  for (const e of visible) { counts[e.kind] = (counts[e.kind] || 0) + 1; if (e.atInfinity) direct[e.kind] = (direct[e.kind] || 0) + 1; }
+  return { counts, direct };
 }
 
 export function groupState(store, visible, cam, pxPerRad, GROUP_PX = 8) {
   if (cam.frame !== 'galaxy') return {};
   const by = new Map();
   for (const e of visible) {
-    if (!e.host || !e.sysAu) continue;
+    if (e.atInfinity || !e.host || !e.sysAu) continue;   // direction-only entries have no host
     if (!by.has(e.host)) by.set(e.host, []);
     by.get(e.host).push(e);
   }
@@ -322,10 +371,10 @@ export function choosePick(cands) {
   return best;
 }
 
-export function pickObjects(visible, groups, px, py, maxPx, { project, framePos: pos, reach = () => 0 }) {
+export function pickObjects(visible, groups, px, py, maxPx, { project, framePos: pos, reach = () => 0, skyFade: sky = 1 }) {
   const cands = [];
   for (const e of visible) {
-    if (isGrouped(groups, e)) continue;
+    if (isGrouped(groups, e) || (e.atInfinity && !infinityPickable(sky))) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
     if (d <= Math.max(maxPx, reach(e) || 0)) cands.push({ sel: { kind: e.kind, id: e.id }, priority: pickPriority(e), d });
@@ -339,13 +388,14 @@ export function pickObjects(visible, groups, px, py, maxPx, { project, framePos:
   return choosePick(cands);
 }
 
-export function labelCandidates(visible, groups, { project, framePos: pos, discPx = () => 0 }) {
+export function labelCandidates(visible, groups, { project, framePos: pos, discPx = () => 0, skyFade: sky = 1 }) {
   const out = [], pools = new Map();
   for (const e of visible) {
-    const L = e.spec.label; if (!L || isGrouped(groups, e)) continue;
+    const L = e.spec.label; if (!L || isGrouped(groups, e) || (e.atInfinity && !infinityPickable(sky))) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     if (L.hideOverDiscPx != null && discPx(e) > L.hideOverDiscPx) continue;
     const item = { x: q[0], y: q[1], key: L.key(e.o), text: e.o.name };
+    if (e.atInfinity) item.alpha = sky;
     if (L.max == null) { out.push(item); continue; }
     const pool = L.group || e.kind;
     if (!pools.has(pool)) pools.set(pool, { max: L.max, items: [] });
@@ -360,8 +410,13 @@ export function labelCandidates(visible, groups, { project, framePos: pos, discP
   return out;
 }
 
-export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost } = {}) {
+export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost, placement } = {}) {
   if (!target || target.kind === 'star') return { type: 'star' };
+  if (target.kind !== 'group') {   // a direction-only target: turn to it (section 17.5)
+    if (target.atInfinity && target.dir) return { type: 'look', dir: target.dir.slice() };
+    const pl = placement && target.id ? placement(target.id) : null;
+    if (pl && !pl.galPc && !pl.sysAu && pl.dir) return { type: 'look', dir: pl.dir.slice() };
+  }
   const isGroup = target.kind === 'group', raw = isGroup ? (target.host || String(target.id).replace(/^group:/, '')) : target.host;
   const hostId = raw && resolveHost ? resolveHost(raw) || raw : raw;
   if (!hostId) return { type: 'fly-galaxy' };
@@ -378,6 +433,11 @@ export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000
   const out = [], upc = F.unitsPerPc(cam), nearFade = smoothstep(F.ENTER_PC, 4 * F.ENTER_PC, nearPc);
   for (const e of visible) {
     if (e.renderer !== 'billboard') continue;
+    if (e.spec.billboard === 'nebula') {
+      const it = nebulaItem(e, cam, { project, evidence, nearFade, pxPerRad });
+      if (it) out.push(it);
+      continue;
+    }
     const rel = framePos(e, cam), r50 = toPc(e.o.size && e.o.size.radius);
     if (!rel || !(r50 > 0)) continue;
     const dist = Math.hypot(rel[0], rel[1], rel[2]), radiusUnits = r50 * upc;
@@ -406,7 +466,7 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
   const out = [];
   const put = (rel, size, a, c) => out.push(rel[0], rel[1], rel[2], size, a, c[0], c[1], c[2]);
   for (const e of visible) {
-    if (e.renderer !== 'marker' || (e.host && groups[e.host] && groups[e.host].grouped)) continue;
+    if ((e.renderer !== 'marker' && e.renderer !== 'lensing') || (e.host && groups[e.host] && groups[e.host].grouped)) continue;   // a lensing look keeps its marker (the Evidence view shows only that)
     const rel = framePos(e, cam);
     if (rel) { const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o); put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), 1, e.spec.color(e.o)); }
   }
@@ -414,7 +474,8 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
     const by = new Map(visible.map((e) => [e.id, e]));
     for (const it of items) {
       const e = by.get(it.id);
-      if (e && it.nearFade > 0) put(it.rel, markerSize(it.hollow ? Math.max(e.spec.markerPx(e.o), HOLLOW_MIN_PX) : e.spec.markerPx(e.o), it.hollow), (it.candidate ? 0.5 : 1) * it.nearFade, e.spec.color(e.o));
+      const a = it.markerAlpha != null ? it.markerAlpha : (it.candidate ? 0.5 : 1) * it.nearFade;   // nebulae carry their own (nearFade x skyFade)
+      if (e && a > 0) put(it.rel, markerSize(it.hollow ? Math.max(e.spec.markerPx(e.o), HOLLOW_MIN_PX) : e.spec.markerPx(e.o), it.hollow), a, e.spec.color(e.o));
     }
   }
   for (const [host, g] of Object.entries(groups)) {
@@ -436,13 +497,16 @@ const nounOf = (ks, n) => {
 };
 const isTrunc = (ks, st) => ks.some((k) => st && st[k] && st[k].truncated);
 
-export function countPhrase(ks, counts = {}, kindStatus = {}) {
+export function countPhrase(ks, counts = {}, kindStatus = {}, direct = {}) {
   const n = ks.reduce((s, k) => s + (counts[k] || 0), 0), trunc = isTrunc(ks, kindStatus);
   if (!n && !trunc) return '';
-  const noun = nounOf(ks, n);
-  if (!trunc) return `${fmtN(n)} ${noun}`;
-  if (ks.length === 1 && ks[0] === 'exoplanet') return `${fmtN(n)} ${noun} of the brightest hosts (more in this cone)`;
-  return `${fmtN(n)} ${isSmallGroup(ks) ? 'brightest ' : ''}${noun} (more in this cone)`;
+  const noun = nounOf(ks, n), dn = ks.reduce((s, k) => s + (direct[k] || 0), 0);
+  let text;
+  if (!trunc) text = `${fmtN(n)} ${noun}`;
+  else if (ks.length === 1 && ks[0] === 'exoplanet') text = `${fmtN(n)} ${noun} of the brightest hosts (more in this cone)`;
+  else text = `${fmtN(n)} ${isSmallGroup(ks) ? 'brightest ' : ''}${noun} (more in this cone)`;
+  if (dn > 0) text = text.endsWith(')') ? `${text.slice(0, -1)}, ${fmtN(dn)} direction only)` : `${text} (${fmtN(dn)} direction only)`;
+  return text;
 }
 
 export function capNotes(kindStatus = {}) {
@@ -541,18 +605,93 @@ export function mergeStarSystem(system, rec) {
   return { ...(system || {}), values: vals, notes };
 }
 export function resolveStarAliases(stars, has) {
-  const append = [], alias = new Map();
+  const append = [], alias = new Map(), prefer = new Map();
   for (const rec of stars.values()) {
     const ids = [rec.id, ...(Array.isArray(rec.same_as) ? rec.same_as.filter((a) => typeof a === 'string') : [])];
     const loaded = ids.find(has);
     let key = loaded || null;
     if (!key && objectStarParams(rec)) { key = rec.id; append.push(rec); }
+    else if (key && preferredStarDistance(rec) && !prefer.has(key)) prefer.set(key, rec);   // loaded under Gaia's own distance: re-place it
     if (key) for (const id of ids) if (!alias.has(id)) alias.set(id, key);
   }
-  return { append, alias };
+  return { append, alias, prefer };
+}
+/**
+ * A loaded star row re-placed at the curated distance of its prefer_record record (section 17.8): the Gaia direction and apparent G are kept and
+ * only the distance (hence the absolute magnitude) changes. row = { xyz: [x, y, z] pc (the Gaia row, at its own distance), abs } or { dir, d, abs };
+ * the apparent G is abs + 5 log10(d) - 5. -> { pos: [x, y, z] pc, d, abs, gaiaPc } or null (no prefer_record, or no usable row).
+ */
+export function preferredStarPlacement(rec, row) {
+  const pd = preferredStarDistance(rec);
+  if (!pd || !row) return null;
+  const xyz = row.xyz || (row.dir && row.d > 0 ? row.dir.map((v) => v * row.d) : null);
+  if (!xyz || !xyz.every(Number.isFinite)) return null;
+  const gaiaPc = Math.hypot(xyz[0], xyz[1], xyz[2]);
+  if (!(gaiaPc > 0)) return null;
+  const k = pd.pc / gaiaPc, g = Number.isFinite(row.abs) ? row.abs + 5 * Math.log10(gaiaPc) - 5 : null;
+  return { pos: [xyz[0] * k, xyz[1] * k, xyz[2] * k], d: pd.pc, abs: g === null ? row.abs : g - 5 * Math.log10(pd.pc) + 5, gaiaPc };
 }
 export function starSignature(stars) {
   let s = '';
   for (const r of stars.values()) s += `${r.id}=${Array.isArray(r.same_as) ? r.same_as.join(',') : ''};`;
   return s;
+}
+
+// ------------------------------------------------------------------ lensing (section 17.9)
+export const LENS_MIN_PX = 9, SHADOW_PER_RS = 2.598;   // the shadow's radius is sqrt(27) GM / c^2 = 2.598 r_s
+/**
+ * Items for the lensing renderer (pure data; the renderer draws a screen quad of radius 4 * px per item). Entries whose renderer is 'lensing' with a
+ * size.radius (r_s); none in the Evidence view (marker only, markerPoints draws it). item = { id, kind, rel, dist, rShadow, truePx, px, enlarged,
+ * factor, disc, incl, inclAssumed, screen? }
+ *   rShadow  2.598 r_s in frame units (system: AU, galaxy: pc);  truePx  atan(rShadow / dist) * pxPerRad;  px  max(truePx, LENS_MIN_PX)
+ *   enlarged truePx < LENS_MIN_PX, factor LENS_MIN_PX / truePx (1 when not enlarged): the card says "Drawn enlarged ×3e9: ..."
+ *   disc     the state is accreting (isAccreting);  incl  degrees, i_deg when known else 60 (illustrative; inclAssumed)
+ */
+export function lensingItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null } = {}) {
+  if (evidence) return [];
+  const out = [], upc = F.unitsPerPc(cam);
+  for (const e of visible) {
+    if (e.renderer !== 'lensing') continue;
+    const rel = framePos(e, cam), rs = toKm(e.o.size && e.o.size.radius);
+    if (!rel || !(rs > 0)) continue;
+    const rShadow = SHADOW_PER_RS * (rs / (F.AU_PER_PC * KM_PER_AU)) * upc, dist = Math.hypot(rel[0], rel[1], rel[2]);
+    const truePx = dist > 0 ? Math.atan(rShadow / dist) * pxPerRad : Infinity, enlarged = truePx < LENS_MIN_PX;
+    const iq = e.o.position && e.o.position.elements && e.o.position.elements.i_deg, known = !!iq && Number.isFinite(iq.v);
+    const item = { id: e.id, kind: e.kind, rel, dist, rShadow, truePx, px: Math.max(truePx, LENS_MIN_PX), enlarged, factor: enlarged ? LENS_MIN_PX / truePx : 1,
+      disc: isAccreting(e.o), incl: known ? iq.v : 60, inclAssumed: !known };
+    if (project) item.screen = project(rel);
+    out.push(item);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ credits line (section 17.2)
+/**
+ * The datasets that returned records in the cone and carry a `credit`: [{ dataset, text: 'credit · licence_name', credit, licenceName, licence }].
+ * sources: the /api/objects `sources` rows ({ id, status, count, provenance: { dataset, credit, licence_name, licence } }); counts: { dataset: n } of
+ * the records that fell in the cone (datasetCounts), or omitted to use each row's own `count`. A row without a credit, with an error, or with no
+ * records adds nothing. Equal credit lines are listed once.
+ */
+export function creditItems(sources, counts = null) {
+  const out = [], seen = new Set();
+  for (const row of Array.isArray(sources) ? sources : []) {
+    const pv = row && row.provenance;
+    if (!pv || typeof pv.credit !== 'string' || !pv.credit.trim() || (row.status && row.status !== 'ok')) continue;
+    const ds = pv.dataset || String(row.id || '').replace(/^static:/, ''), n = counts ? counts[ds] : row.count;
+    if (!(n > 0)) continue;
+    const credit = pv.credit.trim(), name = typeof pv.licence_name === 'string' ? pv.licence_name.trim() : '';
+    const text = name ? `${credit} · ${name}` : credit;
+    if (seen.has(text)) continue;
+    seen.add(text); out.push({ dataset: ds, text, credit, licenceName: name || null, licence: pv.licence || null });
+  }
+  return out;
+}
+/** The credits line of the 3D view: the items of creditItems joined with ' | ', '' when there are none. */
+export const creditsLine = (sources, counts = null) => creditItems(sources, counts).map((i) => i.text).join(' | ');
+/** { dataset: n } of the store's records that are in the cone, by record provenance.dataset (the counts creditsLine wants). */
+export function datasetCounts(store) {
+  const out = {};
+  for (const r of store.recs) { const ds = r.o.provenance && r.o.provenance.dataset; if (ds && r.o.in_cone === true) out[ds] = (out[ds] || 0) + 1; }
+  for (const s of store.stars.values()) { const ds = s.provenance && s.provenance.dataset; if (ds && s.in_cone === true) out[ds] = (out[ds] || 0) + 1; }
+  return out;
 }

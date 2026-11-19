@@ -21,8 +21,8 @@ const ctx = (o = {}) => ({ fromYou: '1.5 pc · 4.9 ly', evidence: false, fmtNum:
 
 test('the Phase 0 kinds and layers are registered and every kind points at a real layer', () => {
   for (const k of ['sun', 'planet', 'moon', 'dwarf_planet', 'asteroid', 'comet', 'star']) assert.ok(R.kindSpec(k), k);
-  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets', 'exoplanets', 'clusters', 'clusterCandidates']);
-  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar', 'beyond', 'beyond', 'beyond']);
+  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets', 'exoplanets', 'clusters', 'clusterCandidates', 'nebulae', 'blackHoles']);
+  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar', 'beyond', 'beyond', 'beyond', 'beyond', 'beyond']);
   const ids = new Set(R.layers().map((l) => l.id));
   for (const s of R.kinds()) assert.ok(s.layer === null || ids.has(s.layer), `${s.kind} layer`);
   assert.equal(R.kindSpec('star').builtin, true); assert.equal(R.kindSpec('star').layer, null); assert.equal(R.kindSpec('star').pick.priority, 20);
@@ -353,4 +353,167 @@ test('a catalogue bound is shown as the bound, never as a value or n/a', async (
   assert.deepEqual(rows.find((r) => r[0] === 'Radius').slice(0, 2), ['Radius', '> 3.1 R⊕']);
   assert.equal(planetLine(o).line, '3 d · > 3.1 R⊕ · < 0.12 Mj');
   assert.equal(kindSpec('exoplanet').frames.system(o), 'point');   // a bound is no size to draw a sphere with
+});
+
+// ====================================================================== Phase 2: nebulae and black holes
+const cq = (v, unit, tier = 'catalogue', src = 'OpenNGC v20260501') => ({ v, unit, tier, src });
+const nebRec = (o = {}) => ({
+  id: 'ongc:NGC1976', kind: 'nebula', name: 'Orion Nebula', designations: ['M 42', 'NGC 1976', 'Sh2-281'], host: null, parent: null,
+  position: { model: 'fixed', ra: 83.8186667, dec: -5.3896667, epoch: 2000, method: 'photometric', tier: 'catalogue',
+    dist: { v: 400, lo: 360, hi: 440, unit: 'pc', src: 'Russeil 2003, A&A 397, 133, table3', tier: 'inferred' } },
+  size: { radius: { v: 5.8, unit: 'pc', src: 'from angular size and distance', tier: 'inferred' }, angular: { major: cq(90, 'arcmin'), minor: cq(60, 'arcmin'), pa: null } },
+  props: { type: cq('Cluster with nebula', undefined, 'catalogue', 'OpenNGC v20260501 (Cl+N)'), vmag: cq(4, 'mag'), bmag: cq(5, 'mag'), sh2_form: cq('irregular', undefined, 'catalogue', 'Sharpless 1959 (VII/20) Form 3') },
+  in_cone: true, evidence: 'derived', render: { mag: 4 }, ...o,
+});
+const dirOnlyNeb = (o = {}) => nebRec({ id: 'ongc:NGC1952', name: 'Crab Nebula', designations: ['M 1', 'NGC 1952', 'Sh2-244'], evidence: 'measured',
+  position: { model: 'fixed', ra: 83.633, dec: 22.014, epoch: 2000, tier: 'catalogue', dist: null }, size: { radius: null, angular: { major: cq(8, 'arcmin'), minor: cq(4, 'arcmin'), pa: null } },
+  props: { type: cq('Supernova remnant') }, ...o });
+const ring = () => nebRec({ id: 'ongc:NGC6720', name: 'Ring Nebula', designations: ['M 57', 'NGC 6720'], evidence: 'measured',
+  position: { model: 'fixed', ra: 283.3959, dec: 33.0286, epoch: 2000, method: 'parallax', tier: 'catalogue', dist: { v: 787.65, lo: 761.41, hi: 815.77, unit: 'pc', src: 'Chornay & Walton 2021', tier: 'measured' } },
+  size: { radius: { v: 0.1455, unit: 'pc', src: 'from angular size and distance', tier: 'inferred' }, angular: { major: cq(1.27, 'arcmin'), minor: null, pa: null } },
+  props: { type: cq('Planetary nebula'), vmag: cq(8.8, 'mag'), central_star: cq('Gaia EDR3 2090486618786534784') } });
+const row = (c, label) => c.rows.find((r) => r[0] === label);
+
+test('Phase 2 layers: nebulae and blackHoles in group beyond, on by default, persisted like the rest', () => {
+  const by = Object.fromEntries(R.layers().map((l) => [l.id, l]));
+  assert.deepEqual([by.nebulae, by.blackHoles], [{ id: 'nebulae', label: 'Nebulae', group: 'beyond', on: true, parent: null }, { id: 'blackHoles', label: 'Black holes', group: 'beyond', on: true, parent: null }]);
+  assert.equal(R.layerOf('nebula'), 'nebulae'); assert.equal(R.layerOf('black_hole'), 'blackHoles');
+  const st = stub(); const m = R.loadLayers(st); assert.equal(m.nebulae, true); assert.equal(m.blackHoles, true);
+  R.saveLayers({ ...m, nebulae: false, blackHoles: false }, st);
+  const back = R.loadLayers(st); assert.deepEqual([back.nebulae, back.blackHoles, back.clusters], [false, false, true]);
+  assert.deepEqual(R.beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole']);
+});
+
+test('nebula and black hole specs: frames, scope, picks, labels, arrival, colours', () => {
+  const N = R.kindSpec('nebula'), B = R.kindSpec('black_hole');
+  assert.deepEqual(N.frames, { galaxy: 'billboard' }); assert.equal(N.billboard, 'nebula'); assert.equal(R.kindSpec('cluster').billboard, undefined);
+  assert.equal(N.galaxyScope, 'cone'); assert.deepEqual(N.pick, { priority: 26, marker: 17 }); assert.deepEqual(N.noun, ['nebula', 'nebulae']); assert.equal(N.go, 'fly-galaxy');
+  assert.equal(N.label.max, 12);
+  assert.ok(N.label.key(nebRec({ name: 'Orion Nebula' })) < N.label.key(nebRec({ name: 'NGC 6720' })), 'common names first');
+  assert.ok(N.label.key(nebRec({ name: 'Orion Nebula' })) < N.label.key(nebRec({ name: 'Rosette Nebula', size: { angular: { major: cq(80, 'arcmin') } } })), 'then the larger first');
+  assert.equal(N.label.key(nebRec({ name: 'Sh2-276', size: { angular: { major: cq(1200, 'arcmin') } } })), 1000 - 1200);
+  assert.ok(Math.abs(N.arrivePc(nebRec()) - 3 * 400 * Math.tan(45 * Math.PI / 180 / 60)) < 1e-9); assert.equal(N.arrivePc(dirOnlyNeb()), 0);
+  assert.ok(Math.abs(R.nebulaSemiMajorPc(nebRec()) - 400 * Math.tan(45 * Math.PI / 180 / 60)) < 1e-12);
+  // a look per type, a marker colour per look
+  const looks = ['Emission nebula', 'Reflection nebula', 'Planetary nebula', 'Supernova remnant', 'Dark nebula'].map((t) => R.nebulaLook(nebRec({ props: { type: cq(t) } })));
+  assert.deepEqual(looks, ['emission', 'reflection', 'planetary', 'snr', 'dark']);
+  assert.equal(new Set(looks.map((l, i) => N.color(nebRec({ props: { type: cq(['Emission nebula', 'Reflection nebula', 'Planetary nebula', 'Supernova remnant', 'Dark nebula'][i]) } })).join())).size, 5);
+  assert.equal(R.rendererOf(N, 'galaxy', nebRec()), 'billboard'); assert.equal(R.rendererOf(N, 'system', nebRec()), null);
+  const fixed = { host: null }, hosted = { host: 'gdr3:1' };
+  assert.equal(R.rendererOf(B, 'galaxy', fixed), 'lensing'); assert.equal(R.rendererOf(B, 'system', fixed), null);
+  assert.equal(R.rendererOf(B, 'system', hosted), 'lensing'); assert.equal(R.rendererOf(B, 'galaxy', hosted), 'marker');
+  assert.equal(B.hosted, true); assert.deepEqual(B.noun, ['black hole', 'black holes']); assert.equal(B.galaxyScope, 'cone');
+  assert.equal(B.visible({ evidence: 'illustrative' }, { evidence: true }), false); assert.equal(B.visible({ evidence: 'measured' }, { evidence: true }), true);
+  assert.equal(N.visible(dirOnlyNeb(), { evidence: true }), true, 'a direction is measured: it stays in the Evidence view');
+});
+
+test('nebula card, derived and placed: rows with tiers, the Data row with the Sharpless credit, the illustrative look row', () => {
+  const c = R.kindSpec('nebula').card(nebRec(), ctx({ fromYou: '350 pc · 1,140 ly' }));
+  assert.equal(c.title, 'Orion Nebula'); assert.equal(c.subtitle, 'Cluster with nebula');
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'Distance (photometric)', 'Angular size', 'Radius (from angular size and distance)', 'Magnitude', 'Sharpless morphology', 'From you', 'Look', 'Data']);
+  assert.deepEqual(row(c, 'Distance (photometric)').slice(1, 3), ['400 pc (360–440)', 'inferred']); assert.match(row(c, 'Distance (photometric)')[3], /Russeil 2003/);
+  assert.deepEqual(row(c, 'Angular size').slice(1, 3), ['90′ × 60′, PA unknown', 'catalogue']);
+  assert.equal(row(c, 'Radius (from angular size and distance)')[2], 'inferred'); assert.equal(row(c, 'Magnitude')[1], 'V 4 · B 5');
+  assert.equal(row(c, 'Sharpless morphology')[1], 'irregular'); assert.equal(row(c, 'From you')[1], '350 pc · 1,140 ly');
+  assert.deepEqual(row(c, 'Look').slice(1, 3), ['illustrative, generated from its type and size', 'illustrative']);
+  assert.equal(row(c, 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Sharpless 1959 via VizieR');
+  assert.equal(c.notes.length, 2); assert.match(c.notes[0], /Russeil 2003/); assert.match(c.notes[1], /orientation/);
+  const e = R.kindSpec('nebula').card(nebRec(), ctx({ evidence: true, fromYou: null }));
+  assert.equal(row(e, 'Look'), undefined, 'the illustrative look row is dropped in the Evidence view'); assert.ok(row(e, 'Data'), 'the credit stays'); assert.ok(row(e, 'Distance (photometric)'));
+});
+
+test('nebula card, measured planetary nebula: the OpenNGC-only Data row, central star, a catalogued size with an unknown minor axis', () => {
+  const c = R.kindSpec('nebula').card(ring(), ctx());
+  assert.equal(row(c, 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0');
+  assert.deepEqual(row(c, 'Distance (parallax)').slice(1, 3), ['788 pc (761–816)', 'measured']); assert.match(row(c, 'Central star')[1], /Gaia EDR3 2090486618786534784/);
+  assert.equal(row(c, 'Angular size')[1], '1.27′ across, PA unknown'); assert.equal(c.notes.length, 1, 'no derived-distance note');
+  assert.equal(row(R.kindSpec('nebula').card(nebRec({ id: 'sh2:276', designations: [] }), ctx()), 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Sharpless 1959 via VizieR', 'a sh2: id counts');
+  assert.equal(row(R.kindSpec('nebula').card(nebRec({ designations: ['M 42'], id: 'ongc:NGC1976' }), ctx()), 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0', 'no Sh2 designation: no Sharpless credit');
+  const full = R.kindSpec('nebula').card(nebRec({ props: { type: cq('Nebula') }, size: { radius: null, angular: { major: cq(90, 'arcmin'), minor: cq(60, 'arcmin'), pa: cq(30, 'deg') } } }), ctx());
+  assert.equal(row(full, 'Angular size')[1], '90′ × 60′, PA 30°');
+});
+
+test('nebula card, direction only: unknown distance, no From you row even when one is passed, the notes', () => {
+  const c = R.kindSpec('nebula').card(dirOnlyNeb(), ctx({ fromYou: '9,999,999 pc' }));
+  assert.deepEqual(row(c, 'Distance').slice(1, 3), ['unknown · drawn on the sky as seen from the Sun', 'catalogue']); assert.equal(row(c, 'Distance')[3], 'no distance in the adopted catalogues');
+  assert.equal(row(c, 'From you'), undefined); assert.equal(row(c, 'Radius (from angular size and distance)'), undefined);
+  assert.match(row(c, 'Data')[1], /OpenNGC/); assert.match(row(c, 'Data')[1], /Sharpless/);
+  assert.equal(c.notes[0], 'No distance is known, so it is drawn at infinity in its catalogue direction. It fades when you fly far from the Sun.');
+  assert.ok(row(R.kindSpec('nebula').card(dirOnlyNeb(), ctx({ evidence: true })), 'Distance'), 'the unknown-distance row is a catalogue fact: kept in the Evidence view');
+});
+
+test('enlargementNote reads like section 17.9', () => {
+  assert.equal(R.enlargementNote({ factor: 3e9, truePx: 3e-9 }), 'Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.');
+  assert.equal(R.enlargementNote({ factor: 1.2e5, truePx: 7.4e-5 }), 'Drawn enlarged ×1e5: its shadow would be 7e-5 px from here.');
+});
+
+const bhRec = (o = {}) => ({
+  id: 'bh:Gaia BH1', kind: 'black_hole', name: 'Gaia BH1', designations: [], host: 'gdr3:4373465352415301632', parent: 'gdr3:4373465352415301632',
+  position: { model: 'orbit', host_radec: [262.17, -0.58], phase_known: true, tier: 'measured', src: 'El-Badry et al. 2023, MNRAS 518, 1057, Table 1',
+    elements: { period_d: q(185.59, 'd', 'measured', 'El-Badry Table 1'), a_au: q(1.4, 'au'), e: q(0.451, undefined, 'measured', 'El-Badry Table 1'), i_deg: q(126.6, 'deg', 'measured', 'El-Badry Table 1'), node_deg: q(277.8, 'deg') } },
+  size: { radius: q(28.41, 'km', 'inferred', 'Schwarzschild radius from the mass (non-rotating)'), angular: null },
+  props: { mass: { v: 9.62, lo: 9.44, hi: 9.8, unit: 'Msun', src: 'El-Badry 2023', tier: 'measured' }, companion_mass: q(0.93, 'Msun', 'measured'), type: q('stellar-mass', undefined, 'catalogue'), state: q('dormant: no accretion detected', undefined, 'catalogue') },
+  evidence: 'measured', in_cone: true, render: { style: 'lensing' }, ...o,
+});
+const sgrRec = () => bhRec({ id: 'bh:Sgr A*', name: 'Sagittarius A*', host: null, parent: null,
+  position: { model: 'fixed', ra: 266.4168, dec: -29.0078, epoch: 2000, method: 'orbit-fit', tier: 'measured', dist: { v: 8277, lo: 8268, hi: 8286, unit: 'pc', src: 'GRAVITY Collaboration 2022', tier: 'measured' } },
+  size: { radius: q(1.269e7, 'km', 'inferred', 'Schwarzschild radius from the mass (non-rotating)'), angular: null },
+  props: { mass: { v: 4297000, lo: 4285000, hi: 4309000, unit: 'Msun', src: 'GRAVITY 2022', tier: 'measured' }, type: q('supermassive', undefined, 'catalogue'), state: q('low-luminosity accretion', undefined, 'catalogue') } });
+
+test('black hole card, fixed (Sgr A*): type, state, mass, distance, r_s inferred, the enlargement note and the illustrative look', () => {
+  const c = R.kindSpec('black_hole').card(sgrRec(), ctx({ lensing: { enlarged: true, factor: 3e9, truePx: 3e-9 }, fromYou: '8,277 pc' }));
+  assert.equal(c.title, 'Sagittarius A*'); assert.equal(c.subtitle, 'Black hole');
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (orbit-fit)', 'Event horizon (r_s)', 'From you', 'Look']);
+  assert.deepEqual(row(c, 'Mass').slice(1, 3), ['4,300,000 M☉ (4,290,000–4,310,000)', 'measured']); assert.deepEqual(row(c, 'Distance (orbit-fit)').slice(1, 3), ['8,280 pc (8,270–8,290)', 'measured']);
+  assert.deepEqual(row(c, 'Event horizon (r_s)').slice(1, 3), ['12,700,000 km', 'inferred']); assert.match(row(c, 'Event horizon (r_s)')[3], /Schwarzschild/);
+  assert.match(row(c, 'Look')[1], /accretion disc/); assert.equal(row(c, 'Look')[2], 'illustrative');
+  assert.deepEqual(c.notes, ['Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.', 'The disc and ring are illustrative.']);
+  const ev = R.kindSpec('black_hole').card(sgrRec(), ctx({ evidence: true })); assert.equal(row(ev, 'Look'), undefined); assert.ok(row(ev, 'Event horizon (r_s)'));
+  assert.deepEqual(R.kindSpec('black_hole').card(sgrRec(), ctx()).notes, ['The disc and ring are illustrative.'], 'no enlargement note without a lensing item');
+});
+
+test('black hole card, hosted: companion distance, orbit rows with their evidence, no disc for a dormant black hole', () => {
+  const host = { position: { dist: { v: 478.47, lo: 473.93, hi: 483.09, unit: 'pc', src: 'El-Badry et al. 2023, Table 1', tier: 'measured' } } };
+  const c = R.kindSpec('black_hole').card(bhRec(), ctx({ hostName: 'Gaia BH1 companion', hostRecord: host, place: { sysAu: [1, 0.5, 0.2], galPc: [100, 100, 100], orbit: null } }));
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (its companion\'s)', 'Event horizon (r_s)', 'Orbital period', 'Eccentricity', 'Inclination', 'Orbit evidence', 'Companion', 'From its companion now', 'From you', 'Look']);
+  assert.deepEqual(row(c, 'Distance (its companion\'s)').slice(1, 3), ['478 pc (474–483)', 'measured']);
+  assert.deepEqual(row(c, 'Orbital period').slice(1, 3), ['186 d', 'measured']); assert.deepEqual(row(c, 'Eccentricity').slice(1, 3), ['0.451', 'measured']); assert.equal(row(c, 'Inclination')[1], '127°');
+  assert.deepEqual(row(c, 'Orbit evidence').slice(1, 3), ['measured orbit', 'measured']); assert.match(row(c, 'Orbit evidence')[3], /El-Badry/);
+  assert.equal(row(c, 'Companion')[1], 'Gaia BH1 companion · 0.93 M☉'); assert.equal(row(c, 'From its companion now')[1], '1.14 AU');
+  assert.doesNotMatch(row(c, 'Look')[1], /disc/); assert.match(c.notes[c.notes.length - 1], /El-Badry/);
+  // an X-ray binary: illustrative placement, assumed eccentricity, hidden rows in the Evidence view
+  const x = bhRec({ evidence: 'illustrative', position: { ...bhRec().position, tier: 'illustrative', phase_known: false, elements: { period_d: q(5.6, 'd'), a_au: q(0.2, 'au', 'inferred'), e: q(0, undefined, 'illustrative', 'assumed'), i_deg: null, node_deg: null } },
+    props: { ...bhRec().props, state: q('X-ray binary (accreting)', undefined, 'catalogue') } });
+  const cx = R.kindSpec('black_hole').card(x, ctx({ hostName: 'HD 226868', place: { sysAu: [0.1, 0, 0], galPc: [1000, 0, 0] } }));
+  assert.deepEqual(row(cx, 'Eccentricity').slice(1, 3), ['0 (assumed)', 'illustrative']); assert.equal(row(cx, 'Inclination')[2], 'illustrative');
+  assert.deepEqual(row(cx, 'Orbit evidence').slice(1, 3), ['illustrative placement', 'illustrative']); assert.equal(row(cx, 'From its companion now')[2], 'illustrative');
+  assert.equal(row(cx, 'Distance (its companion\'s)')[1], '1,000 pc'); assert.match(row(cx, 'Look')[1], /accretion disc/);
+  assert.ok(cx.notes.some((n) => /illustrative/.test(n) && /orientation/.test(n)));
+  const ev = R.kindSpec('black_hole').card(x, ctx({ evidence: true, hostName: 'HD 226868' }));
+  assert.equal(row(ev, 'Eccentricity'), undefined); assert.equal(row(ev, 'Look'), undefined); assert.ok(row(ev, 'Orbital period'), 'measured period stays');
+  assert.equal(R.isAccreting(x), true); assert.equal(R.isAccreting(bhRec()), false); assert.equal(R.isAccreting(sgrRec()), true);
+});
+
+test('childGroups: one heading per kind from the registry nouns, in registry order, with a line each', () => {
+  const planet = exoRec(), g = R.childGroups([bhRec(), planet, bhRec({ id: 'bh:2', name: 'Two' })]);
+  assert.deepEqual(g.map((x) => x.title), ['Exoplanets · 1', 'Black holes · 2']); assert.deepEqual(g.map((x) => x.kind), ['exoplanet', 'black_hole']);
+  assert.equal(g[0].items[0].name, 'TRAPPIST-1 b'); assert.equal(g[1].items[0].line, '9.62 M☉ · 186 d'); assert.equal(g[1].items[0].tier, 'measured');
+  assert.deepEqual(R.childGroups([]), []);
+  assert.equal(R.childLine(planet).line, R.planetLine(planet).line);
+});
+
+test('the star card for a prefer_record star: the curated distance with its paper, then the Gaia single-star value as not used with the reason', () => {
+  const rec = { id: 'gdr3:5870569352746779008', kind: 'star', name: 'Gaia BH2 companion',
+    prefer_record: { replace: 'dist', reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
+    position: { model: 'fixed', ra: 1, dec: 2, dist: { v: 1164.1, lo: 1140.5, hi: 1189, unit: 'pc', src: 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas', tier: 'measured' } },
+    props: { gaia_parallax: { v: 0.6721, lo: 0.5676, hi: 0.7766, unit: 'mas', src: 'Gaia DR3 single-star solution (RUWE 8.0)', tier: 'measured' } } };
+  const r = R.preferredStarDistance(rec);
+  assert.ok(Math.abs(r.pc - 1164.1) < 1e-9); assert.ok(r.notUsed.pc > 1480 && r.notUsed.pc < 1495);
+  const c = R.preferredDistanceRows(rec, { bjPc: 1470.2 });
+  assert.deepEqual(c.rows[0], ['Distance', '1,160 pc (1,140–1,190)', 'measured', 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas']);
+  assert.equal(c.rows[1][0], 'Gaia single-star distance · not used'); assert.equal(c.rows[1][1], 'parallax 0.672 mas → 1,490 pc · Bailer-Jones 1,470 pc'); assert.equal(c.rows[1][3], 'Gaia DR3 single-star solution (RUWE 8.0)');
+  assert.equal(c.notes.length, 1); assert.match(c.notes[0], /not used: The single-star Gaia solution ignores the 1,277-day orbit/);
+  assert.equal(R.evidenceRows(c.rows, true).length, 2, 'measured rows stay in the Evidence view');
+  assert.equal(R.preferredDistanceRows({ ...rec, prefer_record: undefined }), null);
+  assert.equal(R.preferredDistanceRows({ ...rec, props: {} }).rows[1][1], 'not used', 'no parallax on the record: the row still says it is not used');
 });

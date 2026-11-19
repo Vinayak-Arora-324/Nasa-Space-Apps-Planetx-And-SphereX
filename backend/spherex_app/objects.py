@@ -49,7 +49,7 @@ KINDS = ("sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "star", "
 TIERS = ("measured", "catalogue", "inferred", "illustrative")
 EVIDENCE = ("measured", "derived", "illustrative")
 UNITS = ("km", "au", "pc", "Mpc", "deg", "arcmin", "arcsec", "mag", "K", "d", "yr", "Gyr", "Msun",
-         "Mjup", "Mearth", "Rsun", "Rjup", "Rearth", "arcsec/h")
+         "Mjup", "Mearth", "Rsun", "Rjup", "Rearth", "arcsec/h", "mas")
 # `fixed` positions: how the distance was obtained. `state` positions use STATE_METHODS.
 METHODS = ("parallax", "bailer-jones", "cluster-parallax", "photometric", "kinematic", "cepheid",
            "trgb", "sbf", "tully-fisher", "redshift", "orbit-fit", "lens-model", "assumed")

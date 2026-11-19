@@ -1,0 +1,129 @@
+{
+ "designations": [],
+ "evidence": "measured",
+ "host": "gdr3:4373465352415301632",
+ "id": "bh:Gaia BH1",
+ "kind": "black_hole",
+ "name": "Gaia BH1",
+ "parent": "gdr3:4373465352415301632",
+ "position": {
+  "elements": {
+   "a_au": {
+    "hi": 1.41,
+    "lo": 1.39,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs): semi-major axis of the relative orbit",
+    "tier": "measured",
+    "unit": "au",
+    "v": 1.4
+   },
+   "e": {
+    "hi": 0.456,
+    "lo": 0.446,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs)",
+    "tier": "measured",
+    "v": 0.451
+   },
+   "i_deg": {
+    "hi": 127,
+    "lo": 126.2,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs)",
+    "tier": "measured",
+    "unit": "deg",
+    "v": 126.6
+   },
+   "node_deg": {
+    "hi": 278.8,
+    "lo": 276.8,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs): ascending node of the luminous star; black hole relative to its star: node = Ω (97.8 ± 1.0) + 180°",
+    "tier": "measured",
+    "unit": "deg",
+    "v": 277.8
+   },
+   "omega_deg": {
+    "hi": 13.9,
+    "lo": 11.7,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs): argument of periastron of the luminous star",
+    "tier": "measured",
+    "unit": "deg",
+    "v": 12.8
+   },
+   "period_d": {
+    "hi": 185.64,
+    "lo": 185.54,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs)",
+    "tier": "measured",
+    "unit": "d",
+    "v": 185.59
+   },
+   "t_conj_mjd": null,
+   "t_peri_mjd": {
+    "hi": 57388.1,
+    "lo": 57386.7,
+    "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs): T_p = -1.1 ± 0.7 (JD - 2457389); MJD = JD - 2400000.5 (TCB)",
+    "tier": "measured",
+    "v": 57387.4
+   }
+  },
+  "host_radec": [
+   262.1712073,
+   -0.581092
+  ],
+  "model": "orbit",
+  "phase_known": true,
+  "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs); black hole relative to its luminous star: node = Ω + 180°, same ω, i, e, P and T_p (the section 16.6 sky-plane formula, Z toward the observer, reproduces the star's Gaia Thiele-Innes offsets with the sign reversed)",
+  "tier": "measured"
+ },
+ "props": {
+  "companion": {
+   "src": "curated",
+   "tier": "catalogue",
+   "v": "Gaia BH1 companion"
+  },
+  "companion_mass": {
+   "hi": 0.98,
+   "lo": 0.88,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (G star)",
+   "tier": "catalogue",
+   "unit": "Msun",
+   "v": 0.93
+  },
+  "mass": {
+   "hi": 9.8,
+   "lo": 9.44,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (astrometry + RVs): black hole mass M2",
+   "tier": "measured",
+   "unit": "Msun",
+   "v": 9.62
+  },
+  "state": {
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833)",
+   "tier": "catalogue",
+   "v": "dormant: no accretion detected"
+  },
+  "type": {
+   "src": "curated",
+   "tier": "catalogue",
+   "v": "stellar-mass"
+  }
+ },
+ "render": {
+  "style": "lensing"
+ },
+ "size": {
+  "angular": null,
+  "radius": {
+   "hi": 28.94,
+   "lo": 27.88,
+   "src": "Schwarzschild radius from the mass (non-rotating)",
+   "tier": "inferred",
+   "unit": "km",
+   "v": 28.41
+  }
+ },
+ "provenance": {
+  "catalogue": "Space Maps curated black holes",
+  "dataset": "bh-curated",
+  "source": "static:bh-curated",
+  "version": "1"
+ }
+}

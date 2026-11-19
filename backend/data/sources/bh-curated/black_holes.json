@@ -1,0 +1,251 @@
+{
+  "format": "space-maps.bh-curated/1",
+  "curated": "2026-11-18",
+  "about": "Hand-curated black holes for Space Maps (object framework §17.8). Every number carries `src` (a key of `papers`) and `where` (the table, equation or passage it was read from); the build refuses any number without both. A value no paper gives is allowed only with `tier: \"illustrative\"` and an `assumed` reason, and is never presented as measured. Gaia DR3 positions, photometry and single-star parallaxes of the companions come from gaia-dr3-companions.csv, not from here. Orbit elements of Gaia BH1-3 are copied as printed, for the luminous star (`convention: luminous-star`); the build converts them to the black hole relative to its star (node + 180 deg, §17.8). Edited by hand in reviewed commits only.",
+  "papers": {
+    "gravity2022": { "cite": "GRAVITY Collaboration 2022, A&A 657, L12", "arxiv": "2112.07478", "doi": "10.1051/0004-6361/202142465" },
+    "reid2004": { "cite": "Reid & Brunthaler 2004, ApJ 616, 872", "arxiv": "astro-ph/0408107", "doi": "10.1086/424960" },
+    "elbadry2023a": { "cite": "El-Badry et al. 2023, MNRAS 518, 1057", "arxiv": "2209.06833", "doi": "10.1093/mnras/stac3140" },
+    "elbadry2023b": { "cite": "El-Badry et al. 2023, MNRAS 521, 4323", "arxiv": "2302.07880", "doi": "10.1093/mnras/stad799" },
+    "panuzzo2024": { "cite": "Gaia Collaboration, Panuzzo et al. 2024, A&A 686, L2", "arxiv": "2404.10486", "doi": "10.1051/0004-6361/202449763" },
+    "millerjones2021": { "cite": "Miller-Jones et al. 2021, Science 371, 1046", "arxiv": "2102.09091", "doi": "10.1126/science.abb3363" },
+    "brocksopp1999": { "cite": "Brocksopp et al. 1999, A&A 343, 861", "arxiv": "astro-ph/9812077", "doi": null },
+    "millerjones2009": { "cite": "Miller-Jones et al. 2009, ApJ 706, L230", "arxiv": "0910.5253", "doi": "10.1088/0004-637X/706/2/L230" },
+    "khargharia2010": { "cite": "Khargharia et al. 2010, ApJ 716, 1105", "arxiv": "1004.5358", "doi": "10.1088/0004-637X/716/2/1105" },
+    "casares2019": { "cite": "Casares et al. 2019, MNRAS 488, 1356", "arxiv": "1907.00005", "doi": "10.1093/mnras/stz1793" },
+    "cantrell2010": { "cite": "Cantrell et al. 2010, ApJ 710, 1127", "arxiv": "1001.0261", "doi": "10.1088/0004-637X/710/2/1127" },
+    "gandhi2019": { "cite": "Gandhi et al. 2019, MNRAS 485, 2642", "arxiv": "1804.11349", "doi": "10.1093/mnras/stz438" },
+    "atri2020": { "cite": "Atri et al. 2020, MNRAS 493, L81", "arxiv": "1912.04525", "doi": "10.1093/mnrasl/slaa010" },
+    "torres2019": { "cite": "Torres et al. 2019, ApJL 882, L21", "arxiv": "1907.00938", "doi": "10.3847/2041-8213/ab39df" },
+    "torres2020": { "cite": "Torres et al. 2020, ApJL 893, L37", "arxiv": "2003.02360", "doi": "10.3847/2041-8213/ab863a" },
+    "reid2014": { "cite": "Reid et al. 2014, ApJ 796, 2", "arxiv": "1409.2453", "doi": "10.1088/0004-637X/796/1/2" },
+    "simbad_cfa": { "cite": "SIMBAD (simbad.cfa.harvard.edu mirror), queried 2026-11-18", "arxiv": null, "doi": null }
+  },
+  "systems": [
+    {
+      "bh": {
+        "id": "bh:Sgr A*", "name": "Sagittarius A*", "designations": ["Sgr A*"],
+        "type": "supermassive", "state": "low-luminosity accretion",
+        "position": {
+          "model": "fixed", "epoch": 2000.0, "method": "orbit-fit",
+          "ra_hms": { "v": "17 45 40.0409", "src": "reid2004", "where": "note to the position-offset table: J2000 position of Sgr A* used as the reference" },
+          "dec_dms": { "v": "-29 00 28.118", "src": "reid2004", "where": "note to the position-offset table: J2000 position of Sgr A* used as the reference" },
+          "dist": { "v": 8277, "lo": 8268, "hi": 8286, "unit": "pc", "src": "gravity2022", "where": "Sec. 6 (conclusions), best fit of Sec. 4: R0 = 8277 ± 9 pc (statistical; systematic ≈ 30 pc)" }
+        },
+        "mass": { "v": 4297000, "lo": 4285000, "hi": 4309000, "unit": "Msun", "src": "gravity2022", "where": "Sec. 6 (conclusions), best fit of Sec. 4: M = (4.297 ± 0.012) × 10^6 Msun (statistical; systematic ≈ 40,000 Msun)" },
+        "parent_note": "parent stays null until gal:milky_way exists (Phase 3, §17.8)"
+      },
+      "companion": null
+    },
+    {
+      "bh": {
+        "id": "bh:Gaia BH1", "name": "Gaia BH1", "designations": [],
+        "type": "stellar-mass", "state": "dormant: no accretion detected", "state_src": "elbadry2023a",
+        "position": {
+          "model": "orbit", "convention": "luminous-star", "phase_known": true,
+          "elements": {
+            "period_d": { "v": 185.59, "err": 0.05, "unit": "d", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs)" },
+            "a_au": { "v": 1.40, "err": 0.01, "unit": "au", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs): semi-major axis of the relative orbit" },
+            "e": { "v": 0.451, "err": 0.005, "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs)" },
+            "i_deg": { "v": 126.6, "err": 0.4, "unit": "deg", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs)" },
+            "node_deg": { "v": 97.8, "err": 1.0, "unit": "deg", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs): ascending node of the luminous star" },
+            "omega_deg": { "v": 12.8, "err": 1.1, "unit": "deg", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs): argument of periastron of the luminous star" },
+            "t_peri_jd": { "v": 2457387.9, "err": 0.7, "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs): T_p = -1.1 ± 0.7 (JD - 2457389)" }
+          }
+        },
+        "mass": { "v": 9.62, "err": 0.18, "unit": "Msun", "src": "elbadry2023a", "where": "Table 1 (astrometry + RVs): black hole mass M2" }
+      },
+      "companion": {
+        "gaia_dr3": "4373465352415301632", "name": "Gaia BH1 companion", "name_src": "elbadry2023a",
+        "simbad_main_id": "GALEX J172841.0-003451",
+        "designations": ["GALEX J172841.0-003451", "2MASS J17284110-0034514"],
+        "dist": { "parallax_mas": { "v": 2.09, "err": 0.02, "src": "elbadry2023a", "where": "Table 1: parallax of the unresolved source (astrometric orbit solution)" } },
+        "prefer_reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 use the parallax fitted together with the orbit.",
+        "teff": { "v": 5850, "err": 50, "unit": "K", "src": "elbadry2023a", "where": "Table 1 (G star)" },
+        "radius": { "v": 0.99, "err": 0.05, "unit": "Rsun", "src": "elbadry2023a", "where": "Table 1 (G star)" },
+        "mass": { "v": 0.93, "err": 0.05, "unit": "Msun", "src": "elbadry2023a", "where": "Table 1 (G star)" },
+        "description": { "v": "Sun-like G dwarf", "src": "elbadry2023a", "where": "title and Table 1 (G star)" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:Gaia BH2", "name": "Gaia BH2", "designations": [],
+        "type": "stellar-mass", "state": "dormant: no accretion detected", "state_src": "elbadry2023b",
+        "position": {
+          "model": "orbit", "convention": "luminous-star", "phase_known": true,
+          "elements": {
+            "period_d": { "v": 1276.7, "err": 0.6, "unit": "d", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs)" },
+            "a_au": { "v": 4.96, "err": 0.08, "unit": "au", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs): semi-major axis of the relative orbit" },
+            "e": { "v": 0.5176, "err": 0.0009, "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs)" },
+            "i_deg": { "v": 34.87, "err": 0.34, "unit": "deg", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs)" },
+            "node_deg": { "v": 266.9, "err": 0.5, "unit": "deg", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs): ascending node of the luminous star" },
+            "omega_deg": { "v": 130.9, "err": 0.4, "unit": "deg", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs): argument of periastron of the luminous star" },
+            "t_peri_jd": { "v": 2457438.3, "err": 1.4, "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs): T_p = 49.3 ± 1.4 (JD - 2457389)" }
+          }
+        },
+        "mass": { "v": 8.94, "err": 0.34, "unit": "Msun", "src": "elbadry2023b", "where": "Table 2 (Gaia + RVs): black hole mass M2" }
+      },
+      "companion": {
+        "gaia_dr3": "5870569352746779008", "name": "Gaia BH2 companion", "name_src": "elbadry2023b",
+        "simbad_main_id": "UCAC4 154-126202",
+        "designations": ["UCAC4 154-126202", "2MASS J13501675-5914203", "TIC 207885877"],
+        "dist": { "parallax_mas": { "v": 0.859, "err": 0.018, "src": "elbadry2023b", "where": "Table 2: parallax of the unresolved source (astrometric orbit solution)" } },
+        "prefer_reason": "The single-star Gaia solution ignores the 1,277-day orbit, which biases its parallax; El-Badry et al. 2023 use the parallax fitted together with the orbit.",
+        "teff": { "v": 4604, "err": 87, "unit": "K", "src": "elbadry2023b", "where": "Table 2 (red giant)" },
+        "radius": { "v": 7.77, "err": 0.25, "unit": "Rsun", "src": "elbadry2023b", "where": "Table 2 (red giant)" },
+        "mass": { "v": 1.07, "err": 0.19, "unit": "Msun", "src": "elbadry2023b", "where": "Table 2 (red giant)" },
+        "description": { "v": "red giant", "src": "elbadry2023b", "where": "title and Table 2 (red giant)" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:Gaia BH3", "name": "Gaia BH3", "designations": [],
+        "type": "stellar-mass", "state": "dormant: no accretion detected", "state_src": "panuzzo2024",
+        "solution_note": "Pre-release (preliminary) Gaia DR4 orbital solution; the paper notes its uncertainties may be underestimated.",
+        "position": {
+          "model": "orbit", "convention": "luminous-star", "phase_known": true,
+          "elements": {
+            "period_d": { "v": 4253.1, "err": 98.5, "unit": "d", "src": "panuzzo2024", "where": "Table 2, combined solution" },
+            "a1_au": { "v": 16.17, "err": 0.27, "unit": "au", "src": "panuzzo2024", "where": "Table 2, combined solution: semi-major axis of the luminous star's orbit about the barycentre" },
+            "e": { "v": 0.7291, "err": 0.0048, "src": "panuzzo2024", "where": "Table 2, combined solution" },
+            "i_deg": { "v": 110.580, "err": 0.095, "unit": "deg", "src": "panuzzo2024", "where": "Table 2, combined solution" },
+            "node_deg": { "v": 136.236, "err": 0.128, "unit": "deg", "src": "panuzzo2024", "where": "Table 2, combined solution: ascending node of the luminous star" },
+            "omega_deg": { "v": 77.34, "err": 0.76, "unit": "deg", "src": "panuzzo2024", "where": "Table 2, combined solution: argument of periastron of the luminous star" },
+            "t_peri_jd": { "v": 2458177.39, "err": 0.88, "src": "panuzzo2024", "where": "Table 2, combined solution: T_p (JD, TCB)" }
+          }
+        },
+        "mass": { "v": 32.70, "err": 0.82, "unit": "Msun", "src": "panuzzo2024", "where": "eq. 5" }
+      },
+      "companion": {
+        "gaia_dr3": "4318465066420528000", "name": "LS II +14 13", "name_src": "simbad_cfa",
+        "simbad_main_id": "LS II +14 13",
+        "designations": ["LS II +14 13", "ALS 10389", "2MASS J19391872+1455542", "TIC 73788466"],
+        "dist": { "dist_pc": { "v": 590.6, "err": 5.8, "src": "panuzzo2024", "where": "text (extinction estimate): adopted distance, the inverse of the Table 2 combined-solution parallax 1.6933 ± 0.0164 mas" } },
+        "prefer_reason": "The single-star Gaia DR3 solution ignores the 11.6-year orbit, which biases its parallax; Panuzzo et al. 2024 use the parallax fitted together with the orbit.",
+        "teff": { "v": 5212, "err": 80, "unit": "K", "src": "panuzzo2024", "where": "Table 3" },
+        "radius": { "v": 4.936, "err": 0.016, "unit": "Rsun", "src": "panuzzo2024", "where": "Table 3" },
+        "mass": { "v": 0.76, "err": 0.05, "unit": "Msun", "src": "panuzzo2024", "where": "Table 3" },
+        "description": { "v": "very metal-poor giant of the Galactic halo", "src": "panuzzo2024", "where": "abstract" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:Cyg X-1", "name": "Cygnus X-1", "designations": ["Cyg X-1"],
+        "type": "stellar-mass", "state": "X-ray binary (accreting)",
+        "position": {
+          "model": "orbit", "convention": "xrb", "phase_known": false,
+          "node_note": "The orbit's position angle on the sky is not measured (only a jet-alignment prior), so the orientation is illustrative.",
+          "elements": {
+            "period_d": { "v": 5.599829, "err": 0.000016, "unit": "d", "src": "brocksopp1999", "where": "abstract: refined spectroscopic period" },
+            "e": { "v": 0.0189, "lo": 0.0163, "hi": 0.0217, "src": "millerjones2021", "where": "Table 1 (median, 68% bounds)" },
+            "i_deg": { "v": 27.51, "lo": 26.94, "hi": 28.28, "unit": "deg", "src": "millerjones2021", "where": "Table 1 (median, 68% bounds)" }
+          }
+        },
+        "mass": { "v": 21.2, "err": 2.2, "unit": "Msun", "src": "millerjones2021", "where": "abstract" },
+        "companion_mass": { "v": 40.6, "lo": 33.5, "hi": 48.3, "unit": "Msun", "src": "millerjones2021", "where": "text: donor star 40.6 +7.7/-7.1 Msun" }
+      },
+      "companion": {
+        "gaia_dr3": "2059383668236814720", "name": "HD 226868", "name_src": "simbad_cfa",
+        "simbad_main_id": "HD 226868",
+        "designations": ["HD 226868", "HIP 98298", "BD+34 3815", "V1357 Cyg"],
+        "dist": { "dist_kpc": { "v": 2.22, "lo": 2.05, "hi": 2.40, "src": "millerjones2021", "where": "abstract: 2.22 +0.18/-0.17 kpc (radio astrometry)" } },
+        "prefer_reason": "Miller-Jones et al. 2021 measured the distance by VLBA radio astrometry of the binary; the single-star Gaia solution is not corrected for the orbit.",
+        "mass": { "v": 40.6, "lo": 33.5, "hi": 48.3, "unit": "Msun", "src": "millerjones2021", "where": "text: donor star 40.6 +7.7/-7.1 Msun" },
+        "description": { "v": "donor star; optical counterpart of Cyg X-1", "src": "brocksopp1999", "where": "abstract (V1357 Cygni/HDE226868)" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:V404 Cyg", "name": "V404 Cygni", "designations": ["V404 Cyg", "GS 2023+338"],
+        "type": "stellar-mass", "state": "X-ray binary (accreting)",
+        "position": {
+          "model": "orbit", "convention": "xrb", "phase_known": false,
+          "node_note": "The orbit's position angle on the sky is not measured, so the orientation is illustrative.",
+          "elements": {
+            "period_d": { "v": 6.471170, "err": 0.000002, "unit": "d", "src": "casares2019", "where": "Table 3, column All" },
+            "e": { "v": 0, "tier": "illustrative", "src": null, "where": null, "assumed": "no eccentricity published; circular assumed" },
+            "i_deg": { "v": 67, "lo": 66, "hi": 70, "unit": "deg", "src": "khargharia2010", "where": "text: inclination of the binary i = 67 +3/-1 deg, used for the black hole mass" }
+          }
+        },
+        "mass": { "v": 9.0, "lo": 8.4, "hi": 9.2, "unit": "Msun", "src": "khargharia2010", "where": "abstract: 9.0 +0.2/-0.6 Msun" },
+        "mass_ratio": { "v": 0.06, "src": "khargharia2010", "where": "text: black hole mass 9.0 +0.2/-0.6 Msun derived for q = 0.06" }
+      },
+      "companion": {
+        "gaia_dr3": "2056188624872569088", "name": "V404 Cyg", "name_src": "simbad_cfa",
+        "simbad_main_id": "V* V404 Cyg",
+        "designations": ["V404 Cyg", "2MASS J20240382+3352021"],
+        "dist": { "dist_kpc": { "v": 2.39, "err": 0.14, "src": "millerjones2009", "where": "abstract: VLBA parallax 0.418 ± 0.024 mas" } },
+        "prefer_reason": "Miller-Jones et al. 2009 measured the parallax with VLBA radio astrometry; the single-star Gaia parallax is less precise and not corrected for the orbit.",
+        "description": { "v": "donor star of the X-ray binary", "src": "khargharia2010", "where": "abstract" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:A0620-00", "name": "A0620-00", "designations": ["A0620-00", "1A 0620-00", "V616 Mon"],
+        "type": "stellar-mass", "state": "X-ray binary (accreting)",
+        "position": {
+          "model": "orbit", "convention": "xrb", "phase_known": false,
+          "node_note": "The orbit's position angle on the sky is not measured, so the orientation is illustrative.",
+          "elements": {
+            "period_d": { "v": 0.3230160, "tier": "catalogue", "unit": "d", "src": "cantrell2010", "where": "Sec. 4: held fixed at P = 0.3230160 d (from Johannsen et al. 2009)" },
+            "e": { "v": 0, "tier": "illustrative", "src": "cantrell2010", "where": "Sec. 4: the orbit is assumed circular", "assumed": "assumed circular by Cantrell et al. 2010" },
+            "i_deg": { "v": 50.98, "err": 0.87, "unit": "deg", "src": "cantrell2010", "where": "Sec. 4 (conclusion of the light-curve fits)" }
+          }
+        },
+        "mass": { "v": 6.61, "err": 0.25, "unit": "Msun", "src": "cantrell2010", "where": "Sec. 4: black hole mass from the inclination" },
+        "companion_mass": { "v": 0.40, "err": 0.045, "unit": "Msun", "src": "cantrell2010", "where": "Sec. 4: stellar mass M2" }
+      },
+      "companion": {
+        "gaia_dr3": "3118721026600835328", "name": "V616 Mon", "name_src": "simbad_cfa",
+        "simbad_main_id": "1A 0620-00",
+        "identity_src": { "src": "gandhi2019", "where": "Gaia DR2 counterpart of A0620-00 (same source_id in DR3)" },
+        "designations": ["V616 Mon", "1A 0620-00", "2MASS J06224454-0020442"],
+        "dist": { "parallax_from_snapshot": true, "src_note": "Gaia DR3 parallax (single-star solution), inverted; Cantrell et al. 2010's 1.06 kpc is model-based and not used" },
+        "prefer_reason": "The record uses the plain inverse of the same Gaia DR3 parallax, as for every other parallax distance in this dataset; the star layer's Bailer-Jones distance adds a Galactic prior.",
+        "mass": { "v": 0.40, "err": 0.045, "unit": "Msun", "src": "cantrell2010", "where": "Sec. 4: stellar mass M2" },
+        "description": { "v": "donor star of the X-ray binary", "src": "cantrell2010", "where": "Sec. 4: the secondary star fills its Roche lobe" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:MAXI J1820+070", "name": "MAXI J1820+070", "designations": ["MAXI J1820+070", "ASASSN-18ey"],
+        "type": "stellar-mass", "state": "X-ray binary (accreting)",
+        "position": {
+          "model": "orbit", "convention": "xrb", "phase_known": false,
+          "node_note": "The orbit's position angle on the sky is not measured, so the orientation is illustrative.",
+          "elements": {
+            "period_d": { "v": 0.68549, "err": 0.00001, "unit": "d", "src": "torres2019", "where": "abstract" },
+            "e": { "v": 0, "tier": "illustrative", "src": null, "where": null, "assumed": "no eccentricity published; circular assumed" },
+            "i_deg": { "v": 63, "err": 3, "unit": "deg", "src": "atri2020", "where": "abstract: jet inclination, adopted as the binary inclination by Torres et al. 2020" }
+          }
+        },
+        "mass": { "v": 8.48, "lo": 7.76, "hi": 9.27, "unit": "Msun", "src": "torres2020", "where": "abstract: M1 = 8.48 +0.79/-0.72 Msun for i = 63 ± 3 deg" },
+        "companion_mass": { "v": 0.61, "lo": 0.49, "hi": 0.74, "unit": "Msun", "src": "torres2020", "where": "abstract: M2 = 0.61 +0.13/-0.12 Msun" }
+      },
+      "companion": {
+        "gaia_dr3": "4477902563164690816", "name": "MAXI J1820+070 companion", "name_src": "simbad_cfa",
+        "simbad_main_id": "MAXI J1820+070",
+        "designations": ["ASASSN-18ey", "2MASS J18202194+0711073"],
+        "dist": { "dist_kpc": { "v": 2.96, "err": 0.33, "src": "atri2020", "where": "abstract: VLBA parallax 0.348 ± 0.033 mas" } },
+        "prefer_reason": "Atri et al. 2020 measured the parallax with VLBA radio astrometry; the single-star Gaia parallax is less precise and not corrected for the orbit.",
+        "mass": { "v": 0.61, "lo": 0.49, "hi": 0.74, "unit": "Msun", "src": "torres2020", "where": "abstract: M2 = 0.61 +0.13/-0.12 Msun" },
+        "description": { "v": "donor star of the X-ray binary", "src": "torres2019", "where": "abstract" }
+      }
+    },
+    {
+      "bh": {
+        "id": "bh:GRS 1915+105", "name": "GRS 1915+105", "designations": ["GRS 1915+105", "Granat 1915+105"],
+        "type": "stellar-mass", "state": "X-ray binary (accreting)",
+        "position": {
+          "model": "fixed", "epoch": 2000.0, "method": "parallax",
+          "ra_hms": { "v": "19 15 11.5473", "src": "reid2014", "where": "Table 1 note: J2000 position used in the VLBA correlator (the core is within a few mas)" },
+          "dec_dms": { "v": "+10 56 44.704", "src": "reid2014", "where": "Table 1 note: J2000 position used in the VLBA correlator (the core is within a few mas)" },
+          "dist": { "v": 8.6, "lo": 7.0, "hi": 10.6, "unit": "kpc", "src": "reid2014", "where": "abstract: 8.6 +2.0/-1.6 kpc (VLBA trigonometric parallax)" }
+        },
+        "mass": { "v": 12.4, "lo": 10.6, "hi": 14.4, "unit": "Msun", "src": "reid2014", "where": "abstract: 12.4 +2.0/-1.8 Msun" },
+        "no_companion_note": "No Gaia DR3 counterpart (none in SIMBAD either), so it is not hosted by a star record."
+      },
+      "companion": null
+    }
+  ]
+}

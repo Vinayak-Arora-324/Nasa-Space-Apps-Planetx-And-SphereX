@@ -1,0 +1,95 @@
+{
+ "designations": [
+  "Gaia DR3 4373465352415301632",
+  "GALEX J172841.0-003451",
+  "2MASS J17284110-0034514"
+ ],
+ "evidence": "measured",
+ "host": null,
+ "id": "gdr3:4373465352415301632",
+ "kind": "star",
+ "name": "Gaia BH1 companion",
+ "parent": null,
+ "position": {
+  "dec": -0.581092,
+  "dist": {
+   "hi": 483.09,
+   "lo": 473.93,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1: parallax of the unresolved source (astrometric orbit solution): 2.09 ± 0.02 mas, inverted",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 478.47
+  },
+  "epoch": 2016.0,
+  "method": "parallax",
+  "model": "fixed",
+  "ra": 262.1712073
+ },
+ "prefer_record": {
+  "reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 use the parallax fitted together with the orbit.",
+  "replace": "dist"
+ },
+ "props": {
+  "description": {
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), title and Table 1 (G star)",
+   "tier": "catalogue",
+   "v": "Sun-like G dwarf"
+  },
+  "gaia_parallax": {
+   "hi": 2.1867,
+   "lo": 1.9533,
+   "src": "Gaia DR3 single-star solution (RUWE 7.64)",
+   "tier": "measured",
+   "unit": "mas",
+   "v": 2.07
+  },
+  "gmag": {
+   "src": "Gaia DR3",
+   "tier": "measured",
+   "unit": "mag",
+   "v": 13.772
+  },
+  "identity": {
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833); SIMBAD main identifier of this Gaia DR3 source: GALEX J172841.0-003451 (SIMBAD (simbad.cfa.harvard.edu mirror), queried 2026-11-18)",
+   "tier": "catalogue",
+   "v": "SIMBAD: GALEX J172841.0-003451"
+  },
+  "mass": {
+   "hi": 0.98,
+   "lo": 0.88,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (G star)",
+   "tier": "catalogue",
+   "unit": "Msun",
+   "v": 0.93
+  },
+  "teff": {
+   "hi": 5900,
+   "lo": 5800,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (G star)",
+   "tier": "catalogue",
+   "unit": "K",
+   "v": 5850
+  }
+ },
+ "render": {
+  "mag": 13.772
+ },
+ "same_as": [],
+ "size": {
+  "angular": null,
+  "radius": {
+   "hi": 1.04,
+   "lo": 0.94,
+   "src": "El-Badry et al. 2023, MNRAS 518, 1057 (arXiv:2209.06833), Table 1 (G star)",
+   "tier": "catalogue",
+   "unit": "Rsun",
+   "v": 0.99
+  }
+ },
+ "provenance": {
+  "catalogue": "Space Maps curated black holes",
+  "dataset": "bh-curated",
+  "source": "static:bh-curated",
+  "version": "1"
+ }
+}

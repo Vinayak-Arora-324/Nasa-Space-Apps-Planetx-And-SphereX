@@ -19,9 +19,9 @@ def load(name: str) -> dict:
 
 
 def test_all_doc_examples_are_present():
-    assert [f.stem for f in FILES] == ["asteroid", "black_hole", "cluster", "comet", "exoplanet",
-                                       "galaxy", "nebula_crab", "nebula_m42", "nebula_m57", "planet",
-                                       "star_host"]
+    assert [f.stem for f in FILES] == ["asteroid", "bh_gaia_bh1", "bh_sgr_a_star", "black_hole", "cluster",
+                                       "comet", "exoplanet", "galaxy", "nebula_crab", "nebula_m42",
+                                       "nebula_m57", "planet", "star_gaia_bh1_companion", "star_host"]
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.stem)

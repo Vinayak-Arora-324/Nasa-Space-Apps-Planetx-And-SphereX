@@ -5,12 +5,22 @@ A dataset is a directory (frontend/data/objects/<dataset>/ in the repo) built of
     <dataset>/manifest.json            format, schema, dataset, kinds, precedence, tiling, max_extent_deg,
                                        count, provenance, build, tiles {name: {count, sha256}}
     <dataset>/tiles/<band>-<bin>.json  {"format", "tile", "objects": [records]}
+    <dataset>/tiles/sky.json           optional sky tile, same format (see below)
 
 Tiling `radec-bands` (docs/object-framework.md section 6): declination bands of `band_deg`, numbered from
 -90 degrees; band b has max(1, round(360 cos(dec_mid) / band_deg)) RA bins starting at RA 0. A record
 lies in the tile that holds its (ra, dec), direction-only records included. A cone query reads every tile
 whose box comes within radius + max_extent_deg of the cone centre, then filters the records exactly with
 `objects.cone_contains` (which adds each record's own angular radius).
+
+Sky tiles (docs/object-framework.md 18.9 item 6): `write_dataset(..., sky_ids=[...])` writes those records
+to `tiles/sky.json` and lists `"sky_tiles": ["sky"]` in the manifest (the key is absent when there are none,
+so a dataset without sky records is byte-identical to one written before). A sky record is in no cone tile
+and does not count toward `max_extent_deg`; `verify_dataset` checks the tile hash and that no id is in two
+tiles. `cone_query` returns the cone's records plus every sky-tile record. Mechanism: `_read_tile` returns
+the sky tile's records as `objects.SkyRecord` (a dict subclass), and `objects.build_objects` skips the cone
+filter for a `SkyRecord` while still computing `in_cone` from the real cone, so a sky record outside the
+cone arrives with `in_cone: false`. The per-kind `limit` still applies to them.
 
 Writing is reproducible: sorted keys, records ordered by id, compact separators, no timestamps, and a
 sha256 per tile in the manifest. The same input gives byte-identical output.
@@ -42,10 +52,11 @@ import json
 import logging
 import math
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, Query, Source, angsep_deg,
+from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, Query, SkyRecord, Source, angsep_deg,
                       angular_radius_deg, cone_contains, sky_position, validate_record)
 
 log = logging.getLogger(__name__)
@@ -54,6 +65,7 @@ SCHEME = "radec-bands"
 # Hosted kinds that may also be stored as a free-standing `fixed` record with host null (Phase 2).
 FREE_HOSTED_KINDS = ("black_hole",)
 MANIFEST = "manifest.json"
+SKY_TILE = "sky"
 _EPS = 1e-9  # degrees; absorbs float error at tile edges
 
 
@@ -191,6 +203,10 @@ def _check_manifest(m: object, where: str) -> dict:
     if tab is not None and not (isinstance(tab, list) and all(isinstance(x, str) for x in tab)):
         problems.append("src_table must be a list of strings")
     tiles = m.get("tiles")
+    sky = m.get("sky_tiles")
+    if sky is not None and not (isinstance(sky, list) and sky and all(isinstance(x, str) for x in sky)
+                                and isinstance(tiles, dict) and all(x in tiles for x in sky)):
+        problems.append("sky_tiles must be a non-empty list of tile names listed in tiles")
     if not (isinstance(tiles, dict) and all(
             isinstance(v, dict) and isinstance(v.get("count"), int) and isinstance(v.get("sha256"), str)
             for v in tiles.values())):
@@ -304,6 +320,8 @@ def _read_tile(ds: Dataset, tile: str) -> list[dict]:
         if doc.get("format") != TILE_FORMAT or not isinstance(recs, list):
             raise ValueError("not a tile file")
         recs = [_expand(r, ds.manifest) for r in recs]
+        if tile in (ds.manifest.get("sky_tiles") or ()):
+            recs = [SkyRecord(r) for r in recs]
     except (OSError, ValueError, KeyError, TypeError) as e:  # DatasetError is a ValueError
         if isinstance(e, DatasetError):
             raise DatasetError(f"{tp}: {e}") from e
@@ -314,13 +332,16 @@ def _read_tile(ds: Dataset, tile: str) -> list[dict]:
 
 
 def cone_query(ds: Dataset, ra: float, dec: float, radius: float) -> list[dict]:
-    """Records of the dataset whose disc overlaps the cone, ordered by tile then file order."""
+    """Records of the dataset whose disc overlaps the cone, ordered by tile then file order, followed by
+    every record of the sky tiles (`objects.SkyRecord`, returned whatever the cone)."""
     m = ds.manifest
     out = []
     for tile in tiles_for_cone(ra, dec, radius, ds.band_deg, float(m["max_extent_deg"])):
         if tile not in m["tiles"]:
             continue
         out.extend(r for r in _read_tile(ds, tile) if cone_contains(r, ra, dec, radius))
+    for tile in m.get("sky_tiles") or ():
+        out.extend(_read_tile(ds, tile))
     return out
 
 
@@ -332,7 +353,8 @@ def _dumps(obj: object) -> str:
 
 def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kinds: list[str],
                   provenance: dict, build: dict, band_deg: float = 10, precedence: int = 50,
-                  src_table: bool = False, record_defaults: dict | None = None) -> dict:
+                  src_table: bool = False, record_defaults: dict | None = None,
+                  sky_ids: Iterable[str] | None = None) -> dict:
     """Write `records` as a tiled dataset under `out_dir` and return the manifest.
 
     Every record is validated and must be either a `fixed` position with `host: None`, or a record of
@@ -340,10 +362,16 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     (a black hole may be the former too). Its kind
     must be listed in `kinds`, its id unique and `in_cone` not stored; otherwise ValueError lists the
     problems and nothing is written. With `record_defaults`, each top-level key whose value equals the
-    default is left out of the tile records and stored once in the manifest. With `src_table=True` the distinct `src` strings go to
+    default is left out of the tile records and stored once in the manifest. Records whose id is in `sky_ids`
+    go to the sky tile `tiles/sky.json` instead of a cone tile (see the module docstring); an id in
+    `sky_ids` that is not among the records is an error. With `src_table=True` the distinct `src` strings go to
     `manifest["src_table"]` and tiles hold their indices. Output is deterministic (sorted keys,
     records ordered by id, no timestamps)."""
     problems = []
+    sky = set(sky_ids or ())
+    unknown = sky - {r.get("id") for r in records if isinstance(r, dict)}
+    if unknown:
+        problems.append(f"sky_ids not among the records: {sorted(unknown)}")
     seen: set[str] = set()
     for r in records:
         rid = r.get("id") if isinstance(r, dict) else None
@@ -384,10 +412,11 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     by_tile: dict[str, list[dict]] = {}
     for r in sorted(records, key=lambda r: r["id"]):
         ra, dec = sky_position(r)  # type: ignore[misc]  (validated above)
+        name = SKY_TILE if r["id"] in sky else tile_of(ra, dec, band_deg)
         out_rec = _compress_src(r, index) if src_table else r
         if record_defaults:
             out_rec = {k: v for k, v in out_rec.items() if not (k in record_defaults and v == record_defaults[k])}
-        by_tile.setdefault(tile_of(ra, dec, band_deg), []).append(out_rec)
+        by_tile.setdefault(name, []).append(out_rec)
 
     out = Path(out_dir)
     tdir = out / "tiles"
@@ -402,9 +431,11 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     manifest = {
         "format": TILE_FORMAT, "schema": SCHEMA, "dataset": dataset, "kinds": list(kinds),
         "precedence": precedence, "tiling": {"scheme": SCHEME, "band_deg": band_deg},
-        "max_extent_deg": max((angular_radius_deg(r) for r in records), default=0.0),
+        "max_extent_deg": max((angular_radius_deg(r) for r in records if r["id"] not in sky), default=0.0),
         "count": len(records), "provenance": provenance, "build": build, "tiles": tiles,
     }
+    if sky:
+        manifest["sky_tiles"] = [SKY_TILE]
     if src_table:
         manifest["src_table"] = table
     if record_defaults:
@@ -423,6 +454,8 @@ def verify_dataset(path: str | Path) -> list[str]:
         return [str(e)]
     out = []
     total = 0
+    sky_tiles = set(ds.manifest.get("sky_tiles") or ())
+    owner: dict[str, str] = {}
     for name, info in sorted(ds.manifest["tiles"].items()):
         tp = ds.root / "tiles" / f"{name}.json"
         try:
@@ -445,8 +478,12 @@ def verify_dataset(path: str | Path) -> list[str]:
             out.append(f"{name}: {len(recs)} records, manifest says {info['count']}")
         for r in recs:
             out += [f"{name}: {r.get('id')}: {p}" for p in validate_record(r)]
+            rid = r.get("id")
+            if rid in owner:
+                out.append(f"{name}: {rid}: id is also in tile {owner[rid]}")
+            owner.setdefault(rid, name)
             sp = sky_position(r)
-            if sp is not None and tile_of(sp[0], sp[1], ds.band_deg) != name:
+            if name not in sky_tiles and sp is not None and tile_of(sp[0], sp[1], ds.band_deg) != name:
                 out.append(f"{name}: {r.get('id')}: record is in the wrong tile")
     if total != ds.manifest["count"]:
         out.append(f"manifest count {ds.manifest['count']} but tiles hold {total}")

@@ -442,7 +442,7 @@ def test_every_existing_exoplanet_example_orbit_is_still_valid():
 
 
 def test_render_style():
-    assert objects.RENDER_STYLES == ("lensing",)
+    assert objects.RENDER_STYLES == ("lensing", "milky_way")
     assert objects.validate_record(_hosted_bh()) == []
     r = _hosted_bh()
     r["render"] = {"style": "sparkly"}
@@ -538,3 +538,107 @@ def test_a_direction_only_star_may_have_a_catalogue_or_measured_radius():
     assert objects.validate_record(r) == []
     r["size"]["radius"]["tier"] = "inferred"
     assert any("radius" in p for p in objects.validate_record(r))
+
+
+# --- Phase 3 (docs/object-framework.md 18.9) ---------------------------------------------------
+
+def _gal() -> dict:
+    return copy.deepcopy(load("galaxy"))
+
+
+def _alt(**kw) -> dict:
+    a = {"method": "trgb", "dist": {"v": 0.78, "unit": "Mpc", "src": "t", "tier": "measured"},
+         "reason": "not used: larger uncertainty"}
+    a.update(kw)
+    return a
+
+
+@pytest.mark.parametrize("method", ["maser", "sn-ia", "sn-ii", "supernova", "fundamental-plane",
+                                    "horizontal-branch", "rr-lyrae", "cmd", "brightest-stars", "pnlf",
+                                    "group-member", "eclipsing-binary", "resolved-stars"])
+def test_new_methods_are_accepted(method):
+    r = _gal()
+    r["position"]["method"] = method
+    if method in objects.DERIVED_METHODS:
+        r["position"]["dist"]["tier"], r["evidence"] = "inferred", "derived"
+    assert objects.validate_record(r) == []
+
+
+@pytest.mark.parametrize("method", objects.DERIVED_METHODS)
+@pytest.mark.parametrize("tier", ["measured", "catalogue"])
+def test_derived_method_cannot_be_measured_or_catalogue(method, tier):
+    r = _gal()
+    r["position"]["method"] = method
+    r["position"]["dist"]["tier"] = tier
+    assert any("derived" in p for p in objects.validate_record(r))
+    r["position"]["dist"]["tier"], r["evidence"] = "inferred", "derived"
+    assert objects.validate_record(r) == []
+
+
+def test_tully_fisher_and_redshift_distance_marked_measured_is_rejected():
+    for m in ("tully-fisher", "redshift"):
+        r = _gal()
+        r["position"]["method"] = m
+        assert objects.validate_record(r) != []
+
+
+def test_new_units():
+    r = _gal()
+    r["props"]["vel"] = {"v": 300.0, "unit": "km/s", "src": "t", "tier": "measured"}
+    r["props"]["sb"] = {"v": 22.0, "unit": "mag/arcsec2", "src": "t", "tier": "measured"}
+    assert objects.validate_record(r) == []
+    r["props"]["sb"]["unit"] = "mag/sr"
+    assert objects.validate_record(r) != []
+
+
+def test_milky_way_style_only_on_the_milky_way_galaxy():
+    r = _gal()
+    r.update(id="gal:milky_way")
+    r["render"]["style"] = "milky_way"
+    assert objects.validate_record(r) == []
+    r["id"] = "gal:other"
+    assert any("milky_way" in p for p in objects.validate_record(r))
+    r["id"], r["kind"] = "gal:milky_way", "cluster"
+    assert any("milky_way" in p for p in objects.validate_record(r))
+
+
+def test_lensing_stays_black_hole_only():
+    r = _gal()
+    r["render"]["style"] = "lensing"
+    assert objects.validate_record(r) != []
+
+
+def test_alt_distances_valid():
+    r = _gal()
+    r["alt_distances"] = [_alt(), _alt(method="sn-ia", dist={"v": 0.8, "unit": "Mpc", "src": "t",
+                                                            "tier": "inferred"})]
+    assert objects.validate_record(r) == []
+    r["alt_distances"] = [_alt() for _ in range(4)]
+    assert objects.validate_record(r) == []
+    r["alt_distances"] = []
+    assert objects.validate_record(r) == []
+
+
+@pytest.mark.parametrize("label,alts", [
+    ("five entries", [_alt() for _ in range(5)]),
+    ("unknown method", [_alt(method="vibes")]),
+    ("no reason", [{k: v for k, v in _alt().items() if k != "reason"}]),
+    ("empty reason", [_alt(reason="")]),
+    ("extra key", [dict(_alt(), note="x")]),
+    ("derived marked measured", [_alt(method="tully-fisher")]),
+    ("bad unit", [_alt(dist={"v": 1.0, "unit": "km", "src": "t", "tier": "measured"})]),
+    ("non-numeric v", [_alt(dist={"v": "far", "unit": "Mpc", "src": "t", "tier": "measured"})]),
+    ("no src", [_alt(dist={"v": 1.0, "unit": "Mpc", "tier": "measured"})]),
+    ("not a list", {"a": 1}),
+    ("entry not an object", ["x"]),
+])
+def test_alt_distances_rejected(label, alts):
+    r = _gal()
+    r["alt_distances"] = alts
+    assert objects.validate_record(r) != [], label
+
+
+def test_alt_distances_need_a_fixed_position():
+    r = load("planet")
+    r["alt_distances"] = [_alt()]
+    assert any("alt_distances" in p for p in objects.validate_record(r))

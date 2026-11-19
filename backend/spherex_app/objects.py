@@ -50,10 +50,18 @@ KINDS = ("sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "star", "
 TIERS = ("measured", "catalogue", "inferred", "illustrative")
 EVIDENCE = ("measured", "derived", "illustrative")
 UNITS = ("km", "au", "pc", "Mpc", "deg", "arcmin", "arcsec", "mag", "K", "d", "yr", "Gyr", "Msun",
-         "Mjup", "Mearth", "Rsun", "Rjup", "Rearth", "arcsec/h", "mas")
+         "Mjup", "Mearth", "Rsun", "Rjup", "Rearth", "arcsec/h", "mas", "km/s", "mag/arcsec2")
 # `fixed` positions: how the distance was obtained. `state` positions use STATE_METHODS.
 METHODS = ("parallax", "bailer-jones", "cluster-parallax", "photometric", "kinematic", "cepheid",
-           "trgb", "sbf", "tully-fisher", "redshift", "orbit-fit", "lens-model", "assumed")
+           "trgb", "sbf", "tully-fisher", "redshift", "orbit-fit", "lens-model", "assumed",
+           # Phase 3 (docs/object-framework.md 18.4.3, 18.9)
+           "maser", "sn-ia", "sn-ii", "supernova", "fundamental-plane", "horizontal-branch", "rr-lyrae",
+           "cmd", "brightest-stars", "pnlf", "group-member", "eclipsing-binary", "resolved-stars")
+# Methods whose distance rests on a relation or a flow model, never a direct measurement: a `fixed`
+# distance with one of these may not be tier `measured` or `catalogue` (18.4.3).
+DERIVED_METHODS = ("redshift", "tully-fisher", "fundamental-plane", "sn-ia", "sn-ii", "supernova",
+                   "brightest-stars", "pnlf", "group-member")
+MAX_ALT_DISTANCES = 4
 STATE_METHODS = ("ephemeris", "orbit-propagation")
 NAMESPACES = ("ss", "mp", "comet", "gdr3", "hip", "nea", "neahost", "hr23", "ongc", "sh2", "ungc", "bh",
               "gal", "test")
@@ -62,7 +70,8 @@ NAMESPACES = ("ss", "mp", "comet", "gdr3", "hip", "nea", "neahost", "hr23", "ong
 # Phase 2 adds black holes with a Gaia companion (hosted `orbit` records, docs/object-framework.md 17.7).
 HOSTED_KINDS = ("exoplanet", "black_hole")
 # `render.style` values the frontend registry may honour (a hint, never data). `lensing` is black holes only.
-RENDER_STYLES = ("lensing",)
+RENDER_STYLES = ("lensing", "milky_way")
+MILKY_WAY_ID = "gal:milky_way"
 # Star records that may carry `prefer_record` (the seven companions of the curated black holes, 17.8).
 # This list is deliberately explicit: prefer_record replaces a star's distance and stellar parameters, so it
 # must not grow into a general override mechanism without a reviewed code change (17.7 item 5).
@@ -213,6 +222,7 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
         _check_quantity(dist, "position.dist", out, DIST_UNITS)
         if method == "assumed" and isinstance(dist, dict) and dist.get("tier") != "illustrative":
             out.append("position.dist.tier: a distance with method 'assumed' must be 'illustrative'")
+        _check_derived(method, dist, "position.dist", out)
         if isinstance(dist, dict) and not _is_num(dist.get("v")):
             out.append("position.dist.v: must be a finite number")
         if method is None:
@@ -286,6 +296,45 @@ def _check_direction_only(rec: dict, out: list[str]) -> None:
                    "catalogue radius")
 
 
+def _check_derived(method: Any, dist: Any, where: str, out: list[str]) -> None:
+    """A derived method (DERIVED_METHODS) may not carry a measured or catalogue distance tier."""
+    if method in DERIVED_METHODS and isinstance(dist, dict) and dist.get("tier") in ("measured", "catalogue"):
+        out.append(f"{where}.tier: a distance by method {method!r} is derived and may not be "
+                   f"{dist['tier']!r}")
+
+
+def _check_alt_distances(rec: dict, out: list[str]) -> None:
+    alts = rec.get("alt_distances")
+    if alts is None:
+        return
+    pos = rec.get("position")
+    if not (isinstance(pos, dict) and pos.get("model") == "fixed"):
+        out.append("alt_distances: only allowed on records with a 'fixed' position")
+        return
+    if not isinstance(alts, list):
+        out.append("alt_distances: must be a list")
+        return
+    if len(alts) > MAX_ALT_DISTANCES:
+        out.append(f"alt_distances: at most {MAX_ALT_DISTANCES} entries")
+    for i, a in enumerate(alts[:MAX_ALT_DISTANCES * 2]):
+        w = f"alt_distances[{i}]"
+        if not isinstance(a, dict):
+            out.append(f"{w}: must be an object")
+            continue
+        if set(a) != {"method", "dist", "reason"}:
+            out.append(f"{w}: keys must be exactly method, dist, reason")
+        if a.get("method") not in METHODS:
+            out.append(f"{w}.method: must be one of {', '.join(METHODS)}")
+        d = a.get("dist")
+        _check_quantity(d, f"{w}.dist", out, DIST_UNITS)
+        if isinstance(d, dict):
+            if not _is_num(d.get("v")):
+                out.append(f"{w}.dist.v: must be a finite number")
+            _check_derived(a.get("method"), d, f"{w}.dist", out)
+        if not isinstance(a.get("reason"), str) or not a.get("reason"):
+            out.append(f"{w}.reason: required, non-empty string")
+
+
 def _check_render_style(rec: dict, out: list[str]) -> None:
     render = rec.get("render")
     if not isinstance(render, dict) or render.get("style") is None:
@@ -295,6 +344,8 @@ def _check_render_style(rec: dict, out: list[str]) -> None:
         out.append(f"render.style: must be one of {', '.join(RENDER_STYLES)}")
     elif style == "lensing" and rec.get("kind") != "black_hole":
         out.append("render.style: 'lensing' is only for black_hole records")
+    elif style == "milky_way" and not (rec.get("kind") == "galaxy" and rec.get("id") == MILKY_WAY_ID):
+        out.append(f"render.style: 'milky_way' is only for the galaxy record {MILKY_WAY_ID}")
 
 
 def _prefer_value(rec: dict, field: str) -> Any:
@@ -386,6 +437,7 @@ def _validate(rec: Any) -> list[str]:
     gov = _check_position(rec.get("position"), rec.get("host"), out)
     _check_direction_only(rec, out)
     _check_render_style(rec, out)
+    _check_alt_distances(rec, out)
     _check_prefer_record(rec, out)
 
     size = rec.get("size")
@@ -490,6 +542,12 @@ class Query:
     mjd: float
     kinds: tuple[str, ...]
     limit: int
+
+
+class SkyRecord(dict):
+    """A record from a sky tile (objects_static): returned whatever the cone. The merge does not
+    cone-filter it, and `in_cone` is still computed truthfully. It is a plain dict for everything else
+    (validation, JSON); the merge copies it into a plain dict before output."""
 
 
 @dataclass(frozen=True)
@@ -621,7 +679,7 @@ async def build_objects(ra: float, dec: float, radius: float, mjd: float | None 
                 continue
             if rec["kind"] not in want:
                 continue
-            if src.cone and not cone_contains(rec, ra, dec, radius + _CONE_SLACK_DEG):
+            if src.cone and not isinstance(rec, SkyRecord) and not cone_contains(rec, ra, dec, radius + _CONE_SLACK_DEG):
                 continue
             seen.setdefault(rec["id"], (rec, src.id))
         stats[src.id] = {"dropped": dropped}

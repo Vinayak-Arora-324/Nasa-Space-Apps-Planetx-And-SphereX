@@ -624,3 +624,109 @@ def test_a_cone_inside_a_20_degree_record_but_9_degrees_from_its_centre_finds_it
     assert [r["id"] for r in st.cone_query(ds, 100.0, -12.0, 0.5)] == []
     assert st.tile_of(100.0, 0.0) not in st.tiles_for_cone(100.0, -9.0, 0.5, 10.0, 0.0)
     assert st.tile_of(100.0, 0.0) in st.tiles_for_cone(100.0, -9.0, 0.5, 10.0, 10.0)
+
+
+# --- sky tiles (docs/object-framework.md 18.9 item 6) ------------------------------------------
+
+def _galaxy(i: str, ra: float, dec: float, diam: float | None = None) -> dict:
+    g = _example("galaxy")
+    g.update(id=f"ongc:{i}", name=i, designations=[])
+    g["position"].update(ra=ra, dec=dec)
+    g["size"]["angular"]["major"]["v"] = 3.0 if diam is None else diam
+    g["provenance"].update(source="static:t")
+    g.pop("in_cone", None)
+    return g
+
+
+def _write_sky(tmp: Path, recs: list[dict], sky_ids) -> Path:
+    st.write_dataset(recs, tmp, dataset="t", kinds=["cluster", "galaxy"], provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, sky_ids=sky_ids)
+    return tmp
+
+
+def _merged(ra, dec, radius, **kw):
+    res = asyncio.run(objects.build_objects(ra, dec, radius, mjd=60000.0, **kw))
+    return {o["id"]: o for o in res["objects"]}
+
+
+def test_sky_tile_written_listed_and_verified(tmp_path):
+    recs = [_cluster("a", 10.0, 5.0), _galaxy("far", 200.0, -40.0, 20.0)]
+    d = _write_sky(tmp_path / "s", recs, ["ongc:far"])
+    m = json.loads((d / "manifest.json").read_text())
+    assert m["sky_tiles"] == ["sky"] and "sky" in m["tiles"] and m["count"] == 2
+    assert m["tiles"]["sky"]["count"] == 1 and len(m["tiles"]) == 2
+    assert (d / "tiles" / "sky.json").exists()
+    assert st.verify_dataset(d) == []
+    assert m["max_extent_deg"] == 0.0   # the 20 degree sky record does not count
+
+
+def test_sky_records_are_returned_whatever_the_cone_with_truthful_in_cone(tmp_path, monkeypatch):
+    recs = [_cluster("a", 10.0, 5.0), _galaxy("far", 200.0, -40.0)]
+    _write_sky(tmp_path / "ds" / "t", recs, ["ongc:far"])
+    monkeypatch.setattr(config, "OBJECTS_DIR", tmp_path / "ds")
+    objects.reset_sources()
+    got = _merged(10.0, 5.0, 1.0, kinds=["cluster", "galaxy"])
+    assert got["ongc:far"]["in_cone"] is False and got["test:a"]["in_cone"] is True
+    assert type(got["ongc:far"]) is dict
+    got = _merged(200.0, -40.0, 1.0, kinds=["cluster", "galaxy"])
+    assert got["ongc:far"]["in_cone"] is True and "test:a" not in got
+    # the per-kind limit still applies
+    assert _merged(10.0, 5.0, 1.0, kinds=["galaxy"], limit=0) == {}
+
+
+def test_id_in_both_a_sky_and_a_cone_tile_fails_verify(tmp_path):
+    import hashlib
+    g = _galaxy("far", 200.0, -40.0)
+    d = _write_sky(tmp_path / "s", [g, _cluster("a", 10.0, 5.0)], ["ongc:far"])
+    cone_tile = d / "tiles" / f"{st.tile_of(200.0, -40.0)}.json"
+    sky = (d / "tiles" / "sky.json").read_text()
+    cone_tile.write_text(sky.replace('"tile":"sky"', f'"tile":"{cone_tile.stem}"'))
+    m = json.loads((d / "manifest.json").read_text())
+    m["tiles"][cone_tile.stem] = {"count": 1, "sha256": hashlib.sha256(cone_tile.read_bytes()).hexdigest()}
+    m["count"] = 3
+    (d / "manifest.json").write_text(json.dumps(m))
+    assert any("also in tile" in p for p in st.verify_dataset(d))
+
+
+def test_sky_tile_hash_is_checked(tmp_path):
+    d = _write_sky(tmp_path / "s", [_galaxy("far", 200.0, -40.0)], ["ongc:far"])
+    p = d / "tiles" / "sky.json"
+    p.write_text(p.read_text().replace("far", "faz"))
+    assert any("sha256" in x for x in st.verify_dataset(d))
+
+
+def test_bad_sky_tiles_in_manifest_and_unknown_sky_id(tmp_path):
+    d = _write_sky(tmp_path / "s", [_galaxy("far", 200.0, -40.0)], ["ongc:far"])
+    m = json.loads((d / "manifest.json").read_text())
+    m["sky_tiles"] = ["nope"]
+    (d / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(st.DatasetError):
+        st.load_dataset(d)
+    with pytest.raises(ValueError):
+        _write_sky(tmp_path / "u", [_galaxy("far", 200.0, -40.0)], ["ongc:missing"])
+
+
+@pytest.mark.parametrize("sky_ids", [None, [], ()])
+def test_dataset_without_sky_ids_is_byte_identical(tmp_path, sky_ids):
+    recs = [_cluster("a", 10.0, 5.0, 2.0), _cluster("b", 200.0, -30.0)]
+    kw = dict(dataset="t", kinds=["cluster"], provenance={"catalogue": "t"},
+              build={"script": "x", "script_version": 1}, src_table=True)
+    st.write_dataset(recs, tmp_path / "old", **kw)
+    st.write_dataset(recs, tmp_path / "new", sky_ids=sky_ids, **kw)
+    old = {p.relative_to(tmp_path / "old"): p.read_bytes() for p in (tmp_path / "old").rglob("*.json")}
+    new = {p.relative_to(tmp_path / "new"): p.read_bytes() for p in (tmp_path / "new").rglob("*.json")}
+    assert old == new and "sky_tiles" not in json.loads((tmp_path / "new" / "manifest.json").read_text())
+
+
+def test_responses_are_gzipped_when_the_client_accepts_it(monkeypatch):
+    from fastapi.testclient import TestClient
+    from spherex_app.main import app
+    monkeypatch.setattr(config, "OBJECTS_DIR", FIXTURES)
+    objects.reset_sources()
+    c = TestClient(app)
+    params = {"ra": 180.0, "dec": 0.0, "radius": 1.0, "kinds": "cluster,planet,sun,moon"}
+    r = c.get("/api/objects", params=params, headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert r.json()["schema"] == objects.SCHEMA
+    r = c.get("/api/objects", params=params, headers={"Accept-Encoding": "identity"})
+    assert "content-encoding" not in r.headers

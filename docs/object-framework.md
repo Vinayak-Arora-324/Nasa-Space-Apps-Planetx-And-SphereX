@@ -67,7 +67,7 @@ Rsun Rjup Rearth arcsec/h`. `lo`/`hi` are a 1σ or 16–84 % interval, as `src` 
   "method": "parallax" }
 ```
 - `dist` may be `null`, which makes a direction-only object. It is drawn as a sky marker at infinity and never placed in 3D (Phase 2 nebulae without distances).
-  **Phase 2 change (§17.5, §17.7):** a direction-only record must have `host: null`, `method: null` and no `size.radius`. It is drawn at infinity in the galaxy frame, faded with the camera's distance from the Sun like the Milky Way glow.
+  **Phase 2 change (§17.5, §17.7):** a direction-only record must have `host: null`, `method: null` and no `size.radius` unless that radius is a `measured` or `catalogue` value of its own (§17.7). It is drawn at infinity in the galaxy frame, faded with the camera's distance from the Sun like the Milky Way glow.
 - `dist.unit` is `pc` or `Mpc`.
 - `method` is one of `parallax`, `bailer-jones`, `cluster-parallax`, `photometric`, `kinematic`, `cepheid`, `trgb`, `sbf`, `tully-fisher`, `redshift`, `orbit-fit`, `assumed`. It is shown on cards and drives the evidence rule.
 - `pm` (`{pmra, pmdec}` in mas/yr) is optional and reserved. It is not applied in Phase 0.
@@ -1623,7 +1623,8 @@ CDS (`vizier.cds.unistra.fr`). The mirror actually used goes into `SOURCE.json`.
   - `manifest.provenance` gains **`credit`** (the verbatim line), **`licence_name`** (`"CC BY-SA 4.0"`) and keeps **`licence`** (the URL). `/api/objects` already returns each dataset's provenance in `sources`, so the frontend needs no new endpoint.
   - **In the app:** every nebula card has a `Data` row, "OpenNGC (Mattia Verga), CC BY-SA 4.0" (plus "Sharpless 1959 via VizieR" when merged or Sharpless-only). The 3D view gets a **credits line** listing `credit · licence_name` for every dataset that returned records in the current cone and has a `credit`. It is generic, so the galaxy files need no new code.
 - VizieR tables carry the VizieR terms URL and the catalogue citation, as in Phase 1.
-- `bh-curated` cites each paper per record. Its manifest has no `credit` (no licence condition requires one), so it adds nothing to the credits line.
+- `bh-curated` cites each paper per record. Its seven companion rows hold **Gaia DR3 values, which ESA distributes under CC BY-NC 3.0 IGO** ("Credit: ESA, Gaia DPAC"; commercial use needs ESA's authorisation), as the build found on ESA's licence pages on 2026-11-19. The design had assumed no licence condition applied. So the manifest has `credit: "Credit: ESA, Gaia DPAC"` and `licence_name: "CC BY-NC 3.0 IGO (Gaia DR3 values)"`, which puts the credit on the credits line, and both `bh-curated` folders carry a `LICENSE.md` saying which values that covers.
+  - The licence applies to Gaia data everywhere in the app, including the live star layer and Phase 1's Gaia-derived files. Settling that repository-wide is a follow-up (§17.15).
 
 ### 17.3 Nebula records and the cross-catalogue merge
 
@@ -1712,8 +1713,13 @@ The research run of the plain nearest-centre rule merged 47 pairs, with the Rose
   - `table1.Name` (`l±b`) is joined to `table3` (`GLON`/`GLAT`, zero-padded) numerically, to within 0.05°. 476 of 481 rows are reached.
   - **The `S` prefix is not always a Sharpless number:** 98 of 289 links point more than 1° from the Sharpless position.
   - Links are therefore kept only when the precessed Sharpless centre lies **within 1° of the complex's (l, b)**. That leaves 191 regions, 155 of them with a stellar distance.
-  - **Checked on known regions** (approval condition 5; test assertions on the committed snapshot): Orion (Sh2-281 → M42) gets 350–500 pc, M8 (`S25` → NGC 6523) 1.0–1.8 kpc and the Rosette (Sh2-275 → NGC 2237) 1.3–1.8 kpc. A link outside its range fails the build test, and the fix goes in the override table or the filter, not the test.
-  - **The build report states how many links the 1° filter drops** (98 of 289 in the research run), and lists them.
+  - **Checked on known regions** (approval condition 5; test assertions on the committed snapshot):
+    - Orion (Sh2-281 → M42) links to complex `208.0-19.0` at 400 pc (350–500 pc asserted). Its complex centre is 1.10° from the Sharpless centre, just outside the filter, so the link is an explicit `russeil_complex` entry in the override table.
+    - M8 (`S25` → NGC 6523) links to `6.0-1.2` at 1.6 kpc (1.0–1.8 kpc asserted).
+    - The Rosette (Sh2-275 → NGC 2237) links to `206.3-2.1`, which Russeil labels "Rosette = W16 = NGC 2237", at 1.9 ± 0.25 kpc. The design's 1.3–1.8 kpc range was too narrow: the link is right and 1.9 kpc is Russeil's own value. Gaia-era studies put the Rosette nearer 1.5 kpc, which is one more reason for the Gaia-based follow-up below.
+
+    A wrong link fails the build test, and the fix goes in the override table or the filter, not the test.
+  - **The build report states how many links the 1° filter drops, and lists them.** The build measures the separation along a great circle (the research run used max(|Δl|, |Δb|)): **106 of 289 links are dropped**. That leaves 183 linked regions, 150 of them with a stellar distance; **148 records get one**, because the rest are excluded types.
 - **Distance:** `DistSt ± e_DistSt` (kpc → pc), `method: photometric`, tier `inferred`, so `evidence: derived` and a hollow marker. The src names the complex, e.g. "Russeil 2003 table3: stellar distance of complex 208.0-19.0". `n_DistSt = ')'` ("photometric data only") is kept and noted in the src.
 - **Kinematic distances (`Dist`) are rejected.**
   - Their error columns `err+D`/`err-D` carry inconsistent signs, and the ReadMe that would explain them is unreachable.
@@ -1723,7 +1729,7 @@ The research run of the plain nearest-centre rule merged 47 pairs, with the Rose
 - **Where it applies:** to Sharpless-only regions, and to merged records of types HII, EmN, Neb and Cl+N. **Never** to SNR, PN, RfN or DrkN, which may sit in front of or behind the complex (the Crab = Sh2-244 stays direction-only).
 - **Precedence:** a PN parallax distance beats a Russeil distance; nothing else conflicts.
 
-The expected yield is ≤ 59 measured + ≤ 155 derived distances, with every other nebula direction-only. The real counts come from the build report.
+Built counts (2026-11-18): **697 nebulae.** Of these, 59 have measured PN parallax distances and 148 derived Russeil distances; the other 490 are direction-only. 433 are OpenNGC rows (49 of them merged with Sharpless: 1 by identifier, 2 by override, 46 by position) and 264 are Sharpless-only regions. The positional rule picked NGC 6526 for Sh2-25, so M8 = Sh2-25 = NGC 6523 is an override.
 
 **Follow-up:** look for HII-region distance catalogues based on Gaia parallaxes of the ionising stars (for example
 Méndez-Delgado et al. 2020 and later work), which would replace the photometric Russeil distances where they overlap
@@ -1734,7 +1740,7 @@ Méndez-Delgado et al. 2020 and later work), which would replace the photometric
 **Schema.** No change: `position.model: fixed` and `dist: null`, with `position.tier` governing evidence (already in the validator). A direction is measured, so a direction-only nebula is `measured`: what is drawn is only its direction. New validator guards (§17.7):
 - `host` must be null;
 - `method` must be null;
-- `size.radius` must be null, because a physical size without a distance would be made up.
+- `size.radius` must be null unless its tier is `measured` or `catalogue` (an independent measurement, such as a star's radius), because a physical size derived without a distance would be made up.
 
 **Store** (`scene3d-objects.js`). `rec.dir` is already computed. New behaviour:
 - `visibleObjects` (galaxy frame) accepts an entry with `dir` and no `galPc`, and marks it `atInfinity: true`.
@@ -1861,7 +1867,7 @@ That is a feature of its own, recorded in §17.15.
 All additive; the schema stays at version 1.
 
 1. **`HOSTED_KINDS = ("exoplanet", "black_hole")`**. A `black_hole` tile record is either `fixed` with `host: null` (Sgr A*, GRS 1915+105) or a hosted `orbit` with `host_radec` (§16.3 rules).
-2. **Direction-only guards** (`fixed`, `dist: null`): `host` must be null, `method` must be null, and `size.radius` must be null. The 28 direction-only NEA host stars already satisfy all three; `--check` on every existing dataset proves it.
+2. **Direction-only guards** (`fixed`, `dist: null`): `host` must be null, `method` must be null, and `size.radius` must be null **unless its tier is `measured` or `catalogue`**. A radius at those tiers is an independent measurement of the object's own size; an inferred or illustrative one could only be made up without a distance. The design first said `size.radius` must always be null, but 19 of the 28 direction-only NEA host stars carry a catalogue stellar radius, so the rule was narrowed at implementation. `--check` on every existing dataset proves the narrowed rule holds.
 3. **Orbit tier floor:** an `orbit` position's `tier` may not be stronger than its weakest element tier (measured = catalogue > inferred > illustrative). BH3's inferred `a_au` therefore makes it `derived`. NEA orbits are all `illustrative` already.
 4. **`render.style`**, when present, must be in `RENDER_STYLES = ("lensing",)`, and `lensing` only on `black_hole`. It stays a hint, never data.
 5. **`prefer_record`** (star records, optional): exactly `{"replace": "dist", "reason": <non-empty string>}`. Allowed only
@@ -1906,9 +1912,9 @@ All additive; the schema stays at version 1.
   - BH3 comes from Table 2, "Combined solution".
   - Gaia times are TCB; the difference from TDB (about 20 s) is irrelevant here.
 - **X-ray binaries.**
-  - `period_d` is measured: Cyg X-1 5.599829 ± 0.000016 (Brocksopp et al. 1999); V404 Cyg 6.471170 ± 0.000002 (Casares et al. 2019, Table 3); A0620-00 0.3230160 (Cantrell et al. 2010, fixed, no error, tier `catalogue`); MAXI J1820+070 0.68549 ± 0.00001 (Torres et al. 2019).
-  - `i_deg`: Cyg X-1 27.51 (Miller-Jones et al. 2021, Table 1); V404 Cyg 67 (+3/−1); A0620-00 51.0 ± 0.9; MAXI J1820+070 63 ± 3 (jet; Atri et al. 2020).
-  - `e`: Cyg X-1 0.018 ± 0.003 (Orosz et al. 2011); A0620-00 0, illustrative ("assumed circular", Cantrell et al. 2010); V404 Cyg and MAXI J1820+070 0, illustrative (none published).
+  - `period_d` is measured: Cyg X-1 5.599829 ± 0.000016 (Brocksopp et al. 1999); V404 Cyg 6.471170 ± 0.000002 (Casares et al. 2019, Table 3); A0620-00 0.3230160 (held fixed by Cantrell et al. 2010, from Johannsen et al. 2009; no error, tier `catalogue`); MAXI J1820+070 0.68549 ± 0.00001 (Torres et al. 2019).
+  - `i_deg`: Cyg X-1 27.51 (Miller-Jones et al. 2021, Table 1); V404 Cyg 67 (+3/−1); A0620-00 50.98 ± 0.87; MAXI J1820+070 63 ± 3 (jet; Atri et al. 2020).
+  - `e`: Cyg X-1 0.0189 (68 %: 0.0163–0.0217; Miller-Jones et al. 2021, Table 1, the same fit as its i); A0620-00 0, illustrative ("assumed circular", Cantrell et al. 2010); V404 Cyg and MAXI J1820+070 0, illustrative (none published). An assumed value carries `tier: illustrative` and an `assumed` reason in the curated file, never a paper citation it does not have.
   - `a_au`: Kepler III from P and the summed masses, `inferred`. Companion masses: Cyg X-1 40.6 (+7.7/−7.1); A0620-00 0.40 ± 0.045; MAXI J1820+070 0.61 (+0.13/−0.12); V404 Cyg `q·M_BH` with q = 0.06, `inferred`.
   - `node_deg`: null. `phase_known: false`. Position tier `illustrative`.
 
@@ -2272,6 +2278,7 @@ Commits:
   - [ ] **a general evidence rule for all hosted kinds**, exoplanets included (approval condition 2): at galaxy scale, a marker on the host star takes the host's evidence level; inside the system view, the orbit placement keeps its own level. Phase 2 keeps today's rule with no special case;
   - [ ] **Gaia-parallax-based HII-region distances**, to replace Russeil 2003's photometric ones where they overlap (§17.4);
   - [ ] real images: prefer tiled sky surveys with proper sky alignment over press images, licence permitting (§17.6.4).
+  - [ ] **Gaia data licence across the repository**: Gaia DR3 is CC BY-NC 3.0 IGO ("Credit: ESA, Gaia DPAC"). Show the credit wherever Gaia values are shown (star layer, Phase 1 datasets), and decide how the NC term sits with the project's licensing.
 
 ### 17.16 Decisions at approval (2026-11-18)
 

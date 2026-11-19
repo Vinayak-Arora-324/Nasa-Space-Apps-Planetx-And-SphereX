@@ -1,0 +1,27 @@
+[
+  {
+    "sh2": 11,
+    "ongc": "NGC6357",
+    "reason": "War and Peace Nebula; OpenNGC MajAx 3.9' is the cluster's"
+  },
+  {
+    "sh2": 25,
+    "ongc": "NGC6523",
+    "reason": "Lagoon Nebula (M8 = Sh2-25 = NGC 6523). The positional rule prefers NGC 6526, which is part of the same nebula and nearer the Sharpless centre"
+  },
+  {
+    "sh2": 109,
+    "ongc": null,
+    "reason": "Cygnus region, 18 degrees"
+  },
+  {
+    "sh2": 276,
+    "ongc": null,
+    "reason": "Barnard's Loop; nothing in OpenNGC is the same object"
+  },
+  {
+    "sh2": 281,
+    "russeil_complex": "208.0-19.0",
+    "reason": "Orion Nebula (M42). The Orion complex centre in Russeil 2003 (208.0-19.0) is 1.10 degrees from the Sharpless centre, just outside the 1 degree link filter, but it is the same star-forming complex (stellar distance 0.4 kpc; VLBI 0.41 kpc)"
+  }
+]

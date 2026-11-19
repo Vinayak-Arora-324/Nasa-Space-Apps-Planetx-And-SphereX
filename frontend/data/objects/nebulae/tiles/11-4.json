@@ -1,0 +1,1 @@
+{"format":"space-maps.object-tiles/1","objects":[{"designations":[],"evidence":"measured","host":null,"id":"ongc:IC0336","kind":"nebula","name":"IC 336","parent":null,"position":{"dec":23.3631389,"dist":null,"epoch":2000.0,"model":"fixed","ra":54.4876667,"tier":"catalogue"},"props":{"type":{"src":120,"tier":"catalogue","v":"Nebula"}},"render":{},"size":null}],"tile":"11-4"}

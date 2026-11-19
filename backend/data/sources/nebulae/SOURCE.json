@@ -1,0 +1,103 @@
+{
+  "dataset": "nebulae",
+  "files": [
+    {
+      "bytes": 3876288,
+      "citation": "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC",
+      "commit": "36cb178a0f69dba8bfc03a99c10512831edf1c6b",
+      "file": "openngc-36cb178a-NGC.csv.gz",
+      "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
+      "mirror": "raw.githubusercontent.com",
+      "release": "v20260501",
+      "retrieved": "2026-11-18",
+      "role": "openngc",
+      "rows": 13969,
+      "sha256": "840fe0c9ee1332e551b2e722a0e92726cd7b157914a3d2177602832aadd3aa9e",
+      "source": "OpenNGC",
+      "url": "https://raw.githubusercontent.com/mattiaverga/OpenNGC/36cb178a0f69dba8bfc03a99c10512831edf1c6b/database_files/NGC.csv"
+    },
+    {
+      "bytes": 17484,
+      "citation": "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC",
+      "commit": "36cb178a0f69dba8bfc03a99c10512831edf1c6b",
+      "file": "openngc-36cb178a-addendum.csv.gz",
+      "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
+      "mirror": "raw.githubusercontent.com",
+      "release": "v20260501",
+      "retrieved": "2026-11-18",
+      "role": "openngc-addendum",
+      "rows": 64,
+      "sha256": "1d8f0914e643ada325a5a94d88d8fefad6a4937a2f77cc34f21483af22b11983",
+      "source": "OpenNGC",
+      "url": "https://raw.githubusercontent.com/mattiaverga/OpenNGC/36cb178a0f69dba8bfc03a99c10512831edf1c6b/database_files/addendum.csv"
+    },
+    {
+      "bytes": 23050,
+      "citation": "Sharpless S., 1959, ApJS 4, 257: A Catalogue of H II Regions (1959ApJS....4..257S), VizieR VII/20",
+      "file": "sharpless-vii20.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.idia.ac.za",
+      "retrieved": "2026-11-18",
+      "role": "sharpless",
+      "rows": 313,
+      "sha256": "f6a46cb21faf89b5cac39bc09be0f8f29f1ae8846465d9c7d422ea1128b835b1",
+      "source": "VizieR",
+      "table": "VII/20/catalog",
+      "url": "https://vizier.idia.ac.za/viz-bin/asu-tsv?-source=VII%2F20%2Fcatalog&-out.all&-out.max=unlimited",
+      "vizier_id": "VII/20"
+    },
+    {
+      "bytes": 717104,
+      "citation": "Chornay N. & Walton N. A., 2021, A&A 656, A110: One star, two star, red star, blue star: an updated planetary nebula central star distance catalogue from Gaia EDR3 (2021A&A...656A.110C), doi:10.26093/cds/vizier.36560110, VizieR J/A+A/656/A110",
+      "file": "chornay2021-tablea1.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-18",
+      "role": "chornay",
+      "rows": 2117,
+      "sha256": "4a8178c533016280f2f4138fe9a4251f29cacb5256ff121aad4338a72a5b5923",
+      "source": "VizieR",
+      "table": "J/A+A/656/A110/tablea1",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FA%2BA%2F656%2FA110%2Ftablea1&-out.all&-out.max=unlimited",
+      "vizier_id": "J/A+A/656/A110"
+    },
+    {
+      "bytes": 458502,
+      "citation": "Russeil D., 2003, A&A 397, 133: Star-forming complexes and the spiral structure of our Galaxy (2003A&A...397..133R), doi:10.26093/cds/vizier.33970133, VizieR J/A+A/397/133",
+      "file": "russeil2003-table1.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-18",
+      "role": "russeil-table1",
+      "rows": 1449,
+      "sha256": "07ca46e4775e910bda5aa104910ce106111f334ba36726e2e633cd5659eba16a",
+      "source": "VizieR",
+      "table": "J/A+A/397/133/table1",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FA%2BA%2F397%2F133%2Ftable1&-out.all&-out.max=unlimited",
+      "vizier_id": "J/A+A/397/133"
+    },
+    {
+      "bytes": 41113,
+      "citation": "Russeil D., 2003, A&A 397, 133: Star-forming complexes and the spiral structure of our Galaxy (2003A&A...397..133R), doi:10.26093/cds/vizier.33970133, VizieR J/A+A/397/133",
+      "file": "russeil2003-table3.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-18",
+      "role": "russeil-table3",
+      "rows": 481,
+      "sha256": "e8d0d96c2c992f1658cffd232fb293dfcf1f7d951e7009ebbea60af67bfd9fd6",
+      "source": "VizieR",
+      "table": "J/A+A/397/133/table3",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FA%2BA%2F397%2F133%2Ftable3&-out.all&-out.max=unlimited",
+      "vizier_id": "J/A+A/397/133"
+    },
+    {
+      "file": "sh2_ongc_overrides.json",
+      "kind": "committed",
+      "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
+      "note": "hand-edited merge override table, committed, not downloaded and not pinned here; its sha256 is in manifest.build.report.overrides_sha256",
+      "role": "overrides"
+    }
+  ],
+  "note": "Pinned inputs of backend/scripts/build_objects_nebulae.py. Regenerate with --refresh. `sha256` is of the uncompressed committed bytes: OpenNGC exactly as published at the pinned commit; VizieR tables without their # comment lines and empty lines (the lines carry the request date)."
+}

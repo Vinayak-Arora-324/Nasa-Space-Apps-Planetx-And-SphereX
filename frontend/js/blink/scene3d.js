@@ -50,7 +50,7 @@ const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;
 // The dark pass multiplies its alpha by NEB_DARK (it only darkens the Milky Way glow behind it).
 const NEB_K = 0.45, NEB_MAX = 0.9, NEB_DARK = 1.6, NEB_QUAD = 1.3, NEB_PX_MAX = 2e5, LOOK_TURN_S = 0.8;
 const LENS_PX_MAX = 2e4;   // a drawn shadow is never wider than this (CSS px) however close the camera is
-const NEB_MODE = { emission: 0, reflection: 1, planetary: 2, snr: 3, dark: 4 };   // the nebula shader's a_mode (10 and 11: Evidence outline, solid and dashed)   // a grouped system's marker: warm white, a little larger
+const NEB_MODE = { emission: 0, reflection: 1, planetary: 2, snr: 3, dark: 4 };   // the nebula shader's a_mode (10 and 11: Evidence outline, solid and dashed)
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
 

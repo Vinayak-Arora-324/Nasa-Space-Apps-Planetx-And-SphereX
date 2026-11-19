@@ -98,6 +98,9 @@ LICENCE_NAME = neb.LICENCE_NAME
 LICENCE_URL = neb.LICENCE_URL
 VIZIER_TERMS = neb.VIZIER_TERMS
 EDD_TERMS = "https://edd.ifa.hawaii.edu/"
+# the 3D view's credits line shows `credit · licence_name`: name Cosmicflows-4 (EDD asks to be cited) and keep each licence with its source
+MANIFEST_CREDIT = CREDIT + "; distances: Cosmicflows-4 (Tully et al. 2023), Extragalactic Distance Database"
+MANIFEST_LICENCE_NAME = LICENCE_NAME + " (OpenNGC data); Cosmicflows-4 distances under EDD terms"
 CITATIONS = {
     "ungc": ("Karachentsev I. D., Makarov D. I., Kaisina E. I., 2013, AJ 145, 101: Updated Nearby Galaxy Catalog "
              "(arXiv:1303.5328), doi:10.26093/cds/vizier.51450101, VizieR J/AJ/145/101"),
@@ -1081,7 +1084,7 @@ def provenance_full(files: dict) -> dict:
     inputs = [{k: f.get(k) for k in ("role", "file", "sha256", "rows", "url", "mirror", "retrieved")}
               for f in sorted(files.values(), key=lambda f: f["role"])]
     return {"catalogue": CATALOGUE, "version": VERSION, "openngc_commit": OPENNGC_SHA, "url": OPENNGC_URL,
-            "credit": CREDIT, "licence_name": LICENCE_NAME, "licence": LICENCE_URL,
+            "credit": MANIFEST_CREDIT, "licence_name": MANIFEST_LICENCE_NAME, "licence": LICENCE_URL,
             "citation": " | ".join(["OpenNGC (Mattia Verga), " + OPENNGC_URL, *CITATIONS.values(),
                                     "Tully R. B. et al., 2009, AJ 138, 323 (Extragalactic Distance Database)"]),
             "data_licence_note": ("OpenNGC-derived data: CC BY-SA 4.0. Cosmicflows-4 distances: EDD terms "

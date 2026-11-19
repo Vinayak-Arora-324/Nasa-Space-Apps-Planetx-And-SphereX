@@ -311,7 +311,7 @@ def provenance_full(cur: dict, inp_bytes: bytes, gm: dict, hosts: dict[str, dict
                          f"galaxies dataset ({gp.get('version')}): {gp.get('citation')}"),
             "papers": dict(cur["papers"]), "curated_file": CURATED, "curated_sha256": sha256(inp_bytes),
             "curated_date": cur.get("curated"),
-            "credit": CREDIT, "licence": gp.get("licence"), "licence_name": gp.get("licence_name"),
+            "credit": gp.get("credit") or CREDIT, "licence": gp.get("licence"), "licence_name": gp.get("licence_name"),   # the galaxies' credit: OpenNGC and Cosmicflows-4
             "data_licence_note": ("OpenNGC-derived positions: CC BY-SA 4.0. Cosmicflows-4 distances: EDD terms "
                                   f"({EDD_TERMS}), research and education, cite EDD; values converted by Space Maps, "
                                   f"not relicensed. M81's UNGC distance via VizieR: {VIZIER_TERMS}. Masses and ring "

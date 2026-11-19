@@ -186,8 +186,8 @@ def test_every_number_has_a_src_and_the_radius_is_inferred(recs):
 def test_no_gaia_and_licence_files():
     m = json.loads((COMMITTED / "manifest.json").read_text())
     pv = m["provenance"]
-    assert "No Gaia values." in pv["data_licence_note"] and pv["licence_name"] == "CC BY-SA 4.0"
-    assert "Verga" in pv["credit"] and "edd.ifa.hawaii.edu" in pv["data_licence_note"]
+    assert "No Gaia values." in pv["data_licence_note"] and pv["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Cosmicflows-4 distances under EDD terms"
+    assert "Verga" in pv["credit"] and "Cosmicflows-4" in pv["credit"] and "edd.ifa.hawaii.edu" in pv["data_licence_note"]
     assert "Gaia" not in json.dumps(m).replace("No Gaia values", "").replace("no Gaia", "")
     for d in (COMMITTED, b.SOURCES):
         t = (d / "LICENSE.md").read_text(encoding="utf-8")

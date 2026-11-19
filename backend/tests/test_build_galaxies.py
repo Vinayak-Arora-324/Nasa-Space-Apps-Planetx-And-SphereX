@@ -580,8 +580,10 @@ def test_license_files_exist_in_both_folders_and_say_what_18_2_requires():
 def test_the_manifest_provenance_carries_the_credit_licence_and_citations(committed):
     m = committed["manifest"]
     p = m["provenance"]
-    assert p["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
-    assert p["licence_name"] == "CC BY-SA 4.0" and p["licence"] == "https://creativecommons.org/licenses/by-sa/4.0/"
+    assert p["credit"] == ("Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC; "
+                           "distances: Cosmicflows-4 (Tully et al. 2023), Extragalactic Distance Database")
+    assert p["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Cosmicflows-4 distances under EDD terms"
+    assert p["licence"] == "https://creativecommons.org/licenses/by-sa/4.0/"
     for needle in ("Karachentsev", "Tully", "Extragalactic Distance Database", "McConnachie", "Cosmicflows-4"):
         assert needle in p["citation"]
     assert "EDD" in p["data_licence_note"] and {i["role"] for i in p["inputs"]} == set(b.INPUTS)

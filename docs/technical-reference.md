@@ -193,6 +193,7 @@ The 3D fly-through (`frontend/scene3d.html`, controller `scene3d-main.js`) is bu
 - `scene3d-objects.js`: the object store, Earth-view placement, host-star resolution (including `prefer_record` distances), picking, labels, group markers, cluster billboards, lensing items, the credits line and autopilot plans.
 - `scene3d-nebula.js`: direction-only objects (drawn at infinity, faded with the distance from the Sun like the Milky Way glow) and the projected-ellipse nebula billboard item.
 - `scene3d-orbits.js`: Keplerian orbits of exoplanets and hosted black holes, evaluated in the browser on the host's sky plane, with unknown orientation filled in deterministically and flagged as assumed.
+- `scene3d-format.js`: the one number rule every card follows (the digits an uncertainty supports, scientific notation for very large or small values).
 - `scene3d-physics.js`, `scene3d-nav.js`, `scene3d-math.js`, `scene3d-card.js`, `scene3d-gl.js` and `scene3d-shaders.js`.
 
 Adding a kind of object is one data source on the backend plus one `registerKind` call. See `docs/object-framework.md`.

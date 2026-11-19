@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as R from '../js/blink/scene3d-registry.js';
+import * as F from '../js/blink/scene3d-format.js';
 import * as M from '../js/blink/scene3d-math.js';
 
 const stub = (init) => { const m = new Map(init ? [['blink.scene3d.layers', init]] : []); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), m }; };
@@ -232,7 +233,7 @@ test('exoplanet card: rows with tiers and sources, in the section 16.7 order', (
   assert.equal(c.title, 'TRAPPIST-1 b'); assert.equal(c.subtitle, 'Exoplanet');
   assert.deepEqual(c.rows.map((r) => r[0]), ['Host star', 'Orbital period', 'Semi-major axis', 'Eccentricity', 'Inclination', 'Mass', 'Radius', 'Discovered', 'From its star now', 'From you']);
   assert.deepEqual(rowOf(c, 'Host star'), ['Host star', 'TRAPPIST-1', 'catalogue', 'NASA Exoplanet Archive pscomppars']);
-  assert.deepEqual(rowOf(c, 'Orbital period'), ['Orbital period', '1.51 d', 'measured', NEA + 'Agol et al. 2021']);
+  assert.deepEqual(rowOf(c, 'Orbital period'), ['Orbital period', '1.510826 ± 0.000006 d', 'measured', NEA + 'Agol et al. 2021']);   // the digits its interval supports
   assert.deepEqual(rowOf(c, 'Semi-major axis').slice(1, 3), ['0.0115 AU', 'catalogue']);
   assert.deepEqual(rowOf(c, 'Eccentricity').slice(1, 3), ['0.00622', 'measured']);
   assert.deepEqual(rowOf(c, 'Inclination').slice(1, 3), ['89.7°', 'measured']);
@@ -297,7 +298,7 @@ test('cluster card: distance with interval and method, members, r50, age, extinc
   const o = cl(); o.position.dist = { ...o.position.dist, lo: 133.9, hi: 136.6 };
   const c = R.kindSpec('cluster').card(o, ctx());
   assert.equal(c.title, 'Pleiades'); assert.equal(c.subtitle, 'Star cluster');
-  assert.deepEqual(rowOf(c, 'Distance (cluster parallax)'), ['Distance (cluster parallax)', '135 pc (134–137)', 'measured', 'HR23']);
+  assert.deepEqual(rowOf(c, 'Distance (cluster parallax)'), ['Distance (cluster parallax)', '135.2 +1.4/−1.3 pc', 'measured', 'HR23']);
   assert.deepEqual(rowOf(c, 'Members').slice(1, 3), ['1,250', 'catalogue']);
   assert.deepEqual(rowOf(c, 'Radius (r50)').slice(1, 3), ['3.1 pc', 'catalogue']);
   assert.deepEqual(rowOf(c, 'Age').slice(1, 3), ['50 Myr', 'inferred']);
@@ -333,11 +334,12 @@ test('units: exoplanet radii convert to AU', () => {
   assert.ok(Math.abs(R.toAu(q(1, 'Rearth')) - 6371 / M.KM_PER_AU) < 1e-15); assert.equal(R.toAu(q(1, 'Parsnip')), null);
 });
 
-test('valueWithRange: more digits (up to 5) until lo and hi differ, else no interval', () => {
-  assert.equal(R.valueWithRange({ v: 135.2, lo: 134.2, hi: 137.1 }, 'pc'), '135 pc (134–137)');
-  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.6, hi: 135.2 }, 'pc'), '134.8 pc (134.6–135.2)');   // 3 digits: 135 and 135
+test('valueWithRange is the shared card rule (scene3d-format.js): the digits the uncertainty supports, 3 figures without one', () => {
+  assert.equal(R.valueWithRange({ v: 135.2, lo: 134.2, hi: 137.1 }, 'pc'), '135.2 +1.9/−1.0 pc');
+  assert.equal(R.valueWithRange({ v: 134.84, lo: 134.6, hi: 135.2 }, 'pc'), '134.8 +0.4/−0.2 pc');
   assert.equal(R.valueWithRange({ v: 134.84, lo: 134.84, hi: 134.84 }, 'pc'), '135 pc');
   assert.equal(R.valueWithRange({ v: 12.4 }, 'pc'), '12.4 pc');
+  assert.equal(R.fmtNum, F.fmtNum, 'one fmtNum');
 });
 
 test('a catalogue bound is shown as the bound, never as a value or n/a', async () => {
@@ -411,7 +413,7 @@ test('nebula card, derived and placed: rows with tiers, the Data row with the Sh
   const c = R.kindSpec('nebula').card(nebRec(), ctx({ fromYou: '350 pc · 1,140 ly' }));
   assert.equal(c.title, 'Orion Nebula'); assert.equal(c.subtitle, 'Cluster with nebula');
   assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'Distance (photometric)', 'Angular size', 'Radius (from angular size and distance)', 'Magnitude', 'Sharpless morphology', 'From you', 'Look', 'Data']);
-  assert.deepEqual(row(c, 'Distance (photometric)').slice(1, 3), ['400 pc (360–440)', 'inferred']); assert.match(row(c, 'Distance (photometric)')[3], /Russeil 2003/);
+  assert.deepEqual(row(c, 'Distance (photometric)').slice(1, 3), ['400 ± 40 pc', 'inferred']); assert.match(row(c, 'Distance (photometric)')[3], /Russeil 2003/);
   assert.deepEqual(row(c, 'Angular size').slice(1, 3), ['90′ × 60′, PA unknown', 'catalogue']);
   assert.equal(row(c, 'Radius (from angular size and distance)')[2], 'inferred'); assert.equal(row(c, 'Magnitude')[1], 'V 4 · B 5');
   assert.equal(row(c, 'Sharpless morphology')[1], 'irregular'); assert.equal(row(c, 'From you')[1], '350 pc · 1,140 ly');
@@ -425,7 +427,7 @@ test('nebula card, derived and placed: rows with tiers, the Data row with the Sh
 test('nebula card, measured planetary nebula: the OpenNGC-only Data row, central star, a catalogued size with an unknown minor axis', () => {
   const c = R.kindSpec('nebula').card(ring(), ctx());
   assert.equal(row(c, 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0');
-  assert.deepEqual(row(c, 'Distance (parallax)').slice(1, 3), ['788 pc (761–816)', 'measured']); assert.match(row(c, 'Central star')[1], /Gaia EDR3 2090486618786534784/);
+  assert.deepEqual(row(c, 'Distance (parallax)').slice(1, 3), ['788 +28/−26 pc', 'measured']); assert.match(row(c, 'Central star')[1], /Gaia EDR3 2090486618786534784/);
   assert.equal(row(c, 'Angular size')[1], '1.27′ across, PA unknown'); assert.equal(c.notes.length, 1, 'no derived-distance note');
   assert.equal(row(R.kindSpec('nebula').card(nebRec({ id: 'sh2:276', designations: [] }), ctx()), 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Sharpless 1959 via VizieR', 'a sh2: id counts');
   assert.equal(row(R.kindSpec('nebula').card(nebRec({ designations: ['M 42'], id: 'ongc:NGC1976' }), ctx()), 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0', 'no Sh2 designation: no Sharpless credit');
@@ -464,7 +466,7 @@ test('black hole card, fixed (Sgr A*): type, state, mass, distance, r_s inferred
   const c = R.kindSpec('black_hole').card(sgrRec(), ctx({ lensing: { enlarged: true, factor: 3e9, truePx: 3e-9 }, fromYou: '8,277 pc' }));
   assert.equal(c.title, 'Sagittarius A*'); assert.equal(c.subtitle, 'Black hole');
   assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (orbit-fit)', 'Event horizon (r_s)', 'From you', 'Look']);
-  assert.deepEqual(row(c, 'Mass').slice(1, 3), ['4,300,000 M☉ (4,290,000–4,310,000)', 'measured']); assert.deepEqual(row(c, 'Distance (orbit-fit)').slice(1, 3), ['8,277 pc (8,268–8,286)', 'measured']);
+  assert.deepEqual(row(c, 'Mass').slice(1, 3), ['4.297 ± 0.012 × 10⁶ M☉', 'measured']); assert.deepEqual(row(c, 'Distance (orbit-fit)').slice(1, 3), ['8,277 ± 9 pc', 'measured']);
   assert.deepEqual(row(c, 'Event horizon (r_s)').slice(1, 3), ['12,700,000 km', 'inferred']); assert.match(row(c, 'Event horizon (r_s)')[3], /Schwarzschild/);
   assert.match(row(c, 'Look')[1], /accretion disc/); assert.equal(row(c, 'Look')[2], 'illustrative');
   assert.deepEqual(c.notes, ['Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.', 'The disc and ring are illustrative.']);
@@ -476,7 +478,7 @@ test('black hole card, hosted: companion distance, orbit rows with their evidenc
   const host = { position: { dist: { v: 478.47, lo: 473.93, hi: 483.09, unit: 'pc', src: 'El-Badry et al. 2023, Table 1', tier: 'measured' } } };
   const c = R.kindSpec('black_hole').card(bhRec(), ctx({ hostName: 'Gaia BH1 companion', hostRecord: host, place: { sysAu: [1, 0.5, 0.2], galPc: [100, 100, 100], orbit: null } }));
   assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (its companion\'s)', 'Event horizon (r_s)', 'Orbital period', 'Eccentricity', 'Inclination', 'Orbit evidence', 'Companion', 'From its companion now', 'From you', 'Look']);
-  assert.deepEqual(row(c, 'Distance (its companion\'s)').slice(1, 3), ['478 pc (474–483)', 'measured']);
+  assert.deepEqual(row(c, 'Distance (its companion\'s)').slice(1, 3), ['478 ± 5 pc', 'measured']);
   assert.deepEqual(row(c, 'Orbital period').slice(1, 3), ['186 d', 'measured']); assert.deepEqual(row(c, 'Eccentricity').slice(1, 3), ['0.451', 'measured']); assert.equal(row(c, 'Inclination')[1], '127°');
   assert.deepEqual(row(c, 'Orbit evidence').slice(1, 3), ['measured orbit', 'measured']); assert.match(row(c, 'Orbit evidence')[3], /El-Badry/);
   assert.equal(row(c, 'Companion')[1], 'Gaia BH1 companion · 0.93 M☉'); assert.equal(row(c, 'From its companion now')[1], '1.14 AU');
@@ -510,7 +512,7 @@ test('the star card for a prefer_record star: the curated distance with its pape
   const r = R.preferredStarDistance(rec);
   assert.ok(Math.abs(r.pc - 1164.1) < 1e-9); assert.ok(r.notUsed.pc > 1480 && r.notUsed.pc < 1495);
   const c = R.preferredDistanceRows(rec, { bjPc: 1470.2 });
-  assert.deepEqual(c.rows[0], ['Distance', '1,160 pc (1,140–1,190)', 'measured', 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas']);
+  assert.deepEqual(c.rows[0], ['Distance', '1,164 +25/−24 pc', 'measured', 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas']);
   assert.equal(c.rows[1][0], 'Gaia single-star distance · not used'); assert.equal(c.rows[1][1], 'parallax 0.672 mas → 1,490 pc · Bailer-Jones 1,470 pc'); assert.equal(c.rows[1][3], 'Gaia DR3 single-star solution (RUWE 8.0)');
   assert.equal(c.notes.length, 1); assert.match(c.notes[0], /not used: The single-star Gaia solution ignores the 1,277-day orbit/);
   assert.equal(R.evidenceRows(c.rows, true).length, 2, 'measured rows stay in the Evidence view');
@@ -518,9 +520,10 @@ test('the star card for a prefer_record star: the curated distance with its pape
   assert.equal(R.preferredDistanceRows({ ...rec, props: {} }).rows[1][1], 'not used', 'no parallax on the record: the row still says it is not used');
 });
 
-test('a fixed black hole is reached by a galaxy-frame trip (go fly-galaxy, stop at arrivePc), and a tight distance interval keeps four digits', () => {
+test('a fixed black hole is reached by a galaxy-frame trip (go fly-galaxy, stop at arrivePc), and every interval shows the digits it supports, tight or wide', () => {
   const spec = R.kindSpec('black_hole');
   assert.equal(spec.go, 'fly-galaxy'); assert.equal(spec.arrivePc(sgrRec()), 2);
   const wide = sgrRec(); wide.position.dist = { v: 787.7, lo: 761.4, hi: 815.8, unit: 'pc', src: 'x', tier: 'measured' };
-  assert.equal(row(spec.card(wide, ctx()), 'Distance (orbit-fit)')[1], '788 pc (761–816)');   // a wide interval: three digits as before
+  assert.equal(row(spec.card(wide, ctx()), 'Distance (orbit-fit)')[1], '788 +28/−26 pc');
+  assert.equal(row(spec.card(sgrRec(), ctx()), 'Distance (orbit-fit)')[1], '8,277 ± 9 pc');   // R0 = 8,277 ± 9 pc, not 8,280
 });

@@ -11,8 +11,10 @@
 //   EVIDENCE_HIDES_FEATURES = false  when true, sphere() returns all features as 0 in the Evidence view (a later follow-up)
 //   UNIT_KM                          kilometres per unit: km, au, pc, Mpc, Rearth, Rjup, Rsun
 //   toAu(q) / toPc(q) -> number|null a Quantity {v, unit} in AU / parsecs (null for a missing, non-numeric or unknown unit)
-//   fmtNum(v, sig = 3)               number text for cards (the same as scene3d.js's)
-//   valueWithRange(q, unit, sig = 3) '134.8 pc (134.2–135.4)': more digits (up to 5) until lo and hi differ, else no interval
+//   fmtNum(v, sig = 3)               number text for cards (the same as scene3d.js's; from scene3d-format.js)
+//   valueWithRange(q, unit, sig = 3) a Quantity's card text: fmtQuantity of scene3d-format.js, the one rule every card's numbers follow:
+//                                    with an uncertainty, the digits it supports ('8.94 ± 0.34 M☉', '1,164 +25/−24 pc',
+//                                    '4.297 ± 0.012 × 10⁶ M☉'); without one, 3 significant figures ('135 pc')
 //   evidenceRows(rows, evidence)     drops rows whose tier is 'illustrative' when evidence is true
 //
 //   registerKind(spec) / kindSpec(kind) -> spec|null / kinds() -> spec[] in registration order
@@ -83,6 +85,7 @@
 //                                         and 'Gaia single-star distance · not used' row; the reason is in notes
 import { KM_PER_AU } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
+import { fmtNum, fmtQuantity } from './scene3d-format.js';
 
 export const SCHEMA_MAJOR = 1;
 export const MAX_BODY_LABELS = 12;
@@ -97,7 +100,9 @@ export const toAu = (q) => conv(q, KM_PER_AU);
 export const toPc = (q) => conv(q, PC_KM);
 export const toKm = (q) => conv(q, 1);
 
-export const fmtNum = (v, sig = 3) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumSignificantDigits: sig }) : 'n/a');
+export { fmtNum };
+const fq = fmtQuantity;
+const kmText = (q) => (Number.isFinite(toKm(q)) ? fq(q, 'km', { scale: UNIT_KM[q.unit] }) : 'n/a');   // a size in km, its interval scaled with it
 export const evidenceRows = (rows, evidence) => (evidence ? rows.filter((r) => r[2] !== 'illustrative') : rows);
 
 // ------------------------------------------------------------------ layers
@@ -172,55 +177,47 @@ function qtyRow(label, q, fmt, fallbackTier) {
 const hypot3 = (a) => Math.hypot(a[0], a[1], a[2]);
 const sunDistAu = (o) => {
   const q = prop(o, 'dist_sun');
-  if (q && Number.isFinite(toAu(q))) return { ...q, v: toAu(q), unit: 'au' };
+  if (q && Number.isFinite(toAu(q))) return unitScaled(q, 'au');
   const p = o.position && o.position.xyz_au;      // a record without it: the distance from its position (host is the Sun)
   return p && o.host === 'ss:sun' ? { v: hypot3(p), unit: 'au', tier: o.position.tier || 'measured', src: o.position.src } : null;
 };
 const earthDistAu = (o) => {
   const q = prop(o, 'dist_earth');
-  if (q && Number.isFinite(toAu(q))) return { ...q, v: toAu(q), unit: 'au' };
+  if (q && Number.isFinite(toAu(q))) return unitScaled(q, 'au');
   const g = o.position && o.position.geo;
   return g && Number.isFinite(g.dist_au) ? { v: g.dist_au, unit: 'au', tier: o.position.tier || 'measured', src: o.position.src } : null;
 };
 const fromYouRow = (ctx) => (ctx.fromYou != null ? [['From you', ctx.fromYou, 'illustrative', 'distance from the camera right now']] : []);
 const finish = (ctx, card) => ({ ...card, rows: evidenceRows(card.rows, ctx.evidence) });
 const num = (ctx) => ctx.fmtNum || fmtNum;
-/**
- * 'v unit (lo-hi)' with enough significant digits for lo and hi to read differently: 3, then 4, then 5; when they still match the
- * interval is omitted ('135 pc'). q needs finite v, lo, hi for an interval. The value uses the same digits as the interval.
- */
-export function valueWithRange(q, unit = '', sig = 3) {
-  const u = unit ? ` ${unit}` : '';
-  if (!q || !Number.isFinite(q.lo) || !Number.isFinite(q.hi)) return `${fmtNum(q && q.v, sig)}${u}`;
-  for (let d = sig; d <= 5; d++) if (fmtNum(q.lo, d) !== fmtNum(q.hi, d)) return `${fmtNum(q.v, d)}${u} (${fmtNum(q.lo, d)}–${fmtNum(q.hi, d)})`;
-  return `${fmtNum(q.v, sig)}${u}`;
-}
+/** A Quantity's card text (scene3d-format.js fmtQuantity): the digits its uncertainty supports, or 3 significant figures without one. */
+export function valueWithRange(q, unit = '', sig = 3) { return fq(q, unit, { sig }); }
 
 function planetCard(o, ctx) {
-  const f = num(ctx), r = o.size && o.size.radius, km = toKm(r), sun = sunDistAu(o);
+  const r = o.size && o.size.radius, sun = sunDistAu(o);
   return finish(ctx, {
     title: o.name, subtitle: null, notes: null,
     rows: [
-      ['Radius', Number.isFinite(km) ? `${f(km)} km` : 'n/a', (r && r.tier) || 'measured', srcOf(r)],
-      qtyRow('Distance from Sun', sun, (q) => `${f(q.v)} AU`, 'measured'),
+      ['Radius', kmText(r), (r && r.tier) || 'measured', srcOf(r)],
+      qtyRow('Distance from Sun', sun, (q) => fq(q, 'AU'), 'measured'),
       ...fromYouRow(ctx),
       ['Colour and lighting', 'illustrative', FEATURE_TIER, null],
     ],
   });
 }
 function sunCard(o, ctx) {   // the renderer replaces this with the star card for star 0; this is the fallback
-  const f = num(ctx), e = earthDistAu(o);
-  return finish(ctx, { title: o.name || 'Sun', subtitle: 'The Sun', notes: null, rows: [qtyRow('Distance from Earth', e, (q) => `${f(q.v)} AU`, 'measured'), ...fromYouRow(ctx)] });
+  const e = earthDistAu(o);
+  return finish(ctx, { title: o.name || 'Sun', subtitle: 'The Sun', notes: null, rows: [qtyRow('Distance from Earth', e, (q) => fq(q, 'AU'), 'measured'), ...fromYouRow(ctx)] });
 }
 function smallBodyCard(o, ctx) {
-  const f = num(ctx), m = /^mp:(\d+)$/.exec(o.id || ''), name = o.name || 'Small body';
+  const m = /^mp:(\d+)$/.exec(o.id || ''), name = o.name || 'Small body';
   const title = m && name !== m[1] ? `${m[1]} ${name}` : name;
   const vmag = prop(o, 'vmag'), cls = prop(o, 'class');
   return finish(ctx, {
     title, subtitle: null, notes: null,
     rows: [
-      qtyRow('Distance from Sun', sunDistAu(o), (q) => `${f(q.v)} AU`, 'catalogue'),
-      qtyRow('Distance from Earth', earthDistAu(o), (q) => `${f(q.v)} AU`, 'catalogue'),
+      qtyRow('Distance from Sun', sunDistAu(o), (q) => fq(q, 'AU'), 'catalogue'),
+      qtyRow('Distance from Earth', earthDistAu(o), (q) => fq(q, 'AU'), 'catalogue'),
       ...fromYouRow(ctx),
       ['Visual mag', vmag && Number.isFinite(vmag.v) ? vmag.v.toFixed(1) : 'n/a', (vmag && vmag.tier) || 'catalogue', srcOf(vmag)],
       ['Class', (cls && cls.v) || 'n/a', (cls && cls.tier) || 'catalogue', srcOf(cls)],
@@ -247,6 +244,9 @@ const rEarth = (q) => (q.unit === 'Rjup' ? q.v * R_EARTH_PER_RJUP : q.v);
 const mJup = (q) => (q.unit === 'Mearth' ? q.v / M_EARTH_PER_MJUP : q.v);
 const radiusText = (q, f) => (rEarth(q) >= 6 ? `${f(rEarth(q) / R_EARTH_PER_RJUP)} Rj` : `${f(rEarth(q))} R⊕`);
 const massText = (q, f) => (mJup(q) < 0.1 ? `${f(mJup(q) * M_EARTH_PER_MJUP)} M⊕` : `${f(mJup(q))} Mj`);
+// the same unit choice for a card row, with the interval scaled along (planetLine keeps the compact value-only text above)
+const radiusCard = (q) => { const toE = q.unit === 'Rjup' ? R_EARTH_PER_RJUP : 1; return rEarth(q) >= 6 ? fq(q, 'Rj', { scale: toE / R_EARTH_PER_RJUP }) : fq(q, 'R⊕', { scale: toE }); };
+const massCard = (q) => { const toJ = q.unit === 'Mearth' ? 1 / M_EARTH_PER_MJUP : 1; return mJup(q) < 0.1 ? fq(q, 'M⊕', { scale: toJ * M_EARTH_PER_MJUP }) : fq(q, 'Mj', { scale: toJ }); };
 /** 'Chen & Kipping 2017' from a src such as 'NEA pscomppars: archive-calculated from mass (Chen & Kipping 2017)'; null if none. */
 const relationOf = (q) => { const m = q && /archive-calculated from (mass|radius) \(([^)]+)\)/.exec(q.src || ''); return m ? { from: m[1], rel: m[2] } : null; };
 const hasRadius = (o) => hasV(o.size && o.size.radius);
@@ -271,22 +271,22 @@ function exoplanetCard(o, ctx) {
   const f = num(ctx), el = (o.position && o.position.elements) || {}, place = ctx.place || null, orb = place && place.orbit;
   const P = el.period_d, a = el.a_au, e = el.e, inc = el.i_deg, cat = (o.provenance && o.provenance.catalogue) || null;
   const rows = [['Host star', ctx.hostName || o.host || 'n/a', 'catalogue', cat]];
-  rows.push(qtyRow('Orbital period', P, (q) => `${f(q.v)} d`, 'measured'));
-  rows.push(qtyRow('Semi-major axis', a, (q) => `${f(q.v)} AU`, 'catalogue'));
+  rows.push(qtyRow('Orbital period', P, (q) => fq(q, 'd'), 'measured'));
+  rows.push(qtyRow('Semi-major axis', a, (q) => fq(q, 'AU'), 'catalogue'));
   const assumedE = orb ? orb.assumed.ecc : !hasV(e) || e.tier === 'illustrative';
   rows.push(assumedE ? ['Eccentricity', `${hasV(e) ? f(e.v) : '0'} (assumed)`, 'illustrative', (e && e.src) || 'assumed circular (no eccentricity in the archive)']
-    : qtyRow('Eccentricity', e, (q) => f(q.v), 'measured'));
-  rows.push(hasV(inc) ? qtyRow('Inclination', inc, (q) => `${f(q.v)}°`, 'measured')
+    : qtyRow('Eccentricity', e, (q) => fq(q), 'measured'));
+  rows.push(hasV(inc) ? qtyRow('Inclination', inc, (q) => fq(q, '°'), 'measured')
     : ['Inclination', orb ? `unknown · drawn at ${Math.round(orb.used.incl)}°` : 'unknown', 'illustrative', 'assumed: 90° if it transits, else one random draw shared by the planets of this system']);
   const mass = prop(o, 'mass'), msini = prop(o, 'msini');
-  if (hasV(msini) && !hasV(mass)) rows.push(qtyRow('Minimum mass (M sin i)', msini, (q) => massText(q, f), 'measured'));
+  if (hasV(msini) && !hasV(mass)) rows.push(qtyRow('Minimum mass (M sin i)', msini, massCard, 'measured'));
   else {
     const rel = relationOf(mass);
     const label = rel ? `Mass (from ${rel.from}, ${rel.rel})` : mass && mass.tier === 'inferred' ? 'Mass (inferred)' : 'Mass';
-    rows.push(qtyRow(label, mass, (q) => massText(q, f), 'measured'));
+    rows.push(qtyRow(label, mass, massCard, 'measured'));
   }
   const rad = o.size && o.size.radius, relR = relationOf(rad);
-  rows.push(qtyRow(relR ? `Radius (from ${relR.from}, ${relR.rel})` : rad && rad.tier === 'inferred' ? 'Radius (inferred)' : 'Radius', rad, (q) => radiusText(q, f), 'measured'));
+  rows.push(qtyRow(relR ? `Radius (from ${relR.from}, ${relR.rel})` : rad && rad.tier === 'inferred' ? 'Radius (inferred)' : 'Radius', rad, radiusCard, 'measured'));
   const m = prop(o, 'disc_method'), y = prop(o, 'disc_year'), fa = prop(o, 'disc_facility');
   const disc = [m && m.v, y && y.v, fa && fa.v].filter((v) => v != null && v !== '').join(', ');
   rows.push(['Discovered', disc || 'n/a', (m && m.tier) || 'catalogue', srcOf(m)]);
@@ -324,18 +324,18 @@ export function clusterRgb(o) {
 }
 
 function clusterCard(o, ctx) {
-  const f = num(ctx), p = o.position || {}, d = p.dist, r = o.size && o.size.radius;
+  const p = o.position || {}, d = p.dist, r = o.size && o.size.radius;
   const rows = [];
-  rows.push(qtyRow('Distance (cluster parallax)', d, (q) => valueWithRange(q, 'pc'), 'measured'));
-  const n = prop(o, 'n_members'); rows.push(qtyRow('Members', n, (q) => f(q.v), 'catalogue'));
-  rows.push(qtyRow('Radius (r50)', r, (q) => `${f(toPc(q) ?? q.v)} pc`, 'catalogue'));
-  const age = prop(o, 'age'); rows.push(qtyRow('Age', age, (q) => (q.v < 0.1 ? `${f(q.v * 1000)} Myr` : `${f(q.v)} Gyr`), 'inferred'));
-  const ext = prop(o, 'extinction'); rows.push(qtyRow('Extinction (A_V)', ext, (q) => `${f(q.v)} mag`, 'inferred'));
+  rows.push(qtyRow('Distance (cluster parallax)', d, (q) => fq(q, 'pc'), 'measured'));
+  const n = prop(o, 'n_members'); rows.push(qtyRow('Members', n, (q) => fq(q), 'catalogue'));
+  rows.push(qtyRow('Radius (r50)', r, (q) => fq(unitScaled(q, 'pc') || q, 'pc'), 'catalogue'));
+  const age = prop(o, 'age'); rows.push(qtyRow('Age', age, (q) => (q.v < 0.1 ? fq(q, 'Myr', { scale: 1000 }) : fq(q, 'Gyr')), 'inferred'));
+  const ext = prop(o, 'extinction'); rows.push(qtyRow('Extinction (A_V)', ext, (q) => fq(q, 'mag'), 'inferred'));
   const ty = prop(o, 'type'); if (ty) rows.push(['Type', ty.v, ty.tier || 'catalogue', srcOf(ty)]);
   const qu = prop(o, 'quality'); if (qu) rows.push(['Quality', qu.v, qu.tier || 'catalogue', srcOf(qu)]);
   const cls = prop(o, 'class') || prop(o, 'bound');
   if (cls) rows.push(['Class', typeof cls.v === 'boolean' ? (cls.v ? 'bound cluster' : 'moving group') : String(cls.v), cls.tier || 'catalogue', srcOf(cls)]);
-  const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', `${f(mass.v)} ${mass.unit === 'Msun' || !mass.unit ? 'M☉' : mass.unit}`, mass.tier || 'inferred', srcOf(mass)]);
+  const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', fq(mass, mass.unit === 'Msun' || !mass.unit ? 'M☉' : mass.unit), mass.tier || 'inferred', srcOf(mass)]);
   rows.push(...fromYouRow(ctx));
   const notes = [];
   if ((d && d.tier === 'inferred') || o.evidence === 'derived') notes.push('The distance is prior-dominated (parallax S/N < 5), so the cluster is drawn as a hollow marker.');
@@ -380,15 +380,15 @@ function nebulaCard(o, ctx) {
   const rows = [], ty = prop(o, 'type');
   rows.push(['Type', (ty && ty.v) || 'Nebula', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (dirOnly) rows.push(['Distance', 'unknown · drawn on the sky as seen from the Sun', 'catalogue', 'no distance in the adopted catalogues']);
-  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc', (q.hi - q.lo) / q.v < 0.01 ? 4 : 3), 'measured')); }   // a tight interval gets 4 digits: R0 = 8,277 +- 9 pc is not 8,280
+  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
   if (hasV(ang.major)) {
     const sz = hasV(ang.minor) ? `${arcminText(ang.major, f)} × ${arcminText(ang.minor, f)}` : `${arcminText(ang.major, f)} across`;
     rows.push(['Angular size', `${sz}, ${hasV(ang.pa) ? `PA ${f(ang.pa.v)}°` : 'PA unknown'}`, ang.major.tier || 'catalogue', srcOf(ang.major)]);
   } else rows.push(['Angular size', 'n/a', 'catalogue', null]);
   const r = !dirOnly && o.size && unitScaled(o.size.radius, 'pc');
-  if (r) rows.push(['Radius (from angular size and distance)', valueWithRange(r, 'pc'), r.tier || 'inferred', srcOf(r)]);
+  if (r) rows.push(['Radius (from angular size and distance)', fq(r, 'pc'), r.tier || 'inferred', srcOf(r)]);
   const vm = prop(o, 'vmag'), bm = prop(o, 'bmag');
-  if (hasV(vm) || hasV(bm)) rows.push(['Magnitude', [hasV(vm) ? `V ${f(vm.v)}` : '', hasV(bm) ? `B ${f(bm.v)}` : ''].filter(Boolean).join(' · '), ((hasV(vm) ? vm : bm).tier) || 'catalogue', srcOf(hasV(vm) ? vm : bm)]);
+  if (hasV(vm) || hasV(bm)) rows.push(['Magnitude', [hasV(vm) ? `V ${fq(vm)}` : '', hasV(bm) ? `B ${fq(bm)}` : ''].filter(Boolean).join(' · '), ((hasV(vm) ? vm : bm).tier) || 'catalogue', srcOf(hasV(vm) ? vm : bm)]);
   const sh = ['sh2_form', 'sh2_struct', 'sh2_bright'].map((k) => prop(o, k)).filter((q) => q && q.v != null && q.v !== '');
   if (sh.length) rows.push(['Sharpless morphology', sh.map((q) => q.v).join(', '), sh[0].tier || 'catalogue', srcOf(sh[0])]);
   const cs = prop(o, 'central_star'); if (cs && cs.v) rows.push(['Central star', String(cs.v), cs.tier || 'catalogue', srcOf(cs)]);
@@ -412,27 +412,27 @@ export const enlargementNote = ({ factor, truePx }) => `Drawn enlarged ×${sci(f
 
 function blackHoleCard(o, ctx) {
   const f = num(ctx), place = ctx.place || null, p = o.position || {}, el = p.elements || {}, rows = [], hosted = isHostedBh(o);
-  const ty = prop(o, 'type'), st = prop(o, 'state'), mass = prop(o, 'mass'), r = o.size && o.size.radius, km = toKm(r);
+  const ty = prop(o, 'type'), st = prop(o, 'state'), mass = prop(o, 'mass'), r = o.size && o.size.radius;
   rows.push(['Type', (ty && ty.v) || 'black hole', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (st) rows.push(['State', String(st.v), st.tier || 'catalogue', srcOf(st)]);
-  rows.push(qtyRow('Mass', mass, (q) => valueWithRange(q, 'M☉'), 'measured'));
-  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc', (q.hi - q.lo) / q.v < 0.01 ? 4 : 3), 'measured')); }   // a tight interval gets 4 digits: R0 = 8,277 +- 9 pc is not 8,280
+  rows.push(qtyRow('Mass', mass, (q) => fq(q, 'M☉'), 'measured'));
+  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
   else {
     const h = ctx.hostRecord && ctx.hostRecord.position && ctx.hostRecord.position.dist, hq = unitScaled(h, 'pc');
     const pcs = place && place.galPc ? Math.hypot(...place.galPc) : null;
-    if (hq) rows.push(['Distance (its companion\'s)', valueWithRange(hq, 'pc'), hq.tier || 'measured', srcOf(hq)]);
+    if (hq) rows.push(['Distance (its companion\'s)', fq(hq, 'pc'), hq.tier || 'measured', srcOf(hq)]);
     else rows.push(['Distance (its companion\'s)', Number.isFinite(pcs) ? `${f(pcs)} pc` : 'n/a', 'inferred', 'the distance of its companion star']);
   }
-  rows.push(['Event horizon (r_s)', Number.isFinite(km) ? `${f(km)} km` : 'n/a', (r && r.tier) || 'inferred', (r && r.src) || 'Schwarzschild radius from the mass (non-rotating)']);
+  rows.push(['Event horizon (r_s)', kmText(r), (r && r.tier) || 'inferred', (r && r.src) || 'Schwarzschild radius from the mass (non-rotating)']);
   if (hosted) {
-    rows.push(qtyRow('Orbital period', el.period_d, (q) => `${f(q.v)} d`, 'measured'));
+    rows.push(qtyRow('Orbital period', el.period_d, (q) => fq(q, 'd'), 'measured'));
     const e = el.e, assumedE = !hasV(e) || e.tier === 'illustrative';
-    rows.push(assumedE ? ['Eccentricity', `${hasV(e) ? f(e.v) : '0'} (assumed)`, 'illustrative', (e && e.src) || 'assumed circular'] : qtyRow('Eccentricity', e, (q) => f(q.v), 'measured'));
-    rows.push(hasV(el.i_deg) ? qtyRow('Inclination', el.i_deg, (q) => `${f(q.v)}°`, 'measured') : ['Inclination', 'unknown', 'illustrative', 'assumed']);
+    rows.push(assumedE ? ['Eccentricity', `${hasV(e) ? f(e.v) : '0'} (assumed)`, 'illustrative', (e && e.src) || 'assumed circular'] : qtyRow('Eccentricity', e, (q) => fq(q), 'measured'));
+    rows.push(hasV(el.i_deg) ? qtyRow('Inclination', el.i_deg, (q) => fq(q, '°'), 'measured') : ['Inclination', 'unknown', 'illustrative', 'assumed']);
     const ot = p.tier || 'illustrative';
     rows.push(['Orbit evidence', ot === 'measured' ? 'measured orbit' : ot === 'illustrative' ? 'illustrative placement' : 'derived orbit', ot, p.src || null]);
     const comp = prop(o, 'companion_mass'), name = ctx.hostName || o.host;
-    rows.push(['Companion', [name, hasV(comp) ? `${f(comp.v)} M☉` : ''].filter(Boolean).join(' · '), (comp && comp.tier) || 'catalogue', srcOf(comp)]);
+    rows.push(['Companion', [name, hasV(comp) ? fq(comp, 'M☉') : ''].filter(Boolean).join(' · '), (comp && comp.tier) || 'catalogue', srcOf(comp)]);
     if (place && place.sysAu) rows.push(['From its companion now', `${f(hypot3(place.sysAu))} AU`, p.phase_known === false ? 'illustrative' : ot, 'where it is drawn on its orbit']);
   } else { const cp = prop(o, 'companion'); if (cp && cp.v) rows.push(['Companion', String(cp.v), cp.tier || 'catalogue', srcOf(cp)]); }
   rows.push(...fromYouRow(ctx));
@@ -506,7 +506,7 @@ export function preferredDistanceRows(rec, { bjPc = null, fmt = fmtNum } = {}) {
   const pd = preferredStarDistance(rec);
   if (!pd) return null;
   const u = pd.notUsed, g = prop(rec, 'gaia_parallax');
-  const range = pd.lo != null && pd.hi != null ? valueWithRange({ v: pd.pc, lo: pd.lo, hi: pd.hi }, 'pc') : `${fmt(pd.pc)} pc`;
+  const range = fq({ v: pd.pc, lo: pd.lo, hi: pd.hi }, 'pc');
   const rows = [['Distance', range, pd.tier, pd.src]];
   const bits = [];
   if (u.plxMas != null) bits.push(`parallax ${fmt(u.plxMas)} mas → ${fmt(u.pc)} pc`);

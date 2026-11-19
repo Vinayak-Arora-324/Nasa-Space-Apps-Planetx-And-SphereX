@@ -1,5 +1,6 @@
 // Stellar physics for the 3D fly-through: colours, Teff/L/R estimates and the single "what do we render and how
 // sure are we" decision (starModel). Pure and DOM-free so node can test it (tests/scene3d-physics.test.mjs).
+import { fmtQuantity } from './scene3d-format.js';
 
 export const AU_PER_PC = 206264.806;
 export const RSUN_AU = 0.00465047;
@@ -226,12 +227,13 @@ export function starModel(input = {}) {
   return out;
 }
 
-/** "5,790 K (5,710–5,860)". V is {v, lo, hi} or a bare number; null/non-finite gives an em dash. */
+/**
+ * The star card's number text. V is {v, lo, hi} or a bare number; null/non-finite gives an em dash. With an uncertainty (lo <= v <= hi,
+ * not all equal) it is the shared card rule of scene3d-format.js ('5,790 +70/−80 K', '1.07 ± 0.19 M☉'); without one, `digits` decimals.
+ */
 export function fmtValue(V, unit = '', digits = 0) {
   const v = V && typeof V === 'object' ? V.v : V;
   if (!fin(v)) return '—';
-  const f = (x) => x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
-  let s = f(v) + (unit ? ' ' + unit : '');
-  if (V && typeof V === 'object' && fin(V.lo) && fin(V.hi) && f(V.lo) !== f(V.hi)) s += ` (${f(V.lo)}–${f(V.hi)})`;
-  return s;
+  if (V && typeof V === 'object' && fin(V.lo) && fin(V.hi) && !(V.lo === v && V.hi === v)) return fmtQuantity(V, unit);
+  return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }) + (unit ? ' ' + unit : '');
 }

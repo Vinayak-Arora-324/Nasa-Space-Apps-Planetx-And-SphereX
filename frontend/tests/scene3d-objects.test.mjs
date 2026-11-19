@@ -1020,9 +1020,9 @@ test('prefer_record stellar parameters: BH2\'s companion card shows the paper\'s
   renderStarCard(host, { ...md, notes: [...md.notes, ...pref.notes] }, { title: rec.name, distRows: pref.rows });
   const rows = cardRows(host), get = (label) => rows.find((r) => r[0] === label);
   assert.deepEqual(rows.map((r) => r[0]).slice(0, 7), ['Temperature', 'Gaia single-star temperature · not used', 'Radius', 'Gaia single-star radius · not used', 'Luminosity', 'Mass', 'Gaia single-star mass · not used']);
-  assert.match(get('Mass')[1], /^1\.07 M☉/); assert.match(get('Mass')[2], /El-Badry et al\. 2023/);
-  assert.match(get('Gaia single-star mass · not used')[1], /^2\.60 M☉/); assert.match(get('Gaia single-star mass · not used')[2], /FLAME/);
-  assert.match(get('Radius')[1], /^7\.77 R☉/); assert.match(get('Temperature')[1], /^4,604 K/);
+  assert.equal(get('Mass')[1], '1.07 ± 0.19 M☉'); assert.match(get('Mass')[2], /El-Badry et al\. 2023/);
+  assert.equal(get('Gaia single-star mass · not used')[1], '2.60 ± 0.30 M☉'); assert.match(get('Gaia single-star mass · not used')[2], /FLAME/);
+  assert.equal(get('Radius')[1], '7.77 ± 0.25 R☉'); assert.equal(get('Temperature')[1], '4,600 ± 90 K');
   assert.match(get('Luminosity')[2], /FLAME/);
   assert.ok(get('Gaia single-star distance · not used'), 'the distance row is still there');
   const notes = host.children.filter((c) => c.className === 'card-note').map((c) => c.textContent);

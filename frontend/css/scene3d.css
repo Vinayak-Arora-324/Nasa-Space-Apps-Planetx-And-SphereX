@@ -113,7 +113,8 @@
   .readout { font-size: 12px; gap: 2px 10px; }
   .bottom-dock { left: 8px; right: 8px; }
   .status { top: auto; bottom: calc(var(--dock-h) + 24px); }
-  .credits { align-self: stretch; max-width: none; text-align: center; }
+  /* with every dataset in play (the galaxies' context set adds its credit to every view) the line runs to ~10 lines on a phone: three, then it scrolls */
+  .credits { align-self: stretch; max-width: none; text-align: center; max-height: calc(3 * 1.4em + 4px); overflow-y: auto; overscroll-behavior: contain; }
   .frames-note { display: none; }
   .card.pinned { top: auto; bottom: calc(var(--dock-h) + 24px); right: 16px; max-height: calc(100% - var(--dock-h) - 40px); }
   .ev-chip { top: auto; bottom: calc(var(--dock-h) + 64px); }

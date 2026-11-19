@@ -23,16 +23,66 @@ SOFTWARE.
 
 ---------------------------------------------------------------------------
 
-Data files under a different licence
+Data that is not under the MIT licence
 
-The MIT licence above covers the code. The data files in these two folders
-are derived from the OpenNGC catalogue (Credits: Mattia Verga
-https://github.com/mattiaverga/OpenNGC) and are licensed under the Creative
-Commons Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0,
-https://creativecommons.org/licenses/by-sa/4.0/):
+The MIT licence above covers the code. The data files below are not MIT: each
+value keeps the terms of the source it comes from, and nothing here relicenses
+it. Each data folder's LICENSE.md says exactly what it covers, with the full
+credits and citations. Space Maps is run as a non-commercial, educational
+project; see "Before any commercial use" below.
 
-  frontend/data/objects/nebulae/
-  backend/data/sources/nebulae/
+1. Derived from OpenNGC (Credits: Mattia Verga
+   https://github.com/mattiaverga/OpenNGC), licensed under the Creative Commons
+   Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0,
+   https://creativecommons.org/licenses/by-sa/4.0/):
 
-Each folder's LICENSE.md says exactly what it covers, with the full credits
-and the citations of the other catalogues used.
+     frontend/data/objects/nebulae/          backend/data/sources/nebulae/
+     frontend/data/objects/galaxies/         backend/data/sources/galaxies/
+     frontend/data/objects/smbh-curated/     (black holes placed at their
+                                              OpenNGC galaxies' centres)
+
+2. Gaia values, distributed by ESA under CC BY-NC 3.0 IGO
+   (https://creativecommons.org/licenses/by-nc/3.0/igo/), "Credit:
+   ESA/Gaia/DPAC":
+     - frontend/data/objects/bh-curated/ and
+       backend/data/sources/bh-curated/gaia-dr3-companions.csv (the seven
+       black-hole companions' Gaia DR3 values);
+     - frontend/data/objects/nea-exoplanets/ and
+       backend/data/sources/nea-exoplanets/ (Gaia DR3 ids, positions and
+       G magnitudes of exoplanet hosts);
+     - the planetary-nebula distances and central-star ids in the nebulae
+       folders (Chornay & Walton 2021, from Gaia EDR3 parallaxes);
+     - frontend/data/objects/hr23-clusters/ and its sources hold Hunt &
+       Reffert's cluster values, derived from Gaia DR3;
+     - the live star layer of the 3D view, queried from Gaia archives at run
+       time (not stored in this repository).
+
+3. Cosmicflows-4 (Tully et al. 2023, ApJ 944, 94) distances, used under the
+   Extragalactic Distance Database's terms (https://edd.ifa.hawaii.edu/terms.php:
+   use and sharing for research and education, with citation of Tully et al.
+   2009, AJ 138, 323 and of the catalogue; changed values must say so). They are
+   in the galaxies and smbh-curated folders, converted from distance moduli by
+   Space Maps.
+
+4. Tables served by VizieR (CDS, Strasbourg) are used under VizieR's terms of
+   use with their citations: Sharpless, Chornay & Walton, Russeil (nebulae),
+   Hunt & Reffert (clusters), UNGC, McConnachie 2012 and Cosmicflows-4
+   (galaxies).
+
+Before any commercial use
+
+These would have to be removed, replaced or cleared first:
+  - the live Gaia star layer (ESA's authorisation, data.licences@esa.int, or a
+    different star source);
+  - nea-exoplanets and bh-curated: their Gaia DR3 values;
+  - nebulae: the Chornay & Walton (Gaia EDR3) planetary-nebula distances; a
+    rebuild without them leaves those 59 nebulae direction-only;
+  - hr23-clusters: whether Hunt & Reffert's Gaia-derived values fall under
+    Gaia's non-commercial term;
+  - galaxies and smbh-curated: the Cosmicflows-4 distances (EDD's "research and
+    education" terms), to be cleared with their authors or replaced;
+  - frontend/data/milkyway.webp, built from NASA SVS "Deep Star Maps 2020"
+    (Hipparcos-2, Tycho-2 and Gaia DR2 stars): its terms;
+  - the nebulae, galaxies and smbh-curated files each combine CC BY-SA 4.0
+    OpenNGC data with values under the terms above; those values would have to
+    be separated or cleared before relying on CC BY-SA alone.

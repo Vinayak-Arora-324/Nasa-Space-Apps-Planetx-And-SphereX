@@ -3173,6 +3173,8 @@ and SMBHs; (9) docs and mock server.
 - [ ] A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown.
 - [ ] Group-averaged CF4 distances (its `groups` table) as a third option for galaxies with only a TF/FP distance.
 - [ ] A Sun / "you came from here" marker in `cosmos`.
+- [ ] A compact Quantity encoding (or a per-tile column layout) to bring `galaxies` from 12.5 MB towards the 7 MB budget (§18.19).
+- [ ] Cited radii for the Centaurus, Abell 1367, Hercules and Hydra clusters, so their members get the §18.4.6 rule.
 
 ### 18.17 Open questions
 
@@ -3249,3 +3251,110 @@ earlier part of §18 says otherwise, this section wins.
    40–60 kpc band, the SMC (62.44 kpc) straddles the 60 kpc entry line (§18.5.5).
 
 Everything else in §18 is approved as written.
+
+### 18.19 Implementation notes (stage 2, 2026-11-19)
+
+What the build changed from the design above, and what the browser checks left open. The design text is not edited
+to match; where the two differ, this section describes what ships.
+
+**Data**
+- **Size.** The `galaxies` dataset is **12.5 MB** on disk (11.6 MB of tiles, a 0.9 MB manifest), about 1.0 MB
+  gzipped, against the 7 MB budget of §18.11. The budget assumed about 600 B a record; with every number a Quantity
+  object (value, interval, unit, tier, `src` index) a record averages 1.06 KB. Trimming designations saves 0.2 MB, so
+  they are kept. The build moved the Hubble-flow `src` to one constant string (the velocities are in `props.v_helio`
+  and `props.v_cmb`), shortened the CF4 `src`, and put `kind`, `host` and `parent` in `record_defaults`, saving about
+  2.6 MB. The build's size cap is 13 MB. It is in line with `nea-exoplanets` (12 MB) and `hr23-clusters` (9.3 MB), and
+  only the tiles a cone touches are read. Getting under 7 MB would need a compact Quantity encoding (Phase 4 checklist).
+- **Cosmicflows-4 distances are divided by 1 + Vcmb/c** (§18.4.1). The examples in §18.13 were written without that
+  step, so the shipped values differ slightly: M31 0.759 Mpc (§18.13: 0.75753), M87 16.768 Mpc (16.858), NGC 4258
+  7.569 Mpc (7.586). NGC 12's interval is 43.16–51.19 Mpc: it carries no H0 term (§18.18 item 2). The test fixtures
+  follow the build.
+- **Counts** (build report): 11,449 records (10,791 OpenNGC, 657 UNGC-only, the Milky Way); 1,850 `measured`, 9,599
+  `derived`; 912 direction-only (762 without a velocity, 150 below v_CMB = 1000 km/s). By method: Hubble flow 5,763,
+  Tully–Fisher 2,236, fundamental plane 1,050, SBF 413, TRGB 405, group member 308, SN Ia 192, Cepheid 59, McConnachie
+  resolved stars 52, SN II 32, brightest stars 18, maser 4, eclipsing binary 2, CMD 1, horizontal branch 1, orbit fit 1.
+- **Merge.** UNGC rows were merged into OpenNGC records 193 times by identifier, once by a Dup-row name, 4 times by
+  override (LMC, SMC, Fornax; the Milky Way row is dropped) and 14 times by position (the research run expected about
+  24). The Fornax dwarf's two catalogue centres are 4.7′ apart, beyond the positional cap, so it was drawn twice (once
+  at McConnachie's 147 kpc, once direction-only) until the browser check added the override.
+  3,945 OpenNGC galaxies join CF4 by PGC (research: 3,946; the missing one was not traced), and 295 UNGC-only records
+  join it by position.
+- **Rich clusters (§18.4.6).** 178 galaxies are placed at a CF4 group distance: Virgo 119, Coma 35, Perseus 21,
+  Fornax 3. That is fewer than the 147 Virgo candidates the research counted inside 8°, because the rule uses the
+  cited 6° radius and the 3σ velocity window. Only galaxies that would otherwise get a Hubble-flow distance (v_CMB ≥
+  1000 km/s) can become members; lower-velocity galaxies in the Virgo window stay direction-only, and the build report
+  counts them per cluster. The interval adds the cluster radius in quadrature to the group's modulus error. The other
+  130 `group-member` records are UNGC's own `mem` distances.
+- **Local Group (§18.4.7).** All 70 usable McConnachie rows matched a record. 52 are adopted; the other 18 lose on
+  fractional error to a CF4 value (M31's CF4 Cepheid at ±0.066 mag beats McConnachie's ±0.07). Sgr dSph matched by name
+  with an added alias (`Sagittarius` → `Sag`) and sits at 26.3 kpc, with UNGC's TRGB value in `alt_distances`. The
+  curated LMC and SMC distances are stored in pc.
+- **Context set.** 161 galaxy records in the sky tile (everything within 3 Mpc, B ≤ 10, the eight SMBH hosts, the Milky
+  Way). It is served per request, not as a separate file, because the client's store replaces its contents with each
+  payload (§18.18 item 4).
+- **SMBHs (`smbh-curated`).** Factors adopted/published: M87\* 0.998095, NGC 4258\* 0.999116, M32\* 0.984190, Cen A\*
+  1.025114, M81\* 1.000000, M104\* 0.926173, NGC 4889\* 1.004360 (mass `inferred`, record `derived`); M31\* is not
+  rescaled. NGC 4258\*'s `assumed_dist_is_measurement` has no field of its own: it is stated in the `dist_published`
+  `src` and in `mass_note`. M81\*'s host distance (UNGC, Cepheid) has no interval, so its mass interval is the paper's.
+  An extra `props.mass_method` carries the paper's method in words. M87\*'s `state` is the curated text ("accreting: the
+  EHT ring and a relativistic jet"), not §18.8.3's wording.
+- **Mirrors.** CfA hung or reset connections during the refresh, so some snapshots came from IDIA. `SOURCE.json`
+  records the mirror for each file, and the sha256 pins are in the script.
+- **Coupling.** `build_objects_galaxies.py` imports `build_objects_nebulae` (OpenNGC parsing, licence text) and
+  `build_objects_bh` (the Sgr A\* conversion). `build_objects_smbh.py` reads the built galaxy tiles, and its `--check`
+  names the host whose distance drifted.
+
+**Frontend**
+- `galaxyItem` builds the disc axes with an analytic perspective and thickness correction, so that seen from the Sun
+  the drawn ellipse is the catalogue ellipse to 1e-6. The literal B/C axes of §18.6.1 are not exact.
+- The Milky Way card's title is "Milky Way" and its subtitle "our Galaxy" (§18.7 wrote them as one line).
+- The SMBH card computes the rescale factor as adopted distance / `dist_published` and falls back to the mass ratio.
+  The M31\* reason is `props.mass_note`.
+- The galaxy card shows heliocentric velocity and redshift on one "Velocity" row, plus a "Velocity (CMB frame)" row for
+  Hubble-flow records. The group-member note takes the cluster name and the CF4 group id from the distance `src`.
+- A kind with a `cosmos` renderer (the SMBHs) is not held to the cone in the galaxy and cosmos frames.
+  `smbhVisible`/`withSmbh` decide what is drawn.
+- The renderer (C1/C2) adds the Milky Way and galaxies as auto-throttle surfaces only from outside their drawn disc, with
+  a galaxy's surface distance floored at 5 % of its centre distance; otherwise starting inside the disc, or flying into
+  M31, stalls the throttle. Speed across a frame switch goes through `carrySpeed` (the ratio of the levels' units).
+- The credits line counts the sky-tile galaxies and SMBHs even outside the cone (`datasetCounts(..., { skyScope })`),
+  except Sgr A\*: it carries no Gaia values, so `bh-curated`'s Gaia credit appears only when its cone is open.
+- A galaxy card lists its black holes twice: the "Black holes · N" row and a list with a Go there each.
+
+**Browser checks (2026-11-19, a fresh backend on the committed tree, 1280 × 800 plus 375/768/1280 for the credits)**
+
+Passed: M31 (CF4 Cepheid 759 ± 23 kpc, four "not used" alternatives, solid outline in the Evidence view); M87 and M87\*
+(the same 16.77 ± 0.31 Mpc, mass ×0.9981, "Drawn enlarged ×4e7"); the trip to M87 crosses into `cosmos` once and the
+HUD reads Mpc; NGC 4258 and its black hole share the CF4 maser distance with Reid 2019's value listed as not used; the
+LMC and SMC (below); the Galactic Centre (Sgr A\* names the Milky Way; both use R0 = 8277 ± 9 pc); the Milky Way's Go
+there (60 kpc above the centre, face-on, one switch); a cone of direction-only galaxies (IC 3705, 0.5°): "Turn to it"
+turns back to the galaxy and does not move the camera; TRAPPIST-1 (7 planets, the Gaia row), the Pleiades and Orion
+unchanged.
+
+The 60/40 kpc boundary, measured in world pc from the Sun on autopilot legs along the LMC and SMC directions: the
+switch to `cosmos` fires at 60.02–60.06 kpc and back at 39.73–39.90 kpc, once per crossing, and legs that turn
+inside the band (55, 58, 61 kpc) do not switch. The SMC, whose disc straddles the 60 kpc line, grows smoothly through
+the switch frame (×1.23, ×1.28, ×1.38, ×1.58 at the switch, ×2.29): no jump, as the frame-independent sizes intend.
+
+Fixed during the checks (each its own commit):
+- Galaxy glows were too faint to see (M31 peaked near 5 %): the glow factor is now 3× the nebulae's (`GAL_K`), with the
+  §18.6 alpha law unchanged.
+- The SMBH card gave the distance in pc (1.677 × 10⁷ pc); it now uses kpc/Mpc as the galaxy card does, and names the
+  galaxy ("Galaxy · Milky Way" for Sgr A\*).
+- The credits line now names Cosmicflows-4 and EDD beside OpenNGC (manifest `credit`/`licence_name` of `galaxies` and
+  `smbh-curated`; tiles unchanged), and drops `bh-curated`'s Gaia credit when only Sgr A\* is in the sky tile.
+- At 375 px the credits ran to ~11 lines and pushed the bottom dock over the HUD: under 600 px they are capped at three
+  lines and scroll.
+- The Fornax duplicate (above).
+
+Left rough:
+- The source provenance (`credit`, `licence_name`) is read once when the server starts, so a rebuilt manifest's credit
+  needs a restart; the records themselves reload by mtime.
+- In-cone SMBHs are drawn with the enlarged lensing look (Phase 2's rule), so from the Sun M31\* and M32\* sit as two
+  rings on M31's centre. It is honest (the card gives the enlargement) but dominates the view.
+- Group members placed at one CF4 group distance form a thin sheet in front of M87 when seen from close by.
+- The glow of a large elliptical close up shows faint 8-bit banding; spiral arms and bars are subtle at a distance.
+- The HUD speed can show a tiny value mid-trip ("0.0000000068 AU/s") for a frame or two after a switch.
+- `smbhVisible` counts an SMBH whose galaxy is behind the camera as visible (harmless on screen).
+- These checks drove frames by hand in a background tab (no real-time rAF), so timings and smoothness by eye still
+  need a pass on a real display.

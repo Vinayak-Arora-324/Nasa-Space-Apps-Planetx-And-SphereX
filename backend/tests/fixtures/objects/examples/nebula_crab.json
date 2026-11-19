@@ -1,0 +1,78 @@
+{
+  "designations": [
+    "M 1",
+    "NGC 1952",
+    "Sh2-244",
+    "LBN 833",
+    "IRAS 05315+2158"
+  ],
+  "evidence": "measured",
+  "host": null,
+  "id": "ongc:NGC1952",
+  "kind": "nebula",
+  "name": "Crab Nebula",
+  "parent": null,
+  "position": {
+    "dec": 22.0144722,
+    "dist": null,
+    "epoch": 2000.0,
+    "model": "fixed",
+    "ra": 83.6332083,
+    "tier": "catalogue"
+  },
+  "props": {
+    "sh2_bright": {
+      "src": "Sharpless 1959 (VII/20) Bright 3",
+      "tier": "catalogue",
+      "v": "bright"
+    },
+    "sh2_form": {
+      "src": "Sharpless 1959 (VII/20) Form 2",
+      "tier": "catalogue",
+      "v": "elliptical"
+    },
+    "sh2_struct": {
+      "src": "Sharpless 1959 (VII/20) Struct 3",
+      "tier": "catalogue",
+      "v": "filamentary"
+    },
+    "type": {
+      "src": "OpenNGC v20260501 (SNR)",
+      "tier": "catalogue",
+      "v": "Supernova remnant"
+    },
+    "vmag": {
+      "src": "OpenNGC v20260501",
+      "tier": "catalogue",
+      "unit": "mag",
+      "v": 8.4
+    }
+  },
+  "provenance": {
+    "catalogue": "OpenNGC + Sharpless (VII/20)",
+    "dataset": "nebulae",
+    "source": "static:nebulae",
+    "version": "OpenNGC v20260501 (36cb178a)"
+  },
+  "render": {
+    "mag": 8.4
+  },
+  "size": {
+    "angular": {
+      "major": {
+        "src": "OpenNGC v20260501",
+        "tier": "catalogue",
+        "unit": "arcmin",
+        "v": 8
+      },
+      "minor": {
+        "src": "OpenNGC v20260501",
+        "tier": "catalogue",
+        "unit": "arcmin",
+        "v": 4
+      },
+      "pa": null
+    },
+    "radius": null
+  }
+}

@@ -54,6 +54,7 @@ All URLs and tunables are in `backend/spherex_app/config.py`. Most of them can b
 | `SPHEREX_IRSA_BASE` | `https://irsa.ipac.caltech.edu` | IRSA base URL (TAP and cutout service) |
 | `SPHEREX_S3_BASE` | `https://nasa-irsa-spherex.s3.amazonaws.com/` | public S3 mirror of the Level-2 files |
 | `SPHEREX_SESAME_URL` | CDS Sesame endpoint | object name resolver used by `/api/resolve` |
+| `SPHEREX_SESAME_MIRRORS` | Harvard (CfA) and IDIA (South Africa) Sesame, comma-separated | fallbacks tried in order when the one before fails upstream; empty disables them |
 | `SPHEREX_GAIA_TAP` | ESA Gaia TAP sync endpoint | Gaia DR3 catalogue queries |
 | `SPHEREX_RETRY_BACKOFF` | 0.5 s | first delay between IRSA retries (capped exponential backoff) |
 | `SPHEREX_RESOLVE_TTL` | 86400 s | in-memory lifetime of a name resolution |
@@ -159,10 +160,10 @@ Moving-object endpoints. They take the same parameters: `ra`, `dec`, `fov` (defa
 3D fly-through endpoints (`frontend/scene3d.html`):
 
 - `GET /api/scene3d?ra&dec&radius=3&limit=20000` returns the Gaia star cone only: `{ra, dec, radius, stars}`. Positions are in parsecs from the Sun with Bailer-Jones distances. If every star source fails, the response is 502.
-- `GET /api/objects?ra&dec&radius=3&mjd&kinds&limit=2000` returns everything else in the 3D view as schema-versioned records (`space-maps.objects/1`). Today that is the Sun, planets and Moon from the built-in ephemeris, dwarf planets, asteroids and comets from SkyBoT, and the prebuilt datasets below: exoplanets with their host stars (`exoplanet`, `star`) and star clusters (`cluster`).
+- `GET /api/objects?ra&dec&radius=3&mjd&kinds&limit=2000` returns everything else in the 3D view as schema-versioned records (`space-maps.objects/1`). Today that is the Sun, planets and Moon from the built-in ephemeris, dwarf planets, asteroids and comets from SkyBoT, and the prebuilt datasets below: exoplanets with their host stars (`exoplanet`, `star`), star clusters (`cluster`), nebulae (`nebula`) and black holes with their companion stars (`black_hole`, `star`).
   - Each kind is capped at `limit` records, brightest first. `kinds[k].truncated` says when the cap cut records, and the 3D page then says so ("2,000 brightest small bodies (more in this cone)").
   - Each source runs under its own deadline (`SPHEREX_OBJECTS_SOURCE_TIMEOUT`, 25 s). Failures are reported per kind in `kinds`, and the request itself does not fail.
-  - Prebuilt static datasets are read from `SPHEREX_OBJECTS_DIR` (default `frontend/data/objects/`).
+  - Prebuilt static datasets are read from `SPHEREX_OBJECTS_DIR` (default `frontend/data/objects/`). Each dataset's `sources` row carries its manifest provenance; when it has a `credit` (and `licence_name`), the 3D view lists it in the credits line.
   - The schema, evidence rules, tile format and frontend registry are specified in `docs/object-framework.md`.
 - `GET /api/system/{source_id}` returns stellar parameters with tiers and sources for a Gaia DR3 star, or `sun`.
 
@@ -189,8 +190,10 @@ The 3D fly-through (`frontend/scene3d.html`, controller `scene3d-main.js`) is bu
 - `scene3d.js`: the WebGL2 renderer.
 - `scene3d-frames.js`: frame levels (AU, pc, and later Mpc).
 - `scene3d-registry.js`: object kinds and the persisted layer toggles.
-- `scene3d-objects.js`: the object store, Earth-view placement, host-star resolution, picking, labels, group markers, cluster billboards and autopilot plans.
-- `scene3d-orbits.js`: Keplerian orbits of exoplanets, evaluated in the browser on the host's sky plane, with unknown orientation filled in deterministically and flagged as assumed.
+- `scene3d-objects.js`: the object store, Earth-view placement, host-star resolution (including `prefer_record` distances), picking, labels, group markers, cluster billboards, lensing items, the credits line and autopilot plans.
+- `scene3d-nebula.js`: direction-only objects (drawn at infinity, faded with the distance from the Sun like the Milky Way glow) and the projected-ellipse nebula billboard item.
+- `scene3d-orbits.js`: Keplerian orbits of exoplanets and hosted black holes, evaluated in the browser on the host's sky plane, with unknown orientation filled in deterministically and flagged as assumed.
+- `scene3d-format.js`: the one number rule every card follows (the digits an uncertainty supports, scientific notation for very large or small values).
 - `scene3d-physics.js`, `scene3d-nav.js`, `scene3d-math.js`, `scene3d-card.js`, `scene3d-gl.js` and `scene3d-shaders.js`.
 
 Adding a kind of object is one data source on the backend plus one `registerKind` call. See `docs/object-framework.md`.
@@ -249,6 +252,8 @@ uv run python backend/scripts/build_objects_nea.py              # exoplanets + h
 uv run python backend/scripts/build_objects_nea.py --check      # byte-identical rebuild check
 uv run python backend/scripts/build_objects_nea.py --refresh    # new pscomppars snapshot + Gaia crossmatches (network)
 uv run python backend/scripts/build_objects_hr23.py [--check | --refresh]   # star clusters (Hunt & Reffert)
+uv run python backend/scripts/build_objects_nebulae.py [--check | --refresh] # nebulae (OpenNGC + Sharpless)
+uv run python backend/scripts/build_objects_bh.py [--check | --refresh]      # curated black holes (--refresh: Gaia snapshot only)
 ```
 
 **`nea-exoplanets`** (`frontend/data/objects/nea-exoplanets/`, 11.6 MB in 404 tiles)
@@ -287,6 +292,37 @@ uv run python backend/scripts/build_objects_hr23.py [--check | --refresh]   # st
 - Cite Hunt & Reffert 2024, A&A 686, A42, and 2023, A&A 673, A114. VizieR licence:
   https://cds.unistra.fr/vizier-org/licences_vizier.html.
 - The members table (1.29 M rows) is not used; the member-star highlight is a follow-up.
+
+**`nebulae`** (`frontend/data/objects/nebulae/`, 0.9 MB in 151 tiles; **data licence CC BY-SA 4.0**)
+- Sources: OpenNGC release v20260501, pinned to commit `36cb178a`; Sharpless 1959 (VizieR `VII/20`); Chornay &
+  Walton 2021 (`J/A+A/656/A110`); and Russeil 2003 (`J/A+A/397/133`). VizieR is fetched from CfA, then IDIA, then CDS.
+- 697 nebulae: the 433 OpenNGC nebula rows (PN, HII, EmN, RfN, Neb, SNR, Cl+N, DrkN) plus 264 Sharpless-only regions.
+  49 OpenNGC objects are merged with their Sharpless region, by identifier (1), the committed override table
+  `sh2_ongc_overrides.json` (2) or a capped positional rule (46). The build report lists every pair.
+- Distances:
+  - 59 planetary nebulae have Gaia EDR3 central-star parallaxes, `measured`;
+  - 148 HII regions have Russeil stellar distances, `derived` with hollow markers;
+  - the other 490 are direction-only. They are drawn at infinity in their catalogue direction, fade as you fly away from the Sun, and their card button is "Turn to it".
+- The look is procedural and illustrative. The Evidence view draws only the catalogue ellipse.
+- Licence: the data files are derived from OpenNGC and are CC BY-SA 4.0. See `LICENSE.md` in the dataset and
+  sources folders and the repository `LICENSE`. The credit "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
+  is shown on every nebula card and in the 3D view's credits line.
+- Edit the override table by hand, then rebuild. No network is needed, and its sha256 goes into the build report.
+
+**`bh-curated`** (`frontend/data/objects/bh-curated/`, 60 KB)
+- Source: `backend/data/sources/bh-curated/black_holes.json`, curated by hand. Every number carries its paper (`src`)
+  and the table or passage it was read from (`where`), and the build refuses any number without them. Values no
+  paper gives are allowed only as `illustrative`, with an `assumed` reason.
+- The black holes are Sgr A\*, Gaia BH1–3, Cyg X-1, V404 Cyg, A0620-00, MAXI J1820+070 and GRS 1915+105, plus seven companion `star` records.
+  - Gaia BH1 and BH2 are measured hosted orbits, and BH3 is a derived one.
+  - The X-ray binaries are illustrative hosted orbits, because their orientation on the sky is unknown.
+  - Sgr A\* and GRS 1915+105 are fixed.
+- The companions carry `prefer_record`, which is allowed only on these seven ids (`objects.PREFER_RECORD_IDS`). The
+  curated distance replaces the Gaia single-star distance; the sky position and Gaia identity are kept. The star card
+  lists the Gaia value as "not used", with the reason.
+- `gaia-dr3-companions.csv` is a Gaia DR3 snapshot of the seven companions, taken from ESA, with ARI Heidelberg and
+  GAVO as fallbacks. Gaia data are **CC BY-NC 3.0 IGO** ("Credit: ESA, Gaia DPAC"), and the credits line shows that credit.
+- The lensing look is illustrative and drawn enlarged when the true shadow is too small. The card says by how much.
 
 `build_rewind_sky.py` reads the same XHIP table (`--tsv` takes a local copy) and the pinned d3-celestial files. It prints a note for the 4 boundary segments near the north pole (Cepheus and Ursa Minor) that run along neither a B1875 meridian nor a parallel; those are kept as given.
 

@@ -20,3 +20,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---------------------------------------------------------------------------
+
+Data files under a different licence
+
+The MIT licence above covers the code. The data files in these two folders
+are derived from the OpenNGC catalogue (Credits: Mattia Verga
+https://github.com/mattiaverga/OpenNGC) and are licensed under the Creative
+Commons Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0,
+https://creativecommons.org/licenses/by-sa/4.0/):
+
+  frontend/data/objects/nebulae/
+  backend/data/sources/nebulae/
+
+Each folder's LICENSE.md says exactly what it covers, with the full credits
+and the citations of the other catalogues used.

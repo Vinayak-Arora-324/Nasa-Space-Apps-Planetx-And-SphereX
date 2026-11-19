@@ -77,7 +77,8 @@ test('starModel: giant, white dwarf and nothing at all', () => {
 });
 
 test('fmtValue and tier tables', () => {
-  assert.equal(P.fmtValue({ v: 5790, lo: 5710, hi: 5860 }, 'K', 0), '5,790 K (5,710–5,860)');
+  assert.equal(P.fmtValue({ v: 5790, lo: 5710, hi: 5860 }, 'K', 0), '5,790 +70/−80 K');   // the shared card rule (scene3d-format.js)
+  assert.equal(P.fmtValue({ v: 5790, lo: 5790, hi: 5790 }, 'K', 0), '5,790 K');
   assert.equal(P.fmtValue(null, 'K'), '—');
   assert.equal(P.fmtValue(1.234, 'R☉', 2), '1.23 R☉');
   assert.deepEqual(Object.keys(P.TIER_INFO), P.TIERS);

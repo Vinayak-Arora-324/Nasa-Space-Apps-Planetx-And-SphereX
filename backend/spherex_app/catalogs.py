@@ -117,11 +117,34 @@ async def resolve(q: str) -> dict:
     hit = _resolve_mem.get(key)
     if hit is not None:
         return hit
-    from urllib.parse import quote
-    text = await get_text(f"{config.SESAME_URL}?{quote(q)}", what="Sesame")
-    out = parse_sesame(text, q)
+    out = await _sesame(q)
     _resolve_mem.put(key, out)
     return out
+
+
+async def _sesame(q: str) -> dict:
+    """Ask Sesame at CDS, then at each mirror in `config.SESAME_URLS`, moving on only after an upstream failure
+    (no answer, an HTTP error, or a body that is not Sesame XML). "Not found" from a working Sesame is an answer
+    and is raised at once. The result names the host that answered in `mirror`."""
+    from urllib.parse import quote, urlsplit
+    urls = getattr(config, "SESAME_URLS", None) or (config.SESAME_URL,)
+    last: Exception | None = None
+    for base in urls:
+        try:
+            text = await get_text(f"{base}?{quote(q)}", what="Sesame")
+            out = parse_sesame(text, q)
+        except NotFound:
+            raise
+        except (UpstreamError, ET.ParseError) as e:
+            last = e
+            log.warning("Sesame at %s failed (%s)%s", urlsplit(base).netloc, e,
+                        "; trying the next mirror" if base != urls[-1] else "")
+            continue
+        out["mirror"] = urlsplit(base).netloc
+        return out
+    if isinstance(last, UpstreamError):
+        raise last
+    raise UpstreamError(f"Sesame: {last}")
 
 
 # --- reference catalogues --------------------------------------------------------------

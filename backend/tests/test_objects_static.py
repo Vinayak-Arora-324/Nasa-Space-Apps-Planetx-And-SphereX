@@ -531,3 +531,96 @@ def test_no_record_defaults_is_a_no_op_and_a_bad_value_is_refused(tmp_path):
     (d / "manifest.json").write_text(json.dumps(m))
     with pytest.raises(st.DatasetError, match="record_defaults"):
         st.load_dataset(d)
+
+
+# --- Phase 2 (section 17.7): hosted black holes, direction-only nebulae, wide records ------------
+
+def _example(name: str) -> dict:
+    return json.loads((FIXTURES / "examples" / f"{name}.json").read_text())
+
+
+def _hosted_bh(i: str, ra: float, dec: float, host: str = "gdr3:2") -> dict:
+    r = _planet(i, ra, dec, host)
+    r.update(id=f"bh:{i}", kind="black_hole", name=i, render={"style": "lensing"})
+    for q in r["position"]["elements"].values():
+        if q is not None:
+            q["tier"] = "measured"
+    r["position"]["elements"]["node_deg"] = objects.quantity(120.0, "test", "measured", "deg")
+    r["position"]["tier"], r["evidence"] = "measured", "measured"
+    r["props"] = {"mass": objects.quantity(9.6, "test", "measured", "Msun")}
+    return r
+
+
+def _write_kinds(tmp: Path, recs: list[dict], kinds: list[str]) -> Path:
+    st.write_dataset(recs, tmp, dataset="p2", kinds=kinds, provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, band_deg=10)
+    return tmp
+
+
+def test_a_hosted_black_hole_is_tiled_by_host_radec(tmp_path):
+    bh = _hosted_bh("Test BH", 262.17, -0.58)
+    assert objects.validate_record(bh) == []
+    d = _write_kinds(tmp_path / "p", [bh], ["black_hole", "star"])
+    m = json.loads((d / "manifest.json").read_text())
+    assert list(m["tiles"]) == [st.tile_of(262.17, -0.58)] and m["count"] == 1
+    assert st.verify_dataset(d) == []
+    ds = st.load_dataset(d)
+    assert [r["id"] for r in st.cone_query(ds, 262.17, -0.58, 0.05)] == ["bh:Test BH"]
+    assert st.cone_query(ds, 262.17, 5.0, 0.5) == []
+
+
+def test_a_free_standing_black_hole_is_a_fixed_record_with_host_null(tmp_path):
+    sgr = _example("black_hole")
+    d = _write_kinds(tmp_path / "p", [sgr, _hosted_bh("Test BH", 10.0, 5.0)], ["black_hole"])
+    assert st.verify_dataset(d) == []
+    got = st.cone_query(st.load_dataset(d), sgr["position"]["ra"], sgr["position"]["dec"], 0.1)
+    assert [r["id"] for r in got] == ["bh:Sgr A*"]
+    bad = _hosted_bh("Bad", 10.0, 5.0)
+    bad["host"] = None
+    with pytest.raises(ValueError, match="host"):
+        _write_kinds(tmp_path / "q", [bad], ["black_hole"])
+
+
+def test_other_hosted_kinds_still_may_not_be_fixed(tmp_path):
+    fixed_planet = _planet("d b", 10.0, 5.0)
+    fixed_planet["position"] = {"model": "fixed", "ra": 10.0, "dec": 5.0, "method": "assumed",
+                                "dist": objects.quantity(10, "x", "illustrative", "pc")}
+    with pytest.raises(ValueError, match="orbit"):
+        _write_kinds(tmp_path / "x", [fixed_planet], ["exoplanet"])
+
+
+def test_direction_only_nebulae_are_found_by_cone_and_by_extent(tmp_path):
+    crab = _example("nebula_crab")
+    ra, dec = crab["position"]["ra"], crab["position"]["dec"]
+    assert crab["position"]["dist"] is None
+    d = _write_kinds(tmp_path / "n", [crab, _example("nebula_m57")], ["nebula"])
+    ds = st.load_dataset(d)
+    assert st.verify_dataset(d) == []
+    assert [r["id"] for r in st.cone_query(ds, ra, dec, 0.05)] == ["ongc:NGC1952"]
+    # 8' major axis: the disc has a 4' = 0.0667 deg radius, so a 0.1 deg cone 0.3 deg away misses it
+    # and the same cone 0.15 deg away reaches it only through the record's own extent
+    assert st.cone_query(ds, ra, dec + 0.3, 0.1) == []
+    assert [r["id"] for r in st.cone_query(ds, ra, dec + 0.15, 0.1)] == ["ongc:NGC1952"]
+    assert st.cone_query(ds, ra, dec + 20.0, 5.0) == []
+
+
+def test_a_cone_inside_a_20_degree_record_but_9_degrees_from_its_centre_finds_it(tmp_path):
+    wide = _example("nebula_crab")
+    wide.update(id="ongc:WIDE", name="Wide")
+    wide["position"].update(ra=100.0, dec=0.0)
+    wide["size"]["angular"]["major"].update(v=1200.0)      # 1200 arcmin = 20 deg
+    wide["size"]["angular"]["minor"] = None
+    other = _example("nebula_crab")
+    other.update(id="ongc:SMALL", name="Small")
+    other["position"].update(ra=100.0, dec=0.0)
+    d = _write_kinds(tmp_path / "w", [wide, other], ["nebula"])
+    ds = st.load_dataset(d)
+    assert ds.manifest["max_extent_deg"] == pytest.approx(10.0)
+    # the cone centre is 9 deg south of the 20 deg record's centre: the cone is well inside its disc, but
+    # in another declination band, so only `max_extent_deg` makes the record's tile reachable
+    assert objects.angsep_deg(100.0, -9.0, 100.0, 0.0) == pytest.approx(9.0)
+    assert st.tile_of(100.0, -9.0) != st.tile_of(100.0, 0.0)
+    assert [r["id"] for r in st.cone_query(ds, 100.0, -9.0, 0.5)] == ["ongc:WIDE"]
+    assert [r["id"] for r in st.cone_query(ds, 100.0, -12.0, 0.5)] == []
+    assert st.tile_of(100.0, 0.0) not in st.tiles_for_cone(100.0, -9.0, 0.5, 10.0, 0.0)
+    assert st.tile_of(100.0, 0.0) in st.tiles_for_cone(100.0, -9.0, 0.5, 10.0, 10.0)

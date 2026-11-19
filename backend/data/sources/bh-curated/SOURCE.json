@@ -1,0 +1,37 @@
+{
+  "dataset": "bh-curated",
+  "files": [
+    {
+      "adql": "SELECT source_id, ra, dec, ref_epoch, parallax, parallax_error, pmra, pmdec, phot_g_mean_mag, bp_rp, ruwe FROM gaiadr3.gaia_source WHERE source_id IN (2056188624872569088,2059383668236814720,3118721026600835328,4318465066420528000,4373465352415301632,4477902563164690816,5870569352746779008) ORDER BY source_id",
+      "citation": "Gaia Collaboration 2023, A&A 674, A1 (Gaia DR3)",
+      "columns": [
+        "source_id",
+        "ra",
+        "dec",
+        "ref_epoch",
+        "parallax",
+        "parallax_error",
+        "pmra",
+        "pmdec",
+        "phot_g_mean_mag",
+        "bp_rp",
+        "ruwe"
+      ],
+      "credit_line": "Credit: ESA, Gaia DPAC",
+      "file": "gaia-dr3-companions.csv",
+      "licence_checked": "2026-11-19",
+      "licence_name": "CC BY-NC 3.0 IGO",
+      "licence_statement": "Gaia data are distributed under the CC BY-NC 3.0 IGO license.",
+      "licence_url": "https://www.cosmos.esa.int/web/gaia-users/license",
+      "retrieved": "2026-11-19",
+      "role": "gaia-dr3-companions",
+      "rows": 7,
+      "service": "ESA Gaia archive",
+      "sha256": "372874e3cd55a4f64ce857c937afb666fd93e3dcdba6fbd2052db3b62a929737",
+      "table": "gaiadr3.gaia_source",
+      "tap_url": "https://gea.esac.esa.int/tap-server/tap/sync",
+      "terms_url": "https://www.cosmos.esa.int/web/esdc/terms-and-conditions"
+    }
+  ],
+  "note": "Pinned Gaia input of backend/scripts/build_objects_bh.py. Regenerate with --refresh (it never touches black_holes.json, which is hand-curated). `sha256` is of the committed CSV bytes (columns as queried, rows sorted by source_id, Unix line endings)."
+}

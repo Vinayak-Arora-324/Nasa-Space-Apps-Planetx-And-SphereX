@@ -16,8 +16,9 @@ Writing is reproducible: sorted keys, records ordered by id, compact separators,
 sha256 per tile in the manifest. The same input gives byte-identical output.
 
 Tile records are `fixed` positions with `host: null`, or (Phase 1) records of a hosted kind
-(`objects.HOSTED_KINDS`, the exoplanets) with an `orbit` position, a non-null `host` and
-`position.host_radec`; a hosted record is tiled by that direction (`objects.sky_position`). Every record
+(`objects.HOSTED_KINDS`: exoplanets, and from Phase 2 black holes) with an `orbit` position, a non-null
+`host` and `position.host_radec`; a hosted record is tiled by that direction (`objects.sky_position`).
+A black hole may also be `fixed` with `host: null` (Sgr A*). Every record
 must pass `objects.validate_record`.
 
 String table (`write_dataset(..., src_table=True)`): the manifest gets `src_table`, the sorted distinct
@@ -50,6 +51,8 @@ from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, Query, Source, a
 log = logging.getLogger(__name__)
 
 SCHEME = "radec-bands"
+# Hosted kinds that may also be stored as a free-standing `fixed` record with host null (Phase 2).
+FREE_HOSTED_KINDS = ("black_hole",)
 MANIFEST = "manifest.json"
 _EPS = 1e-9  # degrees; absorbs float error at tile edges
 
@@ -333,7 +336,8 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     """Write `records` as a tiled dataset under `out_dir` and return the manifest.
 
     Every record is validated and must be either a `fixed` position with `host: None`, or a record of
-    a hosted kind (`objects.HOSTED_KINDS`) with an `orbit` position, a host and `host_radec`. Its kind
+    a hosted kind (`objects.HOSTED_KINDS`) with an `orbit` position, a host and `host_radec`
+    (a black hole may be the former too). Its kind
     must be listed in `kinds`, its id unique and `in_cone` not stored; otherwise ValueError lists the
     problems and nothing is written. With `record_defaults`, each top-level key whose value equals the
     default is left out of the tile records and stored once in the manifest. With `src_table=True` the distinct `src` strings go to
@@ -346,7 +350,9 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
         probs = validate_record(r)
         if not probs:
             pos = r["position"]
-            if r["kind"] in HOSTED_KINDS:
+            # a hosted kind is an `orbit` with a host and host_radec; a black hole may also be a free-standing
+            # `fixed` record with host null (Sgr A*, GRS 1915+105: docs/object-framework.md 17.7)
+            if r["kind"] in HOSTED_KINDS and not (r["kind"] in FREE_HOSTED_KINDS and pos["model"] == "fixed"):
                 if pos["model"] != "orbit":
                     probs.append(f"{r['kind']} tile records must have an 'orbit' position")
                 elif r["host"] is None:

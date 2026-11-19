@@ -568,3 +568,70 @@ def test_the_real_committed_dataset_serves_trappist_1_through_the_route(monkeypa
     assert "gdr3:2635476908753563008" in _ids(j, "star")
     assert j["kinds"]["exoplanet"]["status"] == "ok" and all(o["in_cone"] for o in j["objects"])
     assert next(s for s in j["sources"] if s["id"] == "static:nea-exoplanets")["dropped"] == 0
+
+
+# --- Phase 2: the committed nebulae and bh-curated datasets through /api/objects (§17.13) ----
+
+DATA = Path(__file__).resolve().parents[2] / "frontend" / "data" / "objects"
+
+
+@pytest.fixture
+def phase2_dir(tmp_path, monkeypatch):
+    """The two committed Phase 2 datasets (copied, so the test reads exactly what ships) as OBJECTS_DIR."""
+    import shutil
+    d = tmp_path / "objs"
+    for name in ("nebulae", "bh-curated"):
+        shutil.copytree(DATA / name, d / name)
+    monkeypatch.setattr(config, "OBJECTS_DIR", d)
+    objects.reset_sources()
+    return d
+
+
+def _obj_by_id(j, oid):
+    return next((o for o in j["objects"] if o["id"] == oid), None)
+
+
+def test_orion_cone_returns_m42_in_cone_with_its_derived_distance(phase2_dir):
+    j = _get(ra=83.82, dec=-5.39, radius=1.0, kinds="nebula").json()
+    m42 = _obj_by_id(j, "ongc:NGC1976")
+    assert m42 is not None and m42["in_cone"] is True and m42["evidence"] == "derived"
+    assert m42["position"]["dist"]["tier"] == "inferred" and "Russeil 2003" in m42["position"]["dist"]["src"]
+    assert "Sh2-281" in m42["designations"]
+    assert all(objects.validate_record(o) == [] for o in j["objects"])
+
+
+def test_a_cone_nine_degrees_from_barnards_loop_centre_still_returns_it(phase2_dir):
+    # Barnard's Loop (sh2:276) is centred at (81.87, -3.97) with a 1200 arcmin (20 deg) diameter
+    j = _get(ra=81.867, dec=5.035, radius=0.5, kinds="nebula").json()
+    loop = _obj_by_id(j, "sh2:276")
+    assert loop is not None and loop["in_cone"] is True
+    assert loop["position"]["dist"] is None and loop["evidence"] == "measured"   # direction only
+
+
+def test_the_crab_is_direction_only(phase2_dir):
+    j = _get(ra=83.633, dec=22.015, radius=0.5, kinds="nebula").json()
+    crab = _obj_by_id(j, "ongc:NGC1952")
+    assert crab is not None and crab["position"]["dist"] is None and crab["size"]["radius"] is None
+    assert crab["host"] is None and crab["position"].get("method") is None
+
+
+def test_cyg_x1_cone_returns_the_black_hole_and_its_companion(phase2_dir):
+    j = _get(ra=299.590, dec=35.202, radius=0.5, kinds="black_hole,star").json()
+    bh, star = _obj_by_id(j, "bh:Cyg X-1"), _obj_by_id(j, "gdr3:2059383668236814720")
+    assert bh is not None and star is not None
+    assert bh["host"] == star["id"] and bh["evidence"] == "illustrative" and bh["position"]["model"] == "orbit"
+    assert bh["position"].get("dist") is None                      # one stored distance per system: the star's
+    assert star["prefer_record"]["replace"] == ["dist", "mass"] and star["position"]["dist"]["v"] == 2220
+    assert star["props"]["gaia_parallax"]["unit"] == "mas"
+
+
+def test_sources_carry_the_credits_the_app_shows(phase2_dir):
+    j = _get(ra=83.82, dec=-5.39, radius=1.0, kinds="nebula").json()
+    neb = next(s for s in j["sources"] if s["id"] == "static:nebulae")
+    assert neb["provenance"]["licence_name"] == "CC BY-SA 4.0"
+    assert neb["provenance"]["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
+    j = _get(ra=266.417, dec=-29.008, radius=0.5, kinds="black_hole").json()
+    assert _obj_by_id(j, "bh:Sgr A*")["evidence"] == "measured"
+    bh = next(s for s in j["sources"] if s["id"] == "static:bh-curated")
+    assert bh["provenance"]["credit"] == "Credit: ESA, Gaia DPAC"
+    assert bh["provenance"]["licence_name"].startswith("CC BY-NC 3.0 IGO")

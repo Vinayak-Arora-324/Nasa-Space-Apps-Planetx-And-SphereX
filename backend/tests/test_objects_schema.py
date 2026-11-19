@@ -19,8 +19,9 @@ def load(name: str) -> dict:
 
 
 def test_all_doc_examples_are_present():
-    assert [f.stem for f in FILES] == ["asteroid", "black_hole", "cluster", "comet", "exoplanet",
-                                       "galaxy", "planet", "star_host"]
+    assert [f.stem for f in FILES] == ["asteroid", "bh_gaia_bh1", "bh_sgr_a_star", "black_hole", "cluster",
+                                       "comet", "exoplanet", "galaxy", "nebula_crab", "nebula_m42",
+                                       "nebula_m57", "planet", "star_gaia_bh1_companion", "star_host"]
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.stem)
@@ -124,6 +125,8 @@ def test_position_tier_does_not_govern_a_fixed_position_with_a_distance():
 def test_evidence_rule_direction_only_uses_position_tier(tier, evidence, ok):
     r = load("cluster")
     r["position"]["dist"] = None
+    r["position"]["method"] = None   # direction only: no method and no physical radius (section 17.7)
+    r["size"]["radius"] = None
     r["position"]["tier"], r["evidence"] = tier, evidence
     assert (objects.validate_record(r) == []) is ok
 
@@ -200,6 +203,8 @@ def test_assumed_method_forces_an_illustrative_distance():
     r["position"]["dist"]["tier"], r["evidence"] = "illustrative", "illustrative"
     assert objects.validate_record(r) == []
     r["position"]["dist"] = None   # direction only: nothing to assume
+    r["position"]["method"] = None
+    r["size"]["radius"] = None
     r["position"]["tier"] = "catalogue"
     r["evidence"] = "measured"
     assert objects.validate_record(r) == []
@@ -256,7 +261,7 @@ def test_neahost_namespace_and_lens_model_method():
     r["evidence"] = "measured"   # a lens-model distance is inferred: at most derived
     assert objects.validate_record(r)
     assert "neahost" in objects.NAMESPACES and "lens-model" in objects.METHODS
-    assert objects.HOSTED_KINDS == ("exoplanet",)
+    assert objects.HOSTED_KINDS == ("exoplanet", "black_hole")
 
 
 def test_star_records_validate_like_any_record():
@@ -344,3 +349,192 @@ def test_cone_contains_wraps_in_ra():
     r = load("asteroid")
     r["position"]["geo"].update(ra=359.95, dec=0.0)
     assert objects.cone_contains(r, 0.05, 0.0, 0.2)
+
+
+# --- Phase 2 additions (section 17.7) ---------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["nebula_m57", "nebula_m42", "nebula_crab"])
+def test_the_nebula_examples_validate_and_have_the_documented_shape(name):
+    r = load(name)
+    assert objects.validate_record(r) == []
+    assert r["kind"] == "nebula" and r["host"] is None and r["parent"] is None
+
+
+def _direction_only() -> dict:
+    return load("nebula_crab")
+
+
+def test_the_crab_example_is_a_valid_direction_only_record():
+    r = _direction_only()
+    assert r["position"]["dist"] is None and r["position"].get("method") is None
+    assert r["size"]["radius"] is None and r["evidence"] == "measured"
+    assert objects.validate_record(r) == []
+
+
+@pytest.mark.parametrize("label,fn", {
+    "a host": lambda r: r.update(host="gdr3:1"),
+    "a method": lambda r: r["position"].update(method="photometric"),
+    "an inferred size.radius": lambda r: r["size"].update(
+        radius=objects.quantity(1.0, "made up", "inferred", "pc")),
+    "an illustrative size.radius": lambda r: r["size"].update(
+        radius=objects.quantity(1.0, "made up", "illustrative", "pc")),
+}.items(), ids=lambda x: x if isinstance(x, str) else "")
+def test_a_direction_only_record_may_not_have(label, fn):
+    r = _direction_only()
+    fn(r)
+    problems = objects.validate_record(r)
+    assert problems and any(w in " ".join(problems) for w in ("direction", "host")), (label, problems)
+
+
+def test_the_direction_only_guards_do_not_touch_records_with_a_distance():
+    r = load("nebula_m57")      # has a distance: host null, method, radius are all fine
+    assert r["position"]["method"] == "parallax" and r["size"]["radius"] is not None
+    assert objects.validate_record(r) == []
+
+
+def _hosted_bh(**kw) -> dict:
+    r = load("exoplanet")
+    r.update(id="bh:Test BH", kind="black_hole", name="Test BH", render={"style": "lensing"})
+    r["position"]["elements"]["node_deg"] = objects.quantity(120.0, "test", "measured", "deg")
+    for q in r["position"]["elements"].values():
+        if q is not None:
+            q["tier"] = "measured"
+    r["position"]["tier"], r["evidence"] = "measured", "measured"
+    r["props"] = {"mass": objects.quantity(9.6, "test", "measured", "Msun")}
+    r.update(kw)
+    return r
+
+
+def test_a_hosted_black_hole_orbit_is_accepted():
+    r = _hosted_bh()
+    assert objects.validate_record(r) == []
+    assert "black_hole" in objects.HOSTED_KINDS
+
+
+def test_an_orbit_tier_may_not_be_stronger_than_its_weakest_element():
+    r = _hosted_bh()
+    r["position"]["elements"]["a_au"]["tier"] = "inferred"       # like Gaia BH3's scaled a
+    problems = objects.validate_record(r)
+    assert any("weakest" in p for p in problems), problems
+    r["position"]["tier"] = "catalogue"
+    assert any("weakest" in p for p in objects.validate_record(r))
+    r["position"]["tier"], r["evidence"] = "inferred", "measured"
+    problems = objects.validate_record(r)
+    assert problems and not any("weakest" in p for p in problems)   # now only the evidence cap fails
+    r["evidence"] = "derived"
+    assert objects.validate_record(r) == []
+    r["position"]["tier"], r["evidence"] = "illustrative", "illustrative"
+    assert objects.validate_record(r) == []
+
+
+def test_the_orbit_tier_floor_treats_measured_and_catalogue_as_equal():
+    r = _hosted_bh()
+    r["position"]["elements"]["a_au"]["tier"] = "catalogue"
+    r["position"]["tier"] = "measured"
+    assert objects.validate_record(r) == []
+    r["position"]["elements"]["a_au"]["tier"] = "measured"
+    r["position"]["tier"] = "catalogue"
+    assert objects.validate_record(r) == []
+
+
+def test_every_existing_exoplanet_example_orbit_is_still_valid():
+    assert objects.validate_record(load("exoplanet")) == []
+
+
+def test_render_style():
+    assert objects.RENDER_STYLES == ("lensing",)
+    assert objects.validate_record(_hosted_bh()) == []
+    r = _hosted_bh()
+    r["render"] = {"style": "sparkly"}
+    assert any("render.style" in p for p in objects.validate_record(r))
+    n = load("nebula_m57")
+    n["render"]["style"] = "lensing"
+    assert any("lensing" in p for p in objects.validate_record(n))
+    n["render"]["style"] = "sparkly"
+    assert any("render.style" in p for p in objects.validate_record(n))
+    n["render"].pop("style")
+    assert objects.validate_record(n) == []
+    c = load("black_hole")          # the Sgr A* placeholder uses lensing on a black_hole
+    assert c["render"]["style"] == "lensing" and objects.validate_record(c) == []
+
+
+def _companion(**kw) -> dict:
+    r = load("star_host")
+    r.update(id="gdr3:5870569352746779008", name="Gaia BH2 companion",
+             prefer_record={"replace": ["dist"], "reason": "the single-star solution ignores the orbit"})
+    r.update(kw)
+    return r
+
+
+def test_prefer_record_on_a_listed_star_is_accepted():
+    assert objects.validate_record(_companion()) == []
+    r = _companion()
+    r["position"]["dist"]["tier"] = "catalogue"
+    assert objects.validate_record(r) == []
+
+
+def test_prefer_record_may_replace_the_stellar_parameters_the_record_carries():
+    r = _companion()
+    assert {"teff", "mass"} <= set(r["props"]) and r["size"]["radius"]
+    r["prefer_record"]["replace"] = ["dist", "mass", "radius", "teff"]
+    assert objects.validate_record(r) == []
+    assert objects.PREFER_RECORD_FIELDS == ("dist", "mass", "radius", "teff")
+
+
+def test_prefer_record_ids_are_the_seven_companions():
+    assert objects.PREFER_RECORD_IDS == (
+        "gdr3:4373465352415301632", "gdr3:5870569352746779008", "gdr3:4318465066420528000",
+        "gdr3:2059383668236814720", "gdr3:2056188624872569088", "gdr3:3118721026600835328",
+        "gdr3:4477902563164690816")
+    for sid in objects.PREFER_RECORD_IDS:
+        assert objects.validate_record(_companion(id=sid)) == []
+
+
+@pytest.mark.parametrize("label,fn", {
+    "an id not in PREFER_RECORD_IDS": lambda r: r.update(id="gdr3:2635476908753563008"),
+    "a non-star kind": lambda r: r.update(kind="cluster"),
+    "an inferred distance": lambda r: (r["position"]["dist"].update(tier="inferred"),
+                                       r.update(evidence="derived")),
+    "an illustrative distance": lambda r: (r["position"]["dist"].update(tier="illustrative"),
+                                           r.update(evidence="illustrative")),
+    "no distance": lambda r: (r["position"].update(dist=None, method=None, tier="catalogue")),
+    "a replace value other than a field list": lambda r: r["prefer_record"].update(replace="dist"),
+    "an empty field list": lambda r: r["prefer_record"].update(replace=[]),
+    "an unlisted field (sky position)": lambda r: r["prefer_record"].update(replace=["dist", "ra"]),
+    "an unlisted field (Gaia identity)": lambda r: r["prefer_record"].update(replace=["dist", "identity"]),
+    "an unlisted field (photometry)": lambda r: r["prefer_record"].update(replace=["dist", "gmag"]),
+    "a list without dist": lambda r: r["prefer_record"].update(replace=["teff"]),
+    "a repeated field": lambda r: r["prefer_record"].update(replace=["dist", "dist"]),
+    "fields out of order": lambda r: r["prefer_record"].update(replace=["dist", "teff", "mass"]),
+    "a non-string field": lambda r: r["prefer_record"].update(replace=["dist", 3]),
+    "a replaced field the record lacks": lambda r: (r["props"].pop("mass", None),
+                                                    r["prefer_record"].update(replace=["dist", "mass"])),
+    "a replaced field without a src": lambda r: (r["props"]["teff"].update(src=""),
+                                                 r["prefer_record"].update(replace=["dist", "teff"])),
+    "an extra key": lambda r: r["prefer_record"].update(also="position"),
+    "no reason": lambda r: r["prefer_record"].pop("reason"),
+    "an empty reason": lambda r: r["prefer_record"].update(reason="  "),
+    "a non-string reason": lambda r: r["prefer_record"].update(reason=3),
+    "no replace": lambda r: r["prefer_record"].pop("replace"),
+    "a string value": lambda r: r.update(prefer_record="dist"),
+    "a null value": lambda r: r.update(prefer_record=None),
+}.items(), ids=lambda x: x if isinstance(x, str) else "")
+def test_prefer_record_rejects(label, fn):
+    r = _companion()
+    fn(r)
+    assert any("prefer_record" in p for p in objects.validate_record(r)), label
+
+
+def test_a_star_without_prefer_record_is_unaffected():
+    assert objects.validate_record(load("star_host")) == []
+
+
+def test_a_direction_only_star_may_have_a_catalogue_or_measured_radius():
+    r = load("star_host")
+    r["position"]["dist"], r["position"]["method"], r["position"]["tier"] = None, None, "catalogue"
+    r["size"] = {"angular": None, "radius": objects.quantity(0.12, "NEA pscomppars", "catalogue", "Rsun")}
+    assert objects.validate_record(r) == []
+    r["size"]["radius"]["tier"] = "measured"
+    assert objects.validate_record(r) == []
+    r["size"]["radius"]["tier"] = "inferred"
+    assert any("radius" in p for p in objects.validate_record(r))

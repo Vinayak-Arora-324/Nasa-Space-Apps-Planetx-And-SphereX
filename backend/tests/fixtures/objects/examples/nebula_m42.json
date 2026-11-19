@@ -1,0 +1,98 @@
+{
+  "designations": [
+    "M 42",
+    "NGC 1976",
+    "Sh2-281",
+    "LBN 974",
+    "MWSC 0582",
+    "Great Orion Nebula"
+  ],
+  "evidence": "derived",
+  "host": null,
+  "id": "ongc:NGC1976",
+  "kind": "nebula",
+  "name": "Orion Nebula",
+  "parent": null,
+  "position": {
+    "dec": -5.3896667,
+    "dist": {
+      "hi": 440,
+      "lo": 360,
+      "src": "Russeil 2003, A&A 397, 133, table3: stellar distance of complex 208.0-19.0 (Sh2-281)",
+      "tier": "inferred",
+      "unit": "pc",
+      "v": 400
+    },
+    "epoch": 2000.0,
+    "method": "photometric",
+    "model": "fixed",
+    "ra": 83.8186667,
+    "tier": "catalogue"
+  },
+  "props": {
+    "bmag": {
+      "src": "OpenNGC v20260501",
+      "tier": "catalogue",
+      "unit": "mag",
+      "v": 4
+    },
+    "sh2_bright": {
+      "src": "Sharpless 1959 (VII/20) Bright 3",
+      "tier": "catalogue",
+      "v": "bright"
+    },
+    "sh2_form": {
+      "src": "Sharpless 1959 (VII/20) Form 3",
+      "tier": "catalogue",
+      "v": "irregular"
+    },
+    "sh2_struct": {
+      "src": "Sharpless 1959 (VII/20) Struct 2",
+      "tier": "catalogue",
+      "v": "intermediate"
+    },
+    "type": {
+      "src": "OpenNGC v20260501 (Cl+N)",
+      "tier": "catalogue",
+      "v": "Cluster with nebula"
+    },
+    "vmag": {
+      "src": "OpenNGC v20260501",
+      "tier": "catalogue",
+      "unit": "mag",
+      "v": 4
+    }
+  },
+  "provenance": {
+    "catalogue": "OpenNGC + Sharpless (VII/20)",
+    "dataset": "nebulae",
+    "source": "static:nebulae",
+    "version": "OpenNGC v20260501 (36cb178a)"
+  },
+  "render": {
+    "mag": 4
+  },
+  "size": {
+    "angular": {
+      "major": {
+        "src": "OpenNGC v20260501",
+        "tier": "catalogue",
+        "unit": "arcmin",
+        "v": 90
+      },
+      "minor": {
+        "src": "OpenNGC v20260501",
+        "tier": "catalogue",
+        "unit": "arcmin",
+        "v": 60
+      },
+      "pa": null
+    },
+    "radius": {
+      "src": "from angular size and distance",
+      "tier": "inferred",
+      "unit": "pc",
+      "v": 5.236
+    }
+  }
+}

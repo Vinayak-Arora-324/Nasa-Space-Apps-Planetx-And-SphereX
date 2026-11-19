@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, markerPoints, markerSize, isHollowSize, mergeStarSystem, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature } from '../js/blink/scene3d-objects.js';
-import { orbitPlacement } from '../js/blink/scene3d-orbits.js';
+import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, markerPoints, markerSize, isHollowSize, mergeStarSystem, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature,
+  skyFade, INF_PC, MW_FADE_PC, SKY_FADE_PC, nebulaItem, lensingItems, LENS_MIN_PX, fromYouFor, visibleCounts, creditItems, creditsLine, datasetCounts,
+  preferredStarDistance, preferredStarPlacement } from '../js/blink/scene3d-objects.js';
+import { preferredDistanceRows, beyondKinds } from '../js/blink/scene3d-registry.js';
+import { orbitPlacement, hashUnit } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-frames.js';
 import * as M from '../js/blink/scene3d-math.js';
+import { starModel } from '../js/blink/scene3d-physics.js';
+import { renderStarCard } from '../js/blink/scene3d-card.js';
 
 const AU = F.AU_PER_PC;
 const q = (v, unit, tier = 'measured') => ({ v, unit, src: 'test', tier });
@@ -56,7 +61,7 @@ test('a schema major of 2 is refused and the store stays empty', () => {
 
 test('unknown kinds are counted and skipped; bad records and duplicates are skipped', () => {
   const s = new ObjectStore();
-  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'nebula' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
+  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'galaxy' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
     { ...earth }, { id: 'gdr3:1', kind: 'star', name: 's', position: { model: 'fixed' } }, mars]));
   assert.deepEqual(r, { ok: true, unknownKinds: 1 });
   assert.deepEqual([...s.byId.keys()].sort(), ['ss:earth', 'ss:mars']); assert.equal(s.skipped, 4);   // star records are kept in store.stars, not skipped
@@ -594,4 +599,434 @@ test('a cluster trip: the plan is fly-galaxy and the spec stops at 2 x r50 (pc);
   const st = { asteroid: { count: 2000, truncated: true } };
   assert.equal(countPhrase(['dwarf_planet', 'asteroid', 'comet'], { dwarf_planet: 1, asteroid: 2000, comet: 2 }, st), '2,003 brightest small bodies (more in this cone)');
   assert.deepEqual(capNotes(st), ['Showing the 2,000 brightest small bodies in the cone; fainter ones are left out.']);
+});
+
+// ====================================================================== Phase 2: nebulae, direction-only records, black holes
+const D2R = Math.PI / 180;
+const dotv = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const crossv = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const catQ = (v, unit) => ({ v, unit, src: 't', tier: 'catalogue' });
+const neb = (id, o = {}, ang = {}, pr = {}) => ({
+  id, kind: 'nebula', name: id, designations: [], host: null, parent: null,
+  position: { model: 'fixed', ra: 83.82, dec: -5.39, epoch: 2000, method: 'photometric', tier: 'catalogue', dist: { v: 400, lo: 360, hi: 440, unit: 'pc', src: 't', tier: 'inferred' } },
+  in_cone: true, size: { radius: null, angular: { major: catQ(90, 'arcmin'), minor: catQ(60, 'arcmin'), pa: catQ(30, 'deg'), ...ang } },
+  props: { type: { v: 'Emission nebula', src: 't', tier: 'catalogue' }, ...pr }, provenance: { source: 'static:nebulae', dataset: 'nebulae' }, evidence: 'derived', render: { mag: 4 }, ...o,
+});
+const dirNeb = (id, o = {}, ang = {}, pr = {}) => neb(id, { evidence: 'measured', position: { model: 'fixed', ra: 83.633, dec: 22.014, epoch: 2000, tier: 'catalogue', dist: null }, ...o }, ang, pr);
+/** A pinhole camera at the origin of the camera-relative frame looking along `fwd` with `up`: project(rel) in px, null behind it (never clips to the screen). */
+const pinhole = (fwd, up, f = 1000) => {
+  const R = crossv(fwd, up);
+  return (rel) => { const z = dotv(rel, fwd); return z <= 1e-12 ? null : [f * dotv(rel, R) / z, -f * dotv(rel, up) / z]; };
+};
+const skyNE = (ra, dec) => {   // north and east from the section 17.6.1 formulas, written out here (not through skyBasis)
+  const a = ra * D2R, d = dec * D2R;
+  return { N: [-Math.sin(d) * Math.cos(a), -Math.sin(d) * Math.sin(a), Math.cos(d)], E: [-Math.sin(a), Math.cos(a), 0], u: M.radecToXyz(ra, dec, 1) };
+};
+const modPi = (x) => ((x % Math.PI) + Math.PI) % Math.PI;
+const angDiffPi = (a, b) => { const d = modPi(a - b); return Math.min(d, Math.PI - d); };
+const nebEntry = (o, cam, opts = {}) => {
+  const s = store([o]), vis = visibleObjects(s, gctx(opts));
+  assert.equal(vis.length, 1); return vis[0];
+};
+const sunCam = F.makeCam({ pos: [0, 0, 0] });
+
+test('direction-only records: atInfinity in the galaxy frame, never in a system frame, group markers ignore them', () => {
+  const d = dirNeb('ongc:NGC1952'), p = neb('ongc:NGC1976');
+  const s = store([earth, d, p]);
+  assert.deepEqual(s.placement(d.id).dir, M.radecToXyz(83.633, 22.014, 1)); assert.equal(s.placement(d.id).galPc, null);
+  const vis = visibleObjects(s, gctx());
+  const e = vis.find((x) => x.id === d.id), pe = vis.find((x) => x.id === p.id);
+  assert.equal(e.atInfinity, true); assert.equal(pe.atInfinity, undefined); assert.equal(e.renderer, 'billboard');
+  assert.deepEqual(visibleObjects(s, gctx({ frame: 'system', inHost: () => true })).filter((x) => x.kind === 'nebula'), []);
+  assert.deepEqual(visibleObjects(s, gctx({ layers: { ...defaultLayers(), nebulae: false } })).map((x) => x.id), []);
+  assert.deepEqual(groupState(s, vis, sunCam, 1000), {});
+  assert.deepEqual(visibleCounts(vis), { counts: { nebula: 2 }, direct: { nebula: 1 } });
+  // cone scope still applies
+  assert.equal(visibleObjects(store([{ ...d, in_cone: false }]), gctx()).length, 0);
+});
+
+test('framePos of a direction-only entry is dir x INF_PC x unitsPerPc, whatever the camera does; skyFade at 0, 800 and 5,000 pc', () => {
+  const d = dirNeb('ongc:NGC1952'), e = visibleObjects(store([d]), gctx())[0], dir = M.radecToXyz(83.633, 22.014, 1);
+  assert.equal(INF_PC, 1e7);
+  for (const pos of [[0, 0, 0], [500, -300, 20], [1e4, 1e4, -1e4]]) assert.deepEqual(framePos(e, F.makeCam({ pos })), dir.map((v) => v * 1e7));
+  assert.ok(near(framePos(e, { ...F.makeCam({ pos: [1, 2, 3] }), frame: 'system', host: { key: 'x', pc: [0, 0, 0] } }), dir.map((v) => v * 1e7 * AU), 1e-3));
+  assert.equal(skyFade(F.makeCam({ pos: [0, 0, 0] })), 1);
+  assert.ok(Math.abs(skyFade(F.makeCam({ pos: [800, 0, 0] })) - 0.5) < 1e-12);
+  assert.ok(Math.abs(skyFade(F.makeCam({ pos: [0, 3000, 4000] })) - 1 / (1 + 39.0625)) < 1e-12);
+  assert.equal(MW_FADE_PC, 800); assert.equal(SKY_FADE_PC, MW_FADE_PC);
+});
+
+test('no labels and no picks below skyFade 0.25; labels carry the fade as alpha above it; placed objects are unaffected', () => {
+  const d = dirNeb('ongc:NGC1952'), p = neb('ongc:NGC1976'), vis = visibleObjects(store([d, p]), gctx());
+  const project = (rel) => [100 + rel[0] * 1e-9, 100 + rel[1] * 1e-9], pos = (e) => framePos(e, sunCam);
+  const lab = (sky) => labelCandidates(vis, {}, { project, framePos: pos, skyFade: sky });
+  assert.deepEqual(lab(1).map((l) => l.text).sort(), ['ongc:NGC1952', 'ongc:NGC1976']);
+  assert.equal(lab(1).find((l) => l.text === 'ongc:NGC1976').alpha, undefined); assert.equal(lab(0.5).find((l) => l.text === 'ongc:NGC1952').alpha, 0.5);
+  assert.deepEqual(lab(0.2).map((l) => l.text), ['ongc:NGC1976']);
+  const pick = (sky) => pickObjects(vis.filter((e) => e.atInfinity), {}, 100, 100, 50, { project, framePos: pos, skyFade: sky });
+  assert.equal(pick(0.3).sel.id, 'ongc:NGC1952'); assert.equal(pick(0.2), null); assert.equal(pick(1).sel.kind, 'nebula');
+});
+
+test('planGo: a direction-only target turns to it; fromYouFor is null for it; placed objects keep their plans', () => {
+  const d = dirNeb('ongc:NGC1952'), s = store([d, neb('ongc:NGC1976')]), e = visibleObjects(s, gctx()).find((x) => x.id === d.id);
+  const dir = M.radecToXyz(83.633, 22.014, 1);
+  assert.deepEqual(planGo(e, { camFrame: 'galaxy', camHostKey: null }), { type: 'look', dir });
+  assert.deepEqual(planGo({ kind: 'nebula', id: d.id, host: null }, { camFrame: 'galaxy', camHostKey: null, placement: (id) => s.placement(id) }), { type: 'look', dir });
+  assert.deepEqual(planGo({ kind: 'nebula', id: 'ongc:NGC1976', host: null }, { camFrame: 'galaxy', camHostKey: null, placement: (id) => s.placement(id) }), { type: 'fly-galaxy' });
+  assert.equal(fromYouFor(e, [1, 2, 3], () => 'x'), null); assert.equal(fromYouFor({ id: 'a' }, [1, 2, 3], () => 'x'), 'x');
+});
+
+test('nebulaItem from the Sun: the screen ellipse is the catalogue major, minor and PA to 1e-6, for several PAs and near the pole', () => {
+  const f = 1000;
+  for (const [ra, dec] of [[83.82, -5.39], [10, 60], [200, 89.5], [350, -89.2]]) {
+    for (const pa of [0, 30, 90, 137, 179]) {
+      for (const placed of [true, false]) {
+        const o = placed ? neb('ongc:T', { position: { ...neb('x').position, ra, dec } }, { major: catQ(90, 'arcmin'), minor: catQ(40, 'arcmin'), pa: catQ(pa, 'deg') })
+          : dirNeb('ongc:T', { position: { model: 'fixed', ra, dec, epoch: 2000, tier: 'catalogue', dist: null } }, { major: catQ(90, 'arcmin'), minor: catQ(40, 'arcmin'), pa: catQ(pa, 'deg') });
+        const { N, u } = skyNE(ra, dec), e = nebEntry(o, sunCam), it = nebulaItem(e, sunCam, { project: pinhole(u, N, f) });
+        const wantMaj = f * Math.tan(45 * D2R / 60), wantMin = f * Math.tan(20 * D2R / 60);
+        assert.ok(Math.abs(it.semiMajorPx / wantMaj - 1) < 1e-6, `major ${ra} ${dec} ${pa}`);
+        assert.ok(Math.abs(it.semiMinorPx / wantMin - 1) < 1e-6, `minor ${ra} ${dec} ${pa}`);
+        assert.ok(angDiffPi(it.angle, Math.atan2(-Math.cos(pa * D2R), -Math.sin(pa * D2R))) < 1e-6, `PA ${ra} ${dec} ${pa}`);   // north up, east left
+        assert.equal(it.inside, false); assert.equal(it.atInfinity, !placed);
+      }
+    }
+  }
+});
+
+test('nebulaItem: a placed nebula seen side-on shows its depth axis (as long as the minor semi-axis)', () => {
+  const o = neb('ongc:S', {}, { major: catQ(20, 'arcmin'), minor: catQ(20, 'arcmin'), pa: catQ(0, 'deg') });
+  const e = nebEntry(o, sunCam), { N, u } = skyNE(83.82, -5.39), D = Math.hypot(...e.galPc), semi = D * Math.tan(10 * D2R / 60);
+  // look along the major axis (north) from 400 pc to the south: A points at the camera and vanishes, B and the depth axis are both seen
+  const cam = F.makeCam({ pos: e.galPc.map((v, i) => v + 400 * N[i]) });
+  const it = nebulaItem(e, cam, { project: pinhole(N.map((v) => -v), u, 1000) });
+  assert.ok(Math.abs(it.semiMajorPx - 1000 * semi / 400) < 1e-6 * it.semiMajorPx, 'the larger of B and the depth axis');
+  assert.ok(Math.abs(it.semiMinorPx - it.semiMajorPx) < 1e-6 * it.semiMajorPx, 'B and the depth axis have the same length: a circle');
+});
+
+test('nebulaItem: unknown minor is a circle; unknown PA uses the hashed angle in the glow and a dashed circle in the outline; no major is a marker', () => {
+  const { N, u } = skyNE(83.82, -5.39), proj = pinhole(u, N);
+  const noMinor = nebEntry(neb('ongc:M', {}, { minor: null }), sunCam), a = nebulaItem(noMinor, sunCam, { project: proj });
+  assert.equal(a.minorUnknown, true); assert.ok(Math.abs(a.semiMajorPx - a.semiMinorPx) < 1e-9);
+  const noPa = nebEntry(neb('ongc:P', {}, { pa: null }), sunCam), g = nebulaItem(noPa, sunCam, { project: proj }), ev = nebulaItem(noPa, sunCam, { project: proj, evidence: true });
+  assert.equal(g.paUnknown, true); assert.equal(g.mode, 'glow'); assert.equal(g.dashed, false);
+  const pa = 180 * hashUnit('ongc:P', 'pa');
+  assert.ok(angDiffPi(g.angle, Math.atan2(-Math.cos(pa * D2R), -Math.sin(pa * D2R))) < 1e-6, 'the glow angle is the hashed PA');
+  assert.ok(g.semiMinorPx < g.semiMajorPx * 0.7, 'the glow keeps its minor axis');
+  assert.equal(ev.mode, 'outline'); assert.equal(ev.dashed, true); assert.ok(Math.abs(ev.semiMinorPx - ev.semiMajorPx) < 1e-9, 'a circle of the major radius');
+  assert.ok(Math.abs(ev.semiMajorPx - 1000 * Math.tan(45 * D2R / 60)) < 1e-6);
+  const solid = nebulaItem(nebEntry(neb('ongc:K', { evidence: 'measured' }), sunCam), sunCam, { project: proj, evidence: true });
+  assert.equal(solid.dashed, false); assert.equal(solid.hollow, false);
+  assert.equal(nebulaItem(nebEntry(neb('ongc:D'), sunCam), sunCam, { project: proj, evidence: true }).dashed, true, 'derived: hollow and dashed');
+  const none = nebulaItem(nebEntry(neb('ongc:N', {}, { major: null, minor: null, pa: null }), sunCam), sunCam, { project: proj });
+  assert.equal(none.markerOnly, true); assert.equal(none.alpha, 0);
+  assert.equal(nebulaItem(nebEntry(neb('ongc:Q'), sunCam), sunCam, {}), null, 'project is required');
+  assert.equal(a.seed, hashUnit('ongc:M', 'look'));
+});
+
+test('nebulaItem brightness: the surface-brightness mapping, the Sharpless fallback, and the fades', () => {
+  const { N, u } = skyNE(83.82, -5.39), proj = pinhole(u, N);
+  const at = (o, cam = sunCam, ctx = {}) => nebulaItem(nebEntry(o, cam), cam, { project: proj, ...ctx });
+  const far = (extra) => neb('ongc:B', { position: { ...neb('x').position, dist: { v: 1000, unit: 'pc', src: 't', tier: 'measured' } }, render: { mag: 14.757 }, ...extra }, { major: catQ(20, 'arcmin'), minor: catQ(20, 'arcmin') });
+  const sb = 14.757 + 2.5 * Math.log10(Math.PI * 100);
+  assert.ok(Math.abs(sb - 21) < 1e-3);
+  const mid = at(far());
+  assert.ok(Math.abs(mid.alpha - 0.5 * Math.pow(10, -0.4 * (sb - 20))) < 1e-9); assert.equal(mid.fade, 1);
+  assert.equal(at(far({ render: { mag: 1 } })).alpha, 0.5, 'clamped at 0.5');
+  assert.equal(at(far({ render: { mag: 20 } })).alpha, 0.06, 'clamped at 0.06');
+  assert.ok(Math.abs(at(far({ render: {} }, {})).alpha - 0.1) < 1e-12, 'no magnitude and no Sharpless code: 0.10');
+  for (const [b, a] of [[1, 0.08], [2, 0.14], [3, 0.22]]) assert.equal(at(far({ render: {} }), sunCam, {}).alpha === 0.1 && at(neb('ongc:S' + b, { render: {} }, {}, { sh2_bright: { v: b, tier: 'catalogue', src: 't' } })).alpha, a);
+  assert.equal(at(neb('ongc:S4', { render: {} }, {}, { sh2_bright: { v: 'bright', tier: 'catalogue', src: 't' } })).alpha, 0.22, 'the word form too');
+  // direction-only: times skyFade (half at 800 pc); nearFade multiplies everything
+  const d = dirNeb('ongc:I', { render: { mag: 1 } }), e = nebEntry(d, sunCam), cam800 = F.makeCam({ pos: [800, 0, 0] });
+  assert.equal(nebulaItem(e, sunCam, { project: proj }).alpha, 0.5);
+  const half = nebulaItem(e, cam800, { project: () => [0, 0] }), none = nebulaItem(e, sunCam, { project: proj, nearFade: 0.5 });
+  assert.equal(half.alpha, 0.25); assert.equal(half.markerAlpha, 0.5); assert.equal(half.lineAlpha, 0.5); assert.equal(half.skyFade, 0.5);
+  assert.equal(none.alpha, 0.25); assert.equal(none.markerAlpha, 0.5); assert.equal(none.lineAlpha, 0.5);
+});
+
+test('nebulaItem: markerOnly under 3 px, the glow fades out approaching a placed nebula (smoothstep(1, 3, dist / semi-major)) and inside means no glow', () => {
+  const { N, u } = skyNE(83.82, -5.39), proj = pinhole(u, N);
+  const ring = nebulaItem(nebEntry(neb('ongc:R', { position: { ...neb('x').position, dist: { v: 787, unit: 'pc', src: 't', tier: 'measured' } } }, { major: catQ(1.27, 'arcmin'), minor: null, pa: null }), sunCam), sunCam, { project: proj });
+  assert.ok(ring.semiMajorPx < 3); assert.equal(ring.markerOnly, true);
+  const big = nebulaItem(nebEntry(neb('ongc:Big'), sunCam), sunCam, { project: proj }); assert.equal(big.markerOnly, false);
+  assert.ok(nebulaItem(nebEntry(neb('ongc:Edge', {}, { major: catQ(0.3, 'deg'), minor: catQ(0.3, 'deg') }), sunCam), sunCam, { project: proj }).semiMajorPx > 3 - 1e9);
+  // along the line to the Sun, 2 semi-major axes from the centre: fade = smoothstep(1, 3, 2) = 0.5
+  const o = neb('ongc:F', {}, { major: catQ(60, 'arcmin'), minor: catQ(30, 'arcmin'), pa: catQ(0, 'deg') }), e = nebEntry(o, sunCam);
+  const D = Math.hypot(...e.galPc), semi = D * Math.tan(30 * D2R / 60), uu = e.galPc.map((v) => v / D);
+  const camAt = (k) => F.makeCam({ pos: uu.map((v) => v * (D - k * semi)) });
+  const proj2 = pinhole(uu, N);
+  const it2 = nebulaItem(e, camAt(2), { project: proj2 });
+  assert.ok(Math.abs(it2.fade - 0.5) < 1e-9); assert.ok(Math.abs(it2.alpha - 0.5 * 0.5) < 1e-9); assert.equal(it2.inside, false);   // mag 4 on a big patch: base 0.5
+  assert.equal(nebulaItem(e, camAt(4), { project: proj2 }).fade, 1);
+  assert.equal(nebulaItem(e, camAt(0.5), { project: proj2 }).fade, 0);
+  const inside = nebulaItem(e, camAt(0), { project: proj2 });   // the camera is at the centre: the axis ends are behind or beside it
+  assert.equal(inside.inside, true); assert.equal(inside.alpha, 0); assert.equal(inside.lineAlpha, 0); assert.equal(inside.semiMajorPx, null);
+  // billboardItems: a nebula item needs project; the Evidence view is outline
+  const vis = visibleObjects(store([o, pleiades]), gctx());
+  assert.deepEqual(billboardItems(vis, sunCam, { pxPerRad: 1000 }).map((i) => i.id), ['hr23:Pleiades']);
+  const items = billboardItems(vis, sunCam, { pxPerRad: 1000, project: proj, evidence: true });
+  assert.deepEqual(items.map((i) => i.id).sort(), ['hr23:Pleiades', 'ongc:F']); assert.equal(items.find((i) => i.id === 'ongc:F').mode, 'outline');
+  assert.equal(items.find((i) => i.id === 'hr23:Pleiades').billboard, undefined, 'cluster items are unchanged');
+});
+
+test('nebulaItem look per type, and the marker points use the nebula marker alpha', () => {
+  const { N, u } = skyNE(83.82, -5.39), proj = pinhole(u, N);
+  const look = (t) => nebulaItem(nebEntry(neb('ongc:L', {}, {}, { type: { v: t, tier: 'catalogue', src: 't' } }), sunCam), sunCam, { project: proj }).look;
+  assert.deepEqual(['Emission nebula', 'HII region', 'Nebula', 'Cluster with nebula', 'Reflection nebula', 'Planetary nebula', 'Supernova remnant', 'Dark nebula'].map(look),
+    ['emission', 'emission', 'emission', 'emission', 'reflection', 'planetary', 'snr', 'dark']);
+  assert.equal(nebulaItem(nebEntry(neb('ongc:L2', { props: {} }), sunCam), sunCam, { project: proj }).look, 'emission', 'Sharpless-only regions have no type words to go on');
+  const d = dirNeb('ongc:I'), vis = visibleObjects(store([d]), gctx()), cam800 = F.makeCam({ pos: [800, 0, 0] });
+  const items = billboardItems(vis, cam800, { pxPerRad: 1000, project: () => [0, 0] });
+  const pts = markerPoints(vis, {}, cam800, items);
+  assert.equal(pts.length, 8); assert.equal(pts[4], 0.5); assert.equal(pts[3], 4);
+  assert.equal(markerPoints(vis, {}, cam800, billboardItems(vis, cam800, { pxPerRad: 1000, project: () => [0, 0], nearPc: 0 })).length, 0, 'nearFade 0: no marker');
+});
+
+test('pick priority: a nebula is 26 until it is a marker, then 17; a lensing black hole is 12', () => {
+  const e = visibleObjects(store([neb('ongc:P')]), gctx())[0];
+  assert.equal(pickPriority(e), 26); assert.equal(pickPriority({ ...e, markerOnly: true }), 17);
+});
+
+// ---- black holes
+const BH_HOST = 'gdr3:5870569352746779008';
+const bhEl = (o = {}) => ({ period_d: q(1276.7, 'd'), a_au: q(4.96, 'au'), e: q(0.5176, undefined), i_deg: q(34.87, 'deg'), node_deg: q(86.9, 'deg'), omega_deg: q(130.9, 'deg'), t_peri_mjd: q(57438.3, undefined), t_conj_mjd: null, ...o });
+const bh = (id, o = {}) => ({
+  id, kind: 'black_hole', name: 'Gaia BH2', designations: [], host: BH_HOST, parent: BH_HOST,
+  position: { model: 'orbit', host_radec: [262.17, -0.58], phase_known: true, tier: 'measured', src: 'El-Badry et al. 2023', elements: bhEl() },
+  in_cone: true, size: { radius: { v: 26.4, unit: 'km', src: 'Schwarzschild radius from the mass (non-rotating)', tier: 'inferred' }, angular: null },
+  props: { mass: { v: 8.94, lo: 8.6, hi: 9.28, unit: 'Msun', src: 'El-Badry 2023', tier: 'measured' }, type: { v: 'stellar-mass', src: 'curated', tier: 'catalogue' }, state: { v: 'dormant: no accretion detected', src: 't', tier: 'catalogue' } },
+  provenance: { source: 'static:bh-curated', dataset: 'bh-curated' }, evidence: 'measured', render: { style: 'lensing' }, ...o,
+});
+const sgr = () => bh('bh:Sgr A*', { name: 'Sagittarius A*', host: null, parent: null,
+  position: { model: 'fixed', ra: 266.4168371, dec: -29.0078106, epoch: 2000, method: 'orbit-fit', tier: 'measured', dist: { v: 8277, lo: 8268, hi: 8286, unit: 'pc', src: 'GRAVITY 2022', tier: 'measured' } },
+  size: { radius: { v: 1.269e7, unit: 'km', src: 'Schwarzschild radius from the mass (non-rotating)', tier: 'inferred' }, angular: null },
+  props: { mass: { v: 4.297e6, unit: 'Msun', src: 'GRAVITY', tier: 'measured' }, state: { v: 'low-luminosity accretion', src: 't', tier: 'catalogue' } } });
+const bh2Star = (o = {}) => ({
+  id: BH_HOST, kind: 'star', name: 'Gaia BH2 companion', designations: [], same_as: [], host: null, parent: null,
+  prefer_record: { replace: ['dist'], reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
+  position: { model: 'fixed', ra: 262.17, dec: -0.58, epoch: 2016, method: 'parallax', dist: { v: 1164.1, lo: 1140.5, hi: 1189.0, unit: 'pc', src: 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas', tier: 'measured' } },
+  props: { gmag: { v: 13.7, unit: 'mag', src: 'Gaia DR3', tier: 'measured' }, gaia_parallax: { v: 0.6721, lo: 0.5676, hi: 0.7766, unit: 'mas', src: 'Gaia DR3 single-star solution (RUWE 8.0)', tier: 'measured' } },
+  evidence: 'measured', render: { mag: 13.7 }, ...o,
+});
+
+test('lensingItems: true size against LENS_MIN_PX, the enlargement factor, disc by state, incl 60 unless known, marker only in the Evidence view', () => {
+  const s = store([sgr()]), vis = visibleObjects(s, gctx());
+  assert.equal(vis.length, 1); assert.equal(vis[0].renderer, 'lensing'); assert.equal(LENS_MIN_PX, 9);
+  const cam = F.makeCam({ pos: [0, 0, 0] }), [it] = lensingItems(vis, cam, { pxPerRad: 1000 });
+  const rs_pc = 1.269e7 / (AU * 149597870.7), dist = Math.hypot(...vis[0].galPc);
+  assert.ok(Math.abs(it.rShadow / (2.598 * rs_pc) - 1) < 1e-12); assert.ok(Math.abs(it.dist - dist) < 1e-9);
+  assert.ok(Math.abs(it.truePx - Math.atan(2.598 * rs_pc / dist) * 1000) / it.truePx < 1e-9); assert.ok(it.truePx < 1e-5);
+  assert.equal(it.px, 9); assert.equal(it.enlarged, true); assert.ok(Math.abs(it.factor - 9 / it.truePx) / it.factor < 1e-12);
+  assert.equal(it.disc, true); assert.equal(it.incl, 60); assert.equal(it.inclAssumed, true);
+  assert.equal(lensingItems(vis, cam, { evidence: true, pxPerRad: 1000 }).length, 0, 'Evidence view: marker only');
+  assert.ok(markerPoints(vis, {}, cam).length === 8, 'the marker is still there');
+  // big enough on screen (very close, huge pxPerRad): true size wins, not enlarged
+  const closeCam = F.makeCam({ pos: vis[0].galPc.map((v) => v * (1 - 1e-12)) }), c = lensingItems(vis, closeCam, { pxPerRad: 1e9 })[0];
+  assert.equal(c.enlarged, false); assert.equal(c.factor, 1); assert.equal(c.px, c.truePx); assert.ok(c.truePx > 9);
+  assert.equal(lensingItems(vis, cam, { pxPerRad: 1000, project: () => [5, 6] })[0].screen.join(), '5,6');
+});
+
+test('lensing in a system frame: AU units, a dormant black hole has no disc, i_deg is used when known', () => {
+  const host = bh2Star(), b = bh('bh:Gaia BH2');
+  const s = store([b, host]), hostPc = M.radecToXyz(262.17, -0.58, 1164.1);
+  s.setHostResolver(resolver({ [BH_HOST]: BH_HOST }, { [BH_HOST]: hostPc }));
+  const cam = F.makeCam({ frame: 'system', host: { key: BH_HOST, pc: hostPc }, pos: [1, 0, 0] });
+  const vis = visibleObjects(s, { layers: defaultLayers(), evidence: false, frame: 'system', inHost: (h) => h === BH_HOST });
+  assert.equal(vis.length, 1); assert.equal(vis[0].renderer, 'lensing');
+  const [it] = lensingItems(vis, cam, { pxPerRad: 1000 });
+  assert.ok(Math.abs(it.rShadow - 2.598 * 26.4 / 149597870.7) / it.rShadow < 1e-12, 'frame units are AU');
+  assert.equal(it.disc, false); assert.equal(it.incl, 34.87); assert.equal(it.inclAssumed, false);
+  assert.ok(it.truePx < 1e-3 && it.enlarged);
+  // a few thousand km away the shadow reaches its true size: 2.598 r_s = 68.6 km is 9 px at 7,600 km at 1000 px / rad
+  const at = (km) => lensingItems(vis, F.makeCam({ ...cam, pos: [vis[0].sysAu[0] + km / 149597870.7, vis[0].sysAu[1], vis[0].sysAu[2]] }), { pxPerRad: 1000 })[0];
+  assert.equal(at(5000).enlarged, false); assert.ok(Math.abs(at(5000).truePx - 1000 * Math.atan(2.598 * 26.4 / 5000)) < 1e-6); assert.equal(at(20000).enlarged, true);
+});
+
+test('hosted black holes are placed through the orbit branch, group with their host and appear in childrenOf; illustrative ones are hidden in the Evidence view', () => {
+  const host = bh2Star(), good = bh('bh:Gaia BH2'), xrb = bh('bh:Cyg X-1', { name: 'Cyg X-1', evidence: 'illustrative', position: { ...good.position, tier: 'illustrative', elements: bhEl({ node_deg: null, t_peri_mjd: null }) } });
+  const s = store([earth, good, xrb, host]);
+  const hostPc = M.radecToXyz(262.17, -0.58, 1164.1);
+  s.setHostResolver(resolver({ [BH_HOST]: BH_HOST }, { [BH_HOST]: hostPc }));
+  const p = s.placement('bh:Gaia BH2'), want = orbitPlacement(good, 61000);
+  assert.deepEqual(p.sysAu, want.xyzAu); assert.ok(Math.hypot(...p.sysAu) < 8, 'an orbit of a few AU'); assert.ok(near(p.galPc, hostPc.map((v, i) => v + p.sysAu[i] / AU), 1e-12));
+  assert.deepEqual(s.childrenOf(BH_HOST).map((o) => o.id).sort(), ['bh:Cyg X-1', 'bh:Gaia BH2']);
+  const vis = visibleObjects(s, gctx()), cam = F.makeCam({ pos: [0, 0, 0] });
+  assert.deepEqual(vis.filter((e) => e.kind === 'black_hole').map((e) => e.renderer), ['marker', 'marker']);
+  const g = groupState(s, vis.filter((e) => e.id === 'bh:Gaia BH2'), cam, 1000);
+  assert.equal(g[BH_HOST].grouped, true); assert.equal(g[BH_HOST].label, 'Gaia BH2 companion · 1 black hole'); assert.equal(g[BH_HOST].noun[0], 'black hole');
+  assert.deepEqual(visibleObjects(s, gctx({ evidence: true })).filter((e) => e.kind === 'black_hole').map((e) => e.id), ['bh:Gaia BH2'], 'illustrative ones are hidden, exactly as exoplanets are');
+  assert.equal(hostCountText(s, BH_HOST, { evidence: false, layers: {} }), '2 black holes (positions illustrative)');
+  assert.equal(hostCountText(s, BH_HOST, { evidence: true, layers: {} }), '2 black holes (positions illustrative, hidden in the Evidence view)');
+  assert.equal(hostCountText(s, BH_HOST, { evidence: false, layers: { blackHoles: false } }), '2 black holes (positions illustrative, layer off)');
+  // planGo: a hosted black hole goes through its host
+  assert.deepEqual(planGo({ kind: 'black_hole', id: 'bh:Gaia BH2', host: BH_HOST }, { camFrame: 'galaxy', camHostKey: null, resolveHost: (h) => s.resolveHost(h) }), { type: 'via-host', hostId: BH_HOST });
+  assert.deepEqual(planGo(sgr(), { camFrame: 'galaxy', camHostKey: null }), { type: 'fly-galaxy' });
+  // the layer
+  assert.deepEqual(visibleObjects(s, gctx({ layers: { ...defaultLayers(), blackHoles: false } })).filter((e) => e.kind === 'black_hole'), []);
+});
+
+test('prefer_record: BH2\'s companion is at 1,164 pc and the single-star Gaia parallax would give 1,488 pc; no prefer_record gives null', () => {
+  const d = preferredStarDistance(bh2Star());
+  assert.ok(Math.abs(d.pc - 1164.1) < 1e-9 && d.lo === 1140.5 && d.hi === 1189.0 && d.tier === 'measured'); assert.match(d.src, /El-Badry/);
+  assert.ok(Math.abs(d.notUsed.plxMas - 0.6721) < 1e-12); assert.ok(Math.abs(d.notUsed.pc - 1487.9) < 0.5); assert.ok(d.notUsed.pc > 1480 && d.notUsed.pc < 1495);
+  assert.ok(d.notUsed.pcLo < d.notUsed.pc && d.notUsed.pc < d.notUsed.pcHi); assert.match(d.notUsed.reason, /RUWE 8/);
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: undefined })), null);
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: 'ra', reason: 'x' } })), null);
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: ['mass'], reason: 'x' } })), null, 'dist not replaced');
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: 'dist', reason: 'x' } })).pc, 1164.1, 'a bare dist string still reads as [dist]');
+  assert.equal(preferredStarDistance(bh2Star({ position: { ...bh2Star().position, dist: null } })), null);
+  assert.equal(preferredStarDistance(null), null);
+  assert.equal(preferredStarDistance(bh2Star({ props: {} })).notUsed.pc, null);
+});
+
+test('prefer_record: only the distance changes, the Gaia direction is kept; resolveStarAliases reports the loaded keys to re-place', () => {
+  const rec = bh2Star(), dir = M.radecToXyz(262.1712, -0.5811, 1);
+  const bj = 1488, row = { xyz: dir.map((v) => v * bj), abs: 5 };
+  const pl = preferredStarPlacement(rec, row);
+  assert.equal(pl.d, 1164.1); assert.ok(near(pl.pos.map((v) => v / 1164.1), dir, 1e-12), 'the Gaia direction'); assert.ok(Math.abs(pl.gaiaPc - bj) < 1e-9);
+  const G = row.abs + 5 * Math.log10(bj) - 5;
+  assert.ok(Math.abs(pl.abs - (G - 5 * Math.log10(1164.1) + 5)) < 1e-12, 'the apparent G is kept'); assert.ok(pl.abs > row.abs, 'nearer, so fainter in absolute terms');
+  assert.deepEqual(preferredStarPlacement(rec, { dir, d: bj, abs: 5 }).pos, pl.pos);
+  assert.equal(preferredStarPlacement(bh2Star({ prefer_record: undefined }), row), null); assert.equal(preferredStarPlacement(rec, null), null);
+  const stars = new Map([[BH_HOST, rec], ['gdr3:9', { ...bh2Star(), id: 'gdr3:9', prefer_record: undefined }]]);
+  const r = resolveStarAliases(stars, (k) => k === BH_HOST || k === 'gdr3:9');
+  assert.deepEqual([...r.prefer.keys()], [BH_HOST]); assert.equal(r.prefer.get(BH_HOST), rec); assert.deepEqual(r.append, []);
+  const r2 = resolveStarAliases(new Map([[BH_HOST, rec]]), () => false);
+  assert.equal(r2.prefer.size, 0); assert.deepEqual(r2.append.map((x) => x.id), [BH_HOST], 'not loaded: appended at the record\'s own distance');
+});
+
+test('the hosted black hole and its companion are at the same distance from the Sun whether or not the Gaia star is loaded', () => {
+  const rec = bh2Star(), b = bh('bh:Gaia BH2'), dir = M.radecToXyz(262.17, -0.58, 1);
+  const place = (hostPc) => { const s = store([earth, b, rec]); s.setHostResolver(resolver({ [BH_HOST]: BH_HOST }, { [BH_HOST]: hostPc })); return { host: Math.hypot(...hostPc), bh: Math.hypot(...s.placement('bh:Gaia BH2').galPc), sep: Math.hypot(...s.placement('bh:Gaia BH2').sysAu) / AU }; };
+  const loaded = preferredStarPlacement(rec, { xyz: dir.map((v) => v * 1488), abs: 5 }).pos;   // a Gaia row at its own (Bailer-Jones) 1,488 pc, moved
+  const appended = M.radecToXyz(rec.position.ra, rec.position.dec, objectStarParams(rec).d);
+  const a = place(loaded), c = place(appended);
+  assert.ok(Math.abs(a.host - 1164.1) < 1e-6 && Math.abs(c.host - 1164.1) < 1e-6);
+  assert.ok(Math.abs(a.bh - a.host) <= a.sep + 1e-9, 'within the orbit offset'); assert.ok(Math.abs(c.bh - c.host) <= c.sep + 1e-9);
+  assert.ok(Math.abs(a.bh - c.bh) < 1e-5, 'the same with or without the Gaia star');
+  assert.ok(Math.abs(a.bh - 1488) > 300, 'not at the single-star distance');
+});
+
+test('credits line: only datasets that returned records in the cone and carry a credit; once per credit; errors add nothing', () => {
+  const prov = (dataset, extra = {}) => ({ dataset, source: 'static:' + dataset, ...extra });
+  const sources = [
+    { id: 'static:nebulae', status: 'ok', count: 12, provenance: prov('nebulae', { credit: 'Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC', licence_name: 'CC BY-SA 4.0', licence: 'https://creativecommons.org/licenses/by-sa/4.0/' }) },
+    { id: 'static:hr23-clusters', status: 'ok', count: 40, provenance: prov('hr23-clusters', { licence: 'https://x' }) },
+    { id: 'static:galaxies', status: 'ok', count: 0, provenance: prov('galaxies', { credit: 'Galaxy credit', licence_name: 'CC BY-SA 4.0' }) },
+    { id: 'static:bh-curated', status: 'ok', count: 3, provenance: prov('bh-curated') },
+    { id: 'static:broken', status: 'error', error: 'boom' },
+    { id: 'static:nea-exoplanets', status: 'ok', count: 5, provenance: prov('nea-exoplanets', { credit: '  ', licence_name: 'x' }) },
+  ];
+  assert.equal(creditsLine(sources), 'Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC · CC BY-SA 4.0');
+  assert.deepEqual(creditItems(sources).map((i) => [i.dataset, i.licenceName, i.licence]), [['nebulae', 'CC BY-SA 4.0', 'https://creativecommons.org/licenses/by-sa/4.0/']]);
+  assert.equal(creditsLine(sources, { nebulae: 0 }), '', 'no records in the cone');
+  assert.equal(creditsLine(sources, { galaxies: 2 }), 'Galaxy credit · CC BY-SA 4.0');
+  assert.equal(creditsLine(sources, { nebulae: 1, galaxies: 1 }), 'Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC · CC BY-SA 4.0 | Galaxy credit · CC BY-SA 4.0');
+  assert.equal(creditsLine([], null), ''); assert.equal(creditsLine(undefined), ''); assert.equal(creditsLine([{ id: 'x', status: 'ok', count: 1, provenance: { credit: 'C' } }]), 'C');
+  const dup = [sources[0], { ...sources[0], id: 'static:other', provenance: { ...sources[0].provenance, dataset: 'other' } }];
+  assert.equal(creditItems(dup).length, 1);
+  const s = store([earth, neb('ongc:A'), neb('ongc:B', { in_cone: false }), dirNeb('ongc:C'), bh('bh:Gaia BH2'), bh2Star({ in_cone: true, provenance: { dataset: 'bh-curated' } })]);
+  assert.deepEqual(datasetCounts(s), { nebulae: 2, 'bh-curated': 2 });
+  assert.equal(creditsLine(sources, datasetCounts(s)), 'Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC · CC BY-SA 4.0');
+});
+
+test('HUD: the kinds of group beyond, and the direction-only count text', () => {
+  assert.deepEqual(beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole']);
+  const kinds = beyondKinds(), counts = { nebula: 12, cluster: 1 }, direct = { nebula: 8 };
+  assert.equal(countPhrase(['nebula'], counts, {}, direct), '12 nebulae (8 direction only)');
+  assert.equal(countPhrase(['nebula'], counts, {}), '12 nebulae'); assert.equal(countPhrase(['cluster'], counts, {}, direct), '1 star cluster');
+  assert.equal(countPhrase(['nebula'], { nebula: 1 }, {}, { nebula: 1 }), '1 nebula (1 direction only)');
+  assert.equal(countPhrase(['nebula'], { nebula: 20 }, { nebula: { truncated: true } }, { nebula: 8 }), '20 nebulae (more in this cone, 8 direction only)');
+  assert.equal(countPhrase(['black_hole'], { black_hole: 2 }, {}, {}), '2 black holes');
+  void kinds;
+});
+
+test('star card rows for a prefer_record star are in the registry tests; the Gaia row names the parallax, its inverse and the reason', () => {
+  const r = preferredDistanceRows(bh2Star(), { bjPc: 1450.3 });
+  assert.equal(r.rows[0][0], 'Distance'); assert.match(r.rows[0][1], /1,16\d/); assert.equal(r.rows[0][2], 'measured'); assert.match(r.rows[0][3], /El-Badry/);
+  assert.equal(r.rows[1][0], 'Gaia single-star distance · not used'); assert.match(r.rows[1][1], /0\.672 mas → 1,490 pc/); assert.match(r.rows[1][1], /Bailer-Jones 1,450 pc/);
+  assert.match(r.notes[0], /RUWE 8\.0/); assert.equal(preferredDistanceRows(bh2Star({ prefer_record: undefined })), null);
+});
+
+// ---- prefer_record stellar parameters (section 17.8, 17.18 follow-up): the papers' values, not Gaia's single-star ones
+const bh2Paper = (o = {}) => bh2Star({
+  prefer_record: { replace: ['dist', 'mass', 'radius', 'teff'], reason: bh2Star().prefer_record.reason },
+  size: { radius: { v: 7.77, lo: 7.52, hi: 8.02, unit: 'Rsun', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' }, angular: null },
+  props: { ...bh2Star().props,
+    teff: { v: 4604, lo: 4517, hi: 4691, unit: 'K', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' },
+    mass: { v: 1.07, lo: 0.88, hi: 1.26, unit: 'Msun', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' } }, ...o });
+// a Gaia /api/system payload shaped like the BH2 companion's: FLAME's single-star mass is 2.60 (flagged); the other values are test inputs
+const bh2Gaia = () => ({ values: {
+  dist_pc: { v: 1488, src: 'Bailer-Jones 2021 (geometric)', tier: 'measured' },
+  teff_k: { v: 4700, lo: 4650, hi: 4750, src: 'Gaia DR3 GSP-Phot', tier: 'catalogue' },
+  radius_rsun: { v: 9.4, lo: 9.1, hi: 9.7, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  lum_lsun: { v: 37, lo: 35, hi: 39, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  mass_msun: { v: 2.6, lo: 2.3, hi: 2.9, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  age_gyr: { v: 0.8, src: 'Gaia DR3 FLAME', tier: 'catalogue' } },
+  notes: ['FLAME quality flags set (1): treat radius, luminosity, mass and age with caution'] });
+
+test('prefer_record stellar parameters: BH2\'s companion uses the paper\'s mass, radius and Teff whatever the tiers; Gaia\'s go to notUsed', () => {
+  const m = mergeStarSystem(bh2Gaia(), bh2Paper());
+  assert.equal(m.values.mass_msun.v, 1.07); assert.match(m.values.mass_msun.src, /El-Badry/);
+  assert.equal(m.values.radius_rsun.v, 7.77); assert.equal(m.values.teff_k.v, 4604);
+  assert.deepEqual(Object.keys(m.notUsed).sort(), ['mass_msun', 'radius_rsun', 'teff_k']);
+  assert.equal(m.notUsed.mass_msun.v, 2.6); assert.match(m.notUsed.mass_msun.src, /FLAME/);
+  assert.equal(m.values.lum_lsun.v, 37, 'a parameter the paper does not print keeps Gaia\'s value'); assert.equal(m.values.age_gyr.v, 0.8);
+  assert.ok(m.notes.includes('Luminosity and age: Gaia single-star model; may be biased for this binary.'), m.notes.join(' | '));
+  assert.ok(m.notes.some((n) => /^The Gaia single-star temperature, radius and mass are not used: /.test(n)));
+  assert.ok(m.notes.includes('FLAME quality flags set (1): treat radius, luminosity, mass and age with caution'), 'Gaia\'s own notes stay');
+  // without the replace list, the old rule: a tier tie keeps Gaia's FLAME value
+  const plain = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: { replace: ['dist'], reason: 'x' } }));
+  assert.equal(plain.values.mass_msun.v, 2.6); assert.deepEqual(plain.notUsed, {});
+  assert.ok(plain.notes.some((n) => /^Temperature, radius, luminosity, mass and age: Gaia single-star model/.test(n)));
+  // a star with no prefer_record is untouched by the new notes
+  const none = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: undefined }));
+  assert.equal(none.notUsed, undefined); assert.deepEqual(none.notes, bh2Gaia().notes);
+  // only a mass printed (Cyg X-1 style): the mass is replaced, Gaia's Teff and radius stay with the note
+  const cyg = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: { replace: ['dist', 'mass'], reason: 'x' } }));
+  assert.equal(cyg.values.mass_msun.v, 1.07); assert.equal(cyg.values.teff_k.v, 4700); assert.deepEqual(Object.keys(cyg.notUsed), ['mass_msun']);
+  assert.ok(cyg.notes.includes('Temperature, radius, luminosity and age: Gaia single-star model; may be biased for this binary.'));
+  assert.ok(cyg.notes.includes('The Gaia single-star mass is not used: Gaia\'s GSP-Phot and FLAME model the light as one single star, while the values shown come from the paper\'s fit of the binary.'));
+});
+
+test('prefer_record stellar parameters: the star model (what is drawn) uses the same values as the card', () => {
+  const md = starModel({ system: mergeStarSystem(bh2Gaia(), bh2Paper()), absG: 0.5, bpRp: 1.4, distPc: 1164.1, kind: 'gaia' });
+  assert.equal(md.massMsun.v, 1.07); assert.equal(md.radiusRsun.v, 7.77); assert.equal(md.teff.v, 4604);
+  assert.ok(Math.abs(md.radiusAu - 7.77 * 0.00465047) < 1e-12, 'the drawn size is the paper\'s radius');
+  assert.deepEqual(md.rgb, starModel({ system: { values: { teff_k: { v: 4604, tier: 'catalogue' } } } }).rgb, 'the colour is the paper\'s Teff');
+  assert.equal(md.notUsed.mass_msun.v, 2.6);
+});
+
+// a minimal DOM for renderStarCard: elements with children, className, textContent and a flattened text
+function fakeDoc() {
+  const mk = (tag) => ({ tag, className: '', children: [], _text: '', title: '', ownerDocument: doc, style: {},
+    appendChild(c) { this.children.push(c); return c; }, removeChild(c) { this.children.splice(this.children.indexOf(c), 1); },
+    get firstChild() { return this.children[0] || null; }, addEventListener() {},
+    set textContent(t) { this._text = String(t); }, get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); } });
+  const doc = { createElement: mk, createTextNode: (t) => ({ textContent: t }) };
+  return { doc, host: mk('div') };
+}
+const cardRows = (host) => {
+  const dl = host.children.find((c) => c.className === 'card-rows'), out = [];
+  for (let i = 0; i < dl.children.length; i += 2) out.push([dl.children[i].textContent, dl.children[i + 1].textContent.slice(1).trim(), dl.children[i + 1].children[0].title]);
+  return out;
+};
+
+test('prefer_record stellar parameters: BH2\'s companion card shows the paper\'s 1.07 M☉ and lists FLAME\'s 2.60 M☉ as not used', () => {
+  const rec = bh2Paper(), md = starModel({ system: mergeStarSystem(bh2Gaia(), rec), absG: 0.5, bpRp: 1.4, distPc: 1164.1, kind: 'gaia' });
+  const pref = preferredDistanceRows(rec, { bjPc: 1488 });
+  const { host } = fakeDoc();
+  renderStarCard(host, { ...md, notes: [...md.notes, ...pref.notes] }, { title: rec.name, distRows: pref.rows });
+  const rows = cardRows(host), get = (label) => rows.find((r) => r[0] === label);
+  assert.deepEqual(rows.map((r) => r[0]).slice(0, 7), ['Temperature', 'Gaia single-star temperature · not used', 'Radius', 'Gaia single-star radius · not used', 'Luminosity', 'Mass', 'Gaia single-star mass · not used']);
+  assert.equal(get('Mass')[1], '1.07 ± 0.19 M☉'); assert.match(get('Mass')[2], /El-Badry et al\. 2023/);
+  assert.equal(get('Gaia single-star mass · not used')[1], '2.60 ± 0.30 M☉'); assert.match(get('Gaia single-star mass · not used')[2], /FLAME/);
+  assert.equal(get('Radius')[1], '7.77 ± 0.25 R☉'); assert.equal(get('Temperature')[1], '4,600 ± 90 K');
+  assert.match(get('Luminosity')[2], /FLAME/);
+  assert.ok(get('Gaia single-star distance · not used'), 'the distance row is still there');
+  const notes = host.children.filter((c) => c.className === 'card-note').map((c) => c.textContent);
+  assert.ok(notes.includes('Luminosity and age: Gaia single-star model; may be biased for this binary.'));
+  assert.ok(notes.some((n) => /^The Gaia single-star temperature, radius and mass are not used/.test(n)));
+  assert.ok(notes.some((n) => /^The Gaia single-star distance is not used: /.test(n)));
 });

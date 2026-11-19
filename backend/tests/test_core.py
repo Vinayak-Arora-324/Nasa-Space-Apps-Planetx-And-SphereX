@@ -244,3 +244,76 @@ def test_parse_sesame():
     assert r["plx"] == 546.9759 and r["otype"] == "BY*" and r["source"] == "sesame"
     with pytest.raises(catalogs.NotFound):
         catalogs.parse_sesame("<Sesame><Target><Resolver/></Target></Sesame>", "nope")
+
+
+# --- Sesame mirrors (object framework §17.17) ---------------------------------------------
+
+_SESAME_OK = """<?xml version="1.0"?><Sesame><Target><name>M57</name><Resolver name="S=Simbad">
+<otype>PN</otype><jradeg>283.39623652</jradeg><jdedeg>33.02913425</jdedeg><oname>M 57</oname></Resolver></Target></Sesame>"""
+_SESAME_NONE = "<Sesame><Target><name>nope</name><Resolver/></Target></Sesame>"
+_URLS = ("https://cds.example/S", "https://cfa.example/S", "https://idia.example/S")
+
+
+def _stub_sesame(monkeypatch, answers):
+    """answers: host -> body text, or an exception to raise. Returns the list of hosts asked, in order."""
+    from urllib.parse import urlsplit
+    asked = []
+
+    async def fake_get_text(url, params=None, **kw):
+        host = urlsplit(url).netloc
+        asked.append(host)
+        a = answers[host]
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(catalogs, "get_text", fake_get_text)
+    monkeypatch.setattr(catalogs.config, "SESAME_URLS", _URLS)
+    monkeypatch.setattr(catalogs, "_resolve_mem", catalogs.cache.TTLCache(60, maxsize=8))  # no cached answers
+    return asked
+
+
+def _resolve(q):
+    import asyncio
+    return asyncio.run(catalogs.resolve(q))
+
+
+def test_sesame_falls_back_to_cfa_when_cds_is_down(monkeypatch):
+    from spherex_app.archive import UpstreamError
+    asked = _stub_sesame(monkeypatch, {"cds.example": UpstreamError("Sesame: timed out"),
+                                       "cfa.example": _SESAME_OK, "idia.example": _SESAME_OK})
+    r = _resolve("M57")
+    assert asked == ["cds.example", "cfa.example"]
+    assert r["mirror"] == "cfa.example" and r["source"] == "sesame" and abs(r["ra"] - 283.3962365) < 1e-6
+
+
+def test_sesame_falls_back_to_idia_when_cds_and_cfa_are_down(monkeypatch):
+    from spherex_app.archive import UpstreamError
+    asked = _stub_sesame(monkeypatch, {"cds.example": UpstreamError("HTTP 503"),
+                                       "cfa.example": "<html>maintenance</html", "idia.example": _SESAME_OK})
+    r = _resolve("M57")
+    assert asked == ["cds.example", "cfa.example", "idia.example"] and r["mirror"] == "idia.example"
+
+
+def test_sesame_not_found_is_an_answer_not_a_failure(monkeypatch):
+    asked = _stub_sesame(monkeypatch, {"cds.example": _SESAME_NONE, "cfa.example": _SESAME_OK,
+                                       "idia.example": _SESAME_OK})
+    with pytest.raises(catalogs.NotFound):
+        _resolve("nope")
+    assert asked == ["cds.example"]
+
+
+def test_sesame_all_down_raises_the_upstream_error(monkeypatch):
+    from spherex_app.archive import UpstreamError
+    asked = _stub_sesame(monkeypatch, {h: UpstreamError(f"{h} down") for h in ("cds.example", "cfa.example",
+                                                                              "idia.example")})
+    with pytest.raises(UpstreamError):
+        _resolve("M57")
+    assert asked == ["cds.example", "cfa.example", "idia.example"]
+
+
+def test_sesame_mirror_config_defaults():
+    from spherex_app import config
+    assert config.SESAME_URLS[0] == config.SESAME_URL
+    hosts = [u.split("/")[2] for u in config.SESAME_URLS[1:]]
+    assert hosts == ["vizier.cfa.harvard.edu", "vizier.idia.ac.za"]

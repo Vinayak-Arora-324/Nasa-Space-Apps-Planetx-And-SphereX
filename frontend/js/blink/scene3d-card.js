@@ -29,6 +29,13 @@ const tierOf = (tier) => (TIER_INFO[tier] ? tier : 'illustrative');
  */
 function addChildren(doc, root, children) {
   const box = el(doc, 'div', 'card-kids');
+  // one list, or several (children.groups: [{ title, items }], a heading each, e.g. 'Exoplanets · 7' and 'Black holes · 1')
+  const groups = children.groups && children.groups.length ? children.groups : [{ title: children.title, items: children.items }];
+  for (const g of groups) addKidList(doc, box, g);
+  if (children.note) box.appendChild(el(doc, 'p', 'card-note', children.note));
+  root.appendChild(box);
+}
+function addKidList(doc, box, children) {
   box.appendChild(el(doc, 'div', 'card-kids-title', children.title || ''));
   const ul = el(doc, 'ul', 'card-kid-list');
   for (const it of children.items || []) {
@@ -49,8 +56,6 @@ function addChildren(doc, root, children) {
     ul.appendChild(li);
   }
   box.appendChild(ul);
-  if (children.note) box.appendChild(el(doc, 'p', 'card-note', children.note));
-  root.appendChild(box);
 }
 
 function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, children, goDisabled) {
@@ -84,7 +89,7 @@ function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, child
  * goLabel: the button's text (default 'Go there'). goDisabled: a reason string; the button is shown disabled with it as its title.
  * children: the list of a star's planets (see addChildren), after the rows and before the notes.
  */
-export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children } = {}) {
+export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || 'Star'));
@@ -92,13 +97,17 @@ export function renderStarCard(host, model, { title, subtitle, distFromCameraTex
   const dl = el(doc, 'dl', 'card-rows'), used = new Set();
   const m = model || {};
   const row = (label, V, unit, digits) => { if (V && Number.isFinite(V.v)) addRow(doc, dl, label, fmtValue(V, unit, digits), V.tier, V.src, used); };
-  row('Temperature', m.teff, 'K', 0);
-  row('Radius', m.radiusRsun, 'R☉', m.radiusRsun && m.radiusRsun.v < 0.1 ? 3 : 2);
+  // a prefer_record star (section 17.8): Gaia's single-star value of a parameter its paper replaces, right under the value used
+  const nu = m.notUsed || {}, notUsed = (key, word, unit, digits) => row(`Gaia single-star ${word} · not used`, nu[key], unit, digits);
+  row('Temperature', m.teff, 'K', 0); notUsed('teff_k', 'temperature', 'K', 0);
+  row('Radius', m.radiusRsun, 'R☉', m.radiusRsun && m.radiusRsun.v < 0.1 ? 3 : 2); notUsed('radius_rsun', 'radius', 'R☉', 2);
   row('Luminosity', m.lumLsun, 'L☉', m.lumLsun && m.lumLsun.v < 0.1 ? 4 : 2);
-  row('Mass', m.massMsun, 'M☉', 2);
+  row('Mass', m.massMsun, 'M☉', 2); notUsed('mass_msun', 'mass', 'M☉', 2);
   row('Age', m.ageGyr, 'Gyr', 1);
   if (m.spectralType && m.spectralType.v) addRow(doc, dl, 'Spectral type', String(m.spectralType.v), m.spectralType.tier, m.spectralType.src, used);
-  row('Distance from Sun', m.distPc, 'pc', 2);
+  // distRows ([label, text, tier, src]): a curated distance (prefer_record) and its Gaia 'not used' row, in place of the catalogue's Distance row
+  if (distRows && distRows.length) distRows.forEach(([label, text, tier, src]) => addRow(doc, dl, label, text, tier, src || '', used));
+  else row('Distance from Sun', m.distPc, 'pc', 2);
   row('G', m.gMag, 'mag', 2);
   row('BP−RP', m.bpRp, 'mag', 2);
   if (distFromCameraText) addRow(doc, dl, 'From you', distFromCameraText, 'illustrative', 'distance from the camera right now', used);

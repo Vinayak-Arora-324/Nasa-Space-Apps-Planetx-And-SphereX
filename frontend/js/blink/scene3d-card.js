@@ -89,7 +89,7 @@ function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, child
  * goLabel: the button's text (default 'Go there'). goDisabled: a reason string; the button is shown disabled with it as its title.
  * children: the list of a star's planets (see addChildren), after the rows and before the notes.
  */
-export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows } = {}) {
+export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows, dataRow } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || 'Star'));
@@ -111,18 +111,20 @@ export function renderStarCard(host, model, { title, subtitle, distFromCameraTex
   row('G', m.gMag, 'mag', 2);
   row('BP−RP', m.bpRp, 'mag', 2);
   if (distFromCameraText) addRow(doc, dl, 'From you', distFromCameraText, 'illustrative', 'distance from the camera right now', used);
+  // dataRow ([label, text, tier, src]): the Gaia credit row of a Gaia star (section 18.12); shown in the Evidence view too
+  if (dataRow) addRow(doc, dl, dataRow[0], dataRow[1], dataRow[2], dataRow[3] || '', used);
   finish(doc, host, dl, used, m.notes, onGo, loading, error, goLabel, children, goDisabled);
 }
 
 /** Generic card: rows are [label, text, tier, src]; src (optional) goes into the tier's tooltip. goLabel: the button's text; goDisabled: see renderStarCard. */
-export function renderBodyCard(host, { title, subtitle, rows = [], onGo, notes, goLabel, goDisabled } = {}) {
+export function renderBodyCard(host, { title, subtitle, rows = [], onGo, notes, goLabel, goDisabled, children } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || ''));
   if (subtitle) host.appendChild(el(doc, 'div', 'card-sub', subtitle));
   const dl = el(doc, 'dl', 'card-rows'), used = new Set();
   rows.forEach(([label, text, tier, src]) => addRow(doc, dl, label, text, tier, src || '', used));
-  finish(doc, host, dl, used, notes, onGo, false, null, goLabel, null, goDisabled);
+  finish(doc, host, dl, used, notes, onGo, false, null, goLabel, children, goDisabled);
 }
 
 export const CARD_CSS = `

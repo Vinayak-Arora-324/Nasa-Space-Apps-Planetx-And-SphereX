@@ -737,7 +737,7 @@ export class Scene3D {
     const cam = this.cam;
     const target = sel.kind === 'star' ? { kind: 'star' } : sel.kind === 'group' ? { kind: 'group', id: sel.id } : { kind: sel.kind, id: sel.id, host: (this.store.get(sel.id) || {}).host };
     return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null, resolveHost: (h) => this.store.resolveHost(h),
-      placement: (id) => this.store.placement(id) });
+      placement: (id) => this.store.placement(id), get: (id) => this.store.get(id) });   // get: a galaxy's own record (the Milky Way's face-on flight, a direction-only galaxy's turn)
   }
   /** A via-host trip whose host star is not in the star list cannot start (the card's button says so). */
   _hostMissing(plan) { return plan.type === 'via-host' && this._starIdx(plan.hostId) < 0; }
@@ -759,6 +759,18 @@ export class Scene3D {
       if (idx >= 0) this._goStar(this._starSel(idx), sel);       // the host star first; on arrival the trip to the object starts
     }
     else if (plan.type === 'fly-galaxy') this._goGalaxy(sel);
+    else if (plan.type === 'fly-point') this._goPoint(sel, plan);
+  }
+  /**
+   * A trip to a point in world parsecs that ends looking at another (the Milky Way: MW_GO_PC above its centre along the north Galactic pole, looking down at
+   * it, so it ends in the cosmos frame). The position runs on the same Autopilot as the other trips and crosses the frame switch the same way; the view turns
+   * from the direction of travel to the direction of plan.lookAtPc as the trip progresses, so it arrives face-on. It stops FLY_POINT_STOP_PC short of the point.
+   */
+  _goPoint(sel, plan) {
+    const cam = this.cam, obj = new Autopilot();
+    obj.start({ from: F.worldPc(cam), fromDir: M.dirFromYawPitch(cam.yaw, cam.pitch), to: plan.pc, stopAt: FLY_POINT_STOP_PC });
+    this.ap = { obj, sel, type: 'point', plan, then: null, unitsPerPc: 1 };
+    cam.vel = [0, 0, 0];
   }
   /**
    * A trip to a cluster's centre in galaxy parsecs, stopping at spec.arrivePc (2 x r50) from it, retargeted each frame like the star
@@ -813,11 +825,16 @@ export class Scene3D {
     if (ap.type === 'look') { this._stepLook(dt); return; }
     const world = WORLD_TRIPS.has(ap.type);                            // trips in world parsecs: they cross frame switches
     if (!world && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
-    const t = this._resolve(ap.sel);
+    // a point flight has a fixed target: its arrival speed is that of a galaxy trip stopping that far out
+    const t = ap.type === 'point' ? { type: 'galaxy', stopPc: Math.hypot(...ap.plan.pc.map((v, i) => v - ap.plan.lookAtPc[i])) } : this._resolve(ap.sel);
     if (!t) { this.ap = null; return; }
     if (ap.type === 'galaxy') ap.obj.retarget(t.pc);
-    else if (ap.type !== 'star') ap.obj.retarget(t.pos);
+    else if (ap.type !== 'star' && ap.type !== 'point') ap.obj.retarget(t.pos);
     const r = ap.obj.step(dt);
+    if (ap.type === 'point') {                                         // turn from the direction of travel to the centre as the trip progresses
+      const to = ap.plan.lookAtPc.map((v, i) => v - r.pos[i]), L = Math.hypot(...to);
+      if (L > 0) r.dir = slerp(r.dir, to.map((v) => v / L), ease(ap.obj.s));
+    }
     // world pc -> the camera's frame units: AU from the host in a system frame, otherwise parsecs times the level's units per parsec (Mpc in the cosmos frame)
     cam.pos = world ? (cam.frame === 'system' ? F.toSystemPos(r.pos, cam.host.pc) : r.pos.map((v) => v * F.unitsPerPc(cam))) : r.pos.slice();
     const v = M.yawPitchFromDir(r.dir);
@@ -1580,12 +1597,14 @@ export class Scene3D {
     const kids = this.store.childrenOf(key);
     if (!kids.length) return null;
     const off = [...new Set(kids.map((o) => layerOf(o.kind)).filter((l) => l && this.layers[l] === false))];
-    const go = !this.evidence && !off.length;
+    const ofGalaxy = kids.every((o) => o.parent && !o.host);      // a galaxy's black holes sit at its centre, a measured position: the Evidence view keeps their Go there
+    const go = (ofGalaxy || !this.evidence) && !off.length;
     const groups = childGroups(kids, fmtNum).map((g) => ({ title: g.title, items: g.items.map((it) => ({ name: it.name, line: it.line, tier: it.tier,
-      onGo: pinned && go ? () => this._go({ kind: it.o.kind, id: it.o.id }) : null })) }));
+      // a galaxy's black hole is drawn only once resolved (smbhVisible), so going to it selects it first: a selected one is always drawn
+      onGo: pinned && go ? () => { const s = { kind: it.o.kind, id: it.o.id }; if (it.o.parent && !it.o.host) this._select(s); this._go(s); } : null })) }));
     const items = groups.flatMap((g) => g.items);
     const label = (id) => (layerDefs().find((l) => l.id === id) || { label: id }).label;
-    const note = this.evidence ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
+    const note = this.evidence && !ofGalaxy ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
       : off.length ? `The ${off.map(label).join(' and ')} layer is off, so they are not drawn.` : null;
     return { groups, items, total: kids.length, note };   // one heading per kind: 'Exoplanets · 7', 'Black holes · 1'
   }
@@ -1600,6 +1619,8 @@ export class Scene3D {
       const pref = rec ? preferredDistanceRows(rec, { bjPc: Number.isFinite(m.gaiaPc) ? m.gaiaPc : m.kind === 'obj' && pv && Number.isFinite(pv.v) ? pv.v : null }) : null;
       const model = pref ? { ...md, notes: [...(md.notes || []), ...pref.notes] } : md;
       renderStarCard(this.card, model, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo, distRows: pref ? pref.rows : null,
+        // the Gaia credit row (section 18.12): every Gaia star, and the archive stars that carry Gaia DR3 ids (NEA hosts) or Gaia values (the bh-curated companions)
+        dataRow: m.kind === 'gaia' || (m.kind === 'obj' && m.id.startsWith('gdr3:')) || (rec && rec.provenance && rec.provenance.dataset === 'bh-curated') ? gaiaDataRow() : null,
         children: this._childrenFor(m.key, pinned),
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
@@ -1624,8 +1645,10 @@ export class Scene3D {
     const e = this._entry(sel.id);
     const c = e.spec.card(e.o, { fromYou: this.evidence ? null : fromYouFor(e, rel, (r) => this._fromYou(r)), evidence: this.evidence, fmtNum,
       place: this.store.placement(e.id), lensing: this._lens && this._lens.get(e.id) || null, hostName: e.host ? this.store.hostName(e.host) : null,
-      hostRecord: e.host ? this.store.starRecord(e.host) : null });
-    renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled });
+      hostRecord: e.host ? this.store.starRecord(e.host) : null, children: e.kind === 'galaxy' ? this.store.childrenOf(e.id) : undefined });
+    // a galaxy lists its black holes with a Go there each (they are drawn only when resolved, see _childrenFor)
+    const children = e.kind === 'galaxy' ? this._childrenFor(e.id, pinned) : null;
+    renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled, children });
   }
   _updateCard(t) {
     let sel = null, pinned = false;

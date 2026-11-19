@@ -172,6 +172,7 @@ def test_synthetic_build_is_byte_identical_and_verifies(tmp_path):
 def test_check_passes_then_fails_on_a_change(tmp_path, monkeypatch):
     src = _syn_sources(tmp_path / "src", SYN)
     b.build(tmp_path / "out", src)
+    (src / "LICENSE.md").write_text(b.license_text("sources"), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["x", "--check", "--sources", str(src), "--out", str(tmp_path / "out")])
     assert b.main() == 0
     next((tmp_path / "out" / "tiles").glob("*.json")).write_text("{}")
@@ -224,3 +225,14 @@ def test_the_cluster_example_equals_the_built_melotte_22(snapshot):
     ds = st.load_dataset(COMMITTED)
     tile = [r for t in ds.manifest["tiles"] for r in st._read_tile(ds, t) if r["id"] == "hr23:Melotte_22"]
     assert tile == [example]
+
+
+def test_credit_and_licence_files():
+    p = json.loads((COMMITTED / "manifest.json").read_text())["provenance"]
+    assert p["credit"] == "Hunt & Reffert 2024, from Gaia DR3 (Credit: ESA/Gaia/DPAC)"
+    assert "licence_name" not in p and p["licence"] == b.LICENCE
+    for folder, which in ((b.SOURCES, "sources"), (COMMITTED, "dataset")):
+        text = (folder / "LICENSE.md").read_text(encoding="utf-8")
+        assert text == b.license_text(which)
+        for needle in ("VizieR", b.CITATION, "Gaia DR3", "Credit: ESA/Gaia/DPAC", "Nothing is relicensed", "MIT"):
+            assert needle in text, (which, needle)

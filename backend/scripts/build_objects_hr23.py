@@ -63,6 +63,7 @@ SNAPSHOT = "clusters-hr24-{date}.csv.gz"
 CATALOGUE = "Hunt & Reffert 2024 (open and globular clusters in Gaia DR3)"
 CITATION = ("Hunt & Reffert 2024, A&A 686, A42 (2024A&A...686A..42H), doi:10.26093/cds/vizier.36860042; "
             "Hunt & Reffert 2023, A&A 673, A114 (2023A&A...673A.114H) for the cluster census and the quality cut")
+GAIA_CREDIT = "Credit: ESA/Gaia/DPAC"          # docs/object-framework.md 18.12
 LICENCE = "https://cds.unistra.fr/vizier-org/licences_vizier.html"
 URL = "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/686/A42"
 
@@ -367,15 +368,53 @@ def provenance_full(f: dict, *, version: str | None = None) -> dict:
             "vizier_id": VIZIER_ID, "table": TABLE, "citation": CITATION, "licence": LICENCE, "url": URL,
             "query_url": f["query_url"], "mirror": f.get("mirror"), "retrieved": f["retrieved"],
             "source_sha256": f["source_sha256"], "source_rows": f["rows"], "snapshot_file": f["file"],
-            "snapshot_sha256": f["sha256"]}
+            "snapshot_sha256": f["sha256"],
+            # derived by Hunt & Reffert from Gaia DR3; the VizieR terms stay the licence, so no licence_name
+            "credit": f"Hunt & Reffert 2024, from Gaia DR3 ({GAIA_CREDIT})"}
+
+
+def license_text(which: str) -> str:
+    """The LICENSE.md of the sources folder (`which == "sources"`) or of the built dataset (`"dataset"`)."""
+    if which == "sources":
+        folder = "backend/data/sources/hr23-clusters/"
+        covered = ("- `clusters-hr24-*.csv.gz`: the Hunt & Reffert 2024 cluster table from VizieR "
+                   f"({VIZIER_ID}), columns selected;\n"
+                   "- `SOURCE.json`, the input's hash, URL and retrieval date;\n- this file.")
+    else:
+        folder = "frontend/data/objects/hr23-clusters/"
+        covered = "- `manifest.json`;\n- `tiles/*.json`, the cluster records;\n- this file."
+    return f"""# Licence and credits: hr23-clusters data
+
+Applies to **every file in `{folder}`**:
+
+{covered}
+
+## Terms
+
+The values come from the Hunt & Reffert catalogue as served by VizieR (CDS Strasbourg), under VizieR's terms of use
+({LICENCE}). Please cite:
+
+- {CITATION}
+
+Hunt & Reffert derived the cluster positions, distances, sizes and memberships from Gaia DR3 data
+({GAIA_CREDIT}). Nothing is relicensed here: the catalogue values keep VizieR's terms, and the underlying Gaia
+data keep ESA's.
+
+## Code
+
+The code that builds these files (`backend/scripts/build_objects_hr23.py`) and the rest of the repository are
+under the MIT licence (see the repository `LICENSE`).
+"""
 
 
 def build_from(rows: list[dict], prov_full: dict, snapshot_date: str, out_dir: Path) -> dict:
     records, report = build_records(rows, snapshot_date)
-    return objects_static.write_dataset(
+    m = objects_static.write_dataset(
         records, out_dir, dataset=DATASET, kinds=["cluster"], provenance=prov_full,
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
         band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance(snapshot_date)})
+    (Path(out_dir) / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
+    return m
 
 
 def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> dict:
@@ -489,6 +528,9 @@ def main() -> int:
             build(Path(tmp), a.sources, a.local)
             fresh, have = _files(Path(tmp)), (_files(a.out) if a.out.is_dir() else {})
         diff = sorted(k for k in fresh.keys() | have.keys() if fresh.get(k) != have.get(k))
+        src_license = a.sources / "LICENSE.md"
+        if not src_license.is_file() or src_license.read_text(encoding="utf-8") != license_text("sources"):
+            diff.append(f"{a.sources}/LICENSE.md")
         problems = objects_static.verify_dataset(a.out) if a.out.is_dir() else ["output directory missing"]
         if diff:
             print(f"{a.out} differs from a fresh build: {', '.join(diff[:10])}"
@@ -500,6 +542,7 @@ def main() -> int:
         print(f"{a.out} is up to date ({len(fresh)} files, verified)")
         return 0
     m = build(a.out, a.sources, a.local)
+    (a.sources / "LICENSE.md").write_text(license_text("sources"), encoding="utf-8")
     _print_report(m)
     print(f"wrote {m['count']} records to {a.out}")
     return 0

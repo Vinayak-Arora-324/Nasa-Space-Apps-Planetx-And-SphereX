@@ -33,7 +33,7 @@
           "dist": { "v": 8277, "lo": 8268, "hi": 8286, "unit": "pc", "src": "gravity2022", "where": "Sec. 6 (conclusions), best fit of Sec. 4: R0 = 8277 ± 9 pc (statistical; systematic ≈ 30 pc)" }
         },
         "mass": { "v": 4297000, "lo": 4285000, "hi": 4309000, "unit": "Msun", "src": "gravity2022", "where": "Sec. 6 (conclusions), best fit of Sec. 4: M = (4.297 ± 0.012) × 10^6 Msun (statistical; systematic ≈ 40,000 Msun)" },
-        "parent_note": "parent stays null until gal:milky_way exists (Phase 3, §17.8)"
+        "parent": "gal:milky_way"
       },
       "companion": null
     },

@@ -628,10 +628,10 @@ def test_cyg_x1_cone_returns_the_black_hole_and_its_companion(phase2_dir):
 def test_sources_carry_the_credits_the_app_shows(phase2_dir):
     j = _get(ra=83.82, dec=-5.39, radius=1.0, kinds="nebula").json()
     neb = next(s for s in j["sources"] if s["id"] == "static:nebulae")
-    assert neb["provenance"]["licence_name"] == "CC BY-SA 4.0"
-    assert neb["provenance"]["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
+    assert neb["provenance"]["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Gaia EDR3-based PN distances CC BY-NC 3.0 IGO"
+    assert neb["provenance"]["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC; PN distances from Gaia EDR3: Credit: ESA/Gaia/DPAC"
     j = _get(ra=266.417, dec=-29.008, radius=0.5, kinds="black_hole").json()
     assert _obj_by_id(j, "bh:Sgr A*")["evidence"] == "measured"
     bh = next(s for s in j["sources"] if s["id"] == "static:bh-curated")
-    assert bh["provenance"]["credit"] == "Credit: ESA, Gaia DPAC"
+    assert bh["provenance"]["credit"] == "Credit: ESA/Gaia/DPAC"
     assert bh["provenance"]["licence_name"].startswith("CC BY-NC 3.0 IGO")

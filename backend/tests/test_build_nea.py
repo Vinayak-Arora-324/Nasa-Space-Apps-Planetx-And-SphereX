@@ -659,6 +659,7 @@ def test_local_builds_from_a_given_csv(tmp_path):
 def test_check_mode_flags_a_difference(tmp_path, monkeypatch):
     src = _write_sources(tmp_path / "src", SYN_ROWS)
     b.build(tmp_path / "out", src)
+    (src / "LICENSE.md").write_text(b.license_text("sources"), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["x", "--check", "--sources", str(src), "--out", str(tmp_path / "out")])
     assert b.main() == 0
     next((tmp_path / "out" / "tiles").glob("*.json")).write_text("{}")
@@ -807,3 +808,16 @@ def test_the_provenance_is_stored_once_in_the_manifest_and_restored_when_served(
     r = _committed_record("nea:TRAPPIST-1 b")
     assert r["provenance"] == {"catalogue": "NASA Exoplanet Archive pscomppars", "dataset": "nea-exoplanets",
                                "source": "static:nea-exoplanets", "version": "snapshot 2026-11-18"}
+
+
+def test_credit_and_licence_files():
+    p = json.loads((COMMITTED / "manifest.json").read_text())["provenance"]
+    assert p["credit"] == "NASA Exoplanet Archive; Gaia DR3 values: Credit: ESA/Gaia/DPAC"
+    assert p["licence_name"] == "CC BY-NC 3.0 IGO (Gaia DR3 values)"
+    assert p["licence"] == "https://creativecommons.org/licenses/by-nc/3.0/igo/"
+    for folder, which in ((b.SOURCES, "sources"), (COMMITTED, "dataset")):
+        text = (folder / "LICENSE.md").read_text(encoding="utf-8")
+        assert text == b.license_text(which)
+        for needle in ("Gaia DR3 values", "CC BY-NC 3.0 IGO", "Credit: ESA/Gaia/DPAC", "data.licences@esa.int",
+                       "NASA Exoplanet Archive", "MIT"):
+            assert needle in text, (which, needle)

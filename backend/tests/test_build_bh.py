@@ -3,6 +3,7 @@ dataset, the section 16.6 / Thiele-Innes conversion, and the example fixtures (d
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
@@ -240,7 +241,8 @@ def test_evidence_and_tiers(built):
                                               "black_hole/measured": 4, "star/measured": 7}
     for n in ("Sgr A*", "GRS 1915+105"):
         r = recs[f"bh:{n}"]
-        assert r["host"] is None and r["parent"] is None and r["position"]["model"] == "fixed"
+        assert r["host"] is None and r["position"]["model"] == "fixed"
+        assert r["parent"] == ("gal:milky_way" if n == "Sgr A*" else None)
 
 
 def test_prefer_record_on_exactly_the_seven_companions(built):
@@ -334,14 +336,14 @@ def test_manifest_provenance_and_report():
     p = m["provenance"]
     assert p["catalogue"] == "Space Maps curated black holes" and p["version"] == "1"
     # the Gaia terms require the credit wherever the values are shown: the app's credits line lists it
-    assert p["credit"] == "Credit: ESA, Gaia DPAC" and p["licence_name"].startswith("CC BY-NC 3.0 IGO")
+    assert p["credit"] == "Credit: ESA/Gaia/DPAC" and p["licence_name"].startswith("CC BY-NC 3.0 IGO")
     lic = (COMMITTED / "LICENSE.md").read_text()
-    assert "CC BY-NC 3.0 IGO" in lic and "Credit: ESA, Gaia DPAC" in lic
+    assert "CC BY-NC 3.0 IGO" in lic and "Credit: ESA/Gaia/DPAC" in lic
     assert "CC BY-NC 3.0 IGO" in (b.SOURCES / "LICENSE.md").read_text()
     for key, paper in json.loads((b.SOURCES / b.CURATED).read_text())["papers"].items():
         if key != "simbad_cfa":
             assert paper["cite"] in p["citation"] and paper["arxiv"] in p["citation"]
-    assert "Gaia DPAC" in p["citation"]
+    assert "ESA/Gaia/DPAC" in p["citation"]
     assert m["build"]["report"]["records_written"] == 16 and m["build"]["report"]["src_where_pairs"]
 
 
@@ -374,3 +376,62 @@ def test_the_examples_equal_the_built_records(built, fixture, rid):
     ds = st.load_dataset(COMMITTED)
     tile = [r for t in ds.manifest["tiles"] for r in st._read_tile(ds, t) if r["id"] == rid]
     assert tile == [example]
+
+
+# --- Phase 3 slice E: Sgr A* joins the Milky Way and the sky tile; nothing else may change ---------------
+
+# sha256 of json.dumps(record, sort_keys=True, ensure_ascii=False) of each Phase 2 build_records() record (the build
+# before Objects Phase 3), frozen here so the test needs no repository history. Sgr A*'s is the Phase 2 record
+# (parent null).
+PHASE2_SHA256 = {
+    "bh:Sgr A*": "29e0243acbe1d5d7fe993449d165fd1b70a37fd09d7eda83345dc1390042be56",
+    "bh:Gaia BH1": "f256bf57f675dae0a88bcefe64ae5d632daddbce77ca7fcf6f68d2fb9465820e",
+    "gdr3:4373465352415301632": "56daa52471ec3dd98e099f8840439ccbc466fc160c7045eb33ecf1752424e9ff",
+    "bh:Gaia BH2": "f5657e643f61b073a4065171ab45ea8a509f736ddb7db3222acb91850e2fc082",
+    "gdr3:5870569352746779008": "274354c4624e61e5562ce711bb3ddef87480bba752bcce7c8ad778853e3a7688",
+    "bh:Gaia BH3": "458ba79df969eb464ea94ebb209bcdbb4ac4493353aecb4947be3b3b99022536",
+    "gdr3:4318465066420528000": "e32c554a9b58c377e37a290965b1da3c7a9d71e1b8da5d93edc10106d6f972e6",
+    "bh:Cyg X-1": "67e2ba023b8df93439796bc2f3834421d6b956e66561f28c92d2b5d7a8ac8113",
+    "gdr3:2059383668236814720": "ba8a51fc033e7412ec0dae726d88b9bf344f29fa7c41caba5ee0ee0dbcc5706f",
+    "bh:V404 Cyg": "fceed476332d4d8452895aa8e442009bfb2699005a8a661419758057ebc2e98b",
+    "gdr3:2056188624872569088": "17ede5d83ee01c9b05b886ae20b537fe5cfed1d16fc6969cfb4d11c7e146dd9e",
+    "bh:A0620-00": "804ac5ca0ddf174c8b5111ae805c2182af692949ee165a0019308890be1b54d5",
+    "gdr3:3118721026600835328": "c187859da0429bb35f2ee22021b16c7e5fd2f197f9eaa1e05c95f784ec286cee",
+    "bh:MAXI J1820+070": "ebe516ae60ff289969c3444b9fd4bacf7b824a46f696b78b589d570bd66786c9",
+    "gdr3:4477902563164690816": "ea6f1c0f1d7400f839ac9bca88eb0d8a219f97df1bf849ca3ee87afc13a906f1",
+    "bh:GRS 1915+105": "127aba6c80f093e2cbb0c68dbce0422cbafa3d38cda3b6ca26c060e23f8796ff",
+}
+
+
+def _digest(rec: dict) -> str:
+    return hashlib.sha256(json.dumps(rec, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def test_only_sgr_a_star_parent_differs_from_the_phase2_build(built):
+    recs, _ = built
+    assert set(recs) == set(PHASE2_SHA256)
+    for rid, rec in recs.items():
+        if rid == "bh:Sgr A*":
+            assert rec["parent"] == "gal:milky_way" and "parent_note" not in rec
+            assert _digest(dict(rec, parent=None)) == PHASE2_SHA256[rid]      # differs only in `parent`
+        else:
+            assert _digest(rec) == PHASE2_SHA256[rid], rid
+
+
+def test_sgr_a_star_is_in_the_sky_tile_and_only_it():
+    ds = st.load_dataset(COMMITTED)
+    assert ds.manifest["sky_tiles"] == ["sky"]
+    sky = st._read_tile(ds, "sky")
+    assert [r["id"] for r in sky] == ["bh:Sgr A*"] and sky[0]["parent"] == "gal:milky_way"
+    for t in ds.manifest["tiles"]:
+        if t != "sky":
+            assert all(r["id"] != "bh:Sgr A*" for r in st._read_tile(ds, t))
+    assert b.SKY_IDS == {"bh:Sgr A*"}
+
+
+def test_gaia_credit_string_is_the_18_12_form_everywhere():
+    assert b.GAIA_CREDIT == "Credit: ESA/Gaia/DPAC"
+    for f in (b.SOURCES / "LICENSE.md", COMMITTED / "LICENSE.md", b.SOURCES / "SOURCE.json",
+              COMMITTED / "manifest.json"):
+        assert "ESA, Gaia DPAC" not in f.read_text(encoding="utf-8"), f
+    assert json.loads((b.SOURCES / "SOURCE.json").read_text())["files"][0]["credit_line"] == "Credit: ESA/Gaia/DPAC"

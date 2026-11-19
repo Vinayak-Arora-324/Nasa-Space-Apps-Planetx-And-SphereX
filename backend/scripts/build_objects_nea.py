@@ -71,6 +71,9 @@ GAIA_LICENCE = ("Gaia data are public: https://www.cosmos.esa.int/web/gaia-users
                 "(https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis "
                 "Consortium (DPAC).")
 SRC = "NEA pscomppars"
+GAIA_CREDIT = "Credit: ESA/Gaia/DPAC"          # docs/object-framework.md 18.12
+GAIA_LICENCE_NAME = "CC BY-NC 3.0 IGO"
+GAIA_LICENCE_URL = "https://creativecommons.org/licenses/by-nc/3.0/igo/"
 
 # the fixed column list of the TAP query
 COLUMNS = (
@@ -628,16 +631,56 @@ def provenance_full(src: dict) -> dict:
     return {"catalogue": CATALOGUE, "version": f"snapshot {nea['retrieved']}", "citation": CITATION,
             "url": "https://exoplanetarchive.ipac.caltech.edu/", "acknowledgement": ACKNOWLEDGEMENT,
             "query_url": nea["query_url"], "retrieved": nea["retrieved"], "source_sha256": nea["sha256"],
-            "side_inputs": side}
+            "side_inputs": side,
+            # the Gaia DR3 values (distances, positions, magnitudes) carry Gaia's terms; the app's credits line shows this
+            "credit": f"NASA Exoplanet Archive; Gaia DR3 values: {GAIA_CREDIT}",
+            "licence_name": f"{GAIA_LICENCE_NAME} (Gaia DR3 values)", "licence": GAIA_LICENCE_URL}
+
+
+def license_text(which: str) -> str:
+    """The LICENSE.md of the sources folder (`which == "sources"`) or of the built dataset (`"dataset"`)."""
+    if which == "sources":
+        folder = "backend/data/sources/nea-exoplanets/"
+        covered = ("- `pscomppars-*.csv.gz`: the NASA Exoplanet Archive `pscomppars` table as downloaded;\n"
+                   "- `gaia-dr2-dr3.csv.gz` and `gaia-positional.csv.gz`: ESA Gaia DR3 values (and the DR2 to DR3 "
+                   "neighbourhood table) fetched from the Gaia TAP service;\n"
+                   "- `SOURCE.json`, the list of those inputs with their hashes, URLs and retrieval dates;\n- this file.")
+    else:
+        folder = "frontend/data/objects/nea-exoplanets/"
+        covered = "- `manifest.json`;\n- `tiles/*.json`, the exoplanet and host-star records;\n- this file."
+    return f"""# Licence and credits: nea-exoplanets data
+
+Applies to **every file in `{folder}`**:
+
+{covered}
+
+## Which values are which
+
+- The planet and star parameters from the NASA Exoplanet Archive come from the archive's `pscomppars` table. It
+  asks that research using it carries this acknowledgement: {ACKNOWLEDGEMENT}
+- The **Gaia DR3 values** (host-star positions, parallaxes and distances, G magnitudes and the identifiers matched
+  to them) are ESA Gaia data, distributed under the **{GAIA_LICENCE_NAME}** licence ({GAIA_LICENCE_URL}).
+  Credit: ESA/Gaia/DPAC. ESA's terms ask for authorisation (data.licences@esa.int) before commercial use.
+  {GAIA_CITATION}. Each record's provenance says which of its values come from Gaia.
+
+Each value keeps the terms of its source. Merging the two sources in one file does not relicense either of them.
+
+## Code
+
+The code that builds these files (`backend/scripts/build_objects_nea.py`) and the rest of the repository are
+under the MIT licence (see the repository `LICENSE`).
+"""
 
 
 def build_from(rows: list[dict], dr2_rows: list[dict], pos_rows: list[dict], prov_full: dict,
                snapshot_date: str, out_dir: Path) -> dict:
     records, report = build_records(rows, dr2_rows, pos_rows, snapshot_date)
-    return objects_static.write_dataset(
+    m = objects_static.write_dataset(
         records, out_dir, dataset=DATASET, kinds=["exoplanet", "star"], provenance=prov_full,
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
         band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance(snapshot_date)})
+    (Path(out_dir) / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
+    return m
 
 
 def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> dict:
@@ -781,6 +824,9 @@ def main() -> int:
             build(Path(tmp), a.sources, a.local)
             fresh, have = _files(Path(tmp)), (_files(a.out) if a.out.is_dir() else {})
         diff = sorted(k for k in fresh.keys() | have.keys() if fresh.get(k) != have.get(k))
+        src_license = a.sources / "LICENSE.md"
+        if not src_license.is_file() or src_license.read_text(encoding="utf-8") != license_text("sources"):
+            diff.append(f"{a.sources}/LICENSE.md")
         problems = objects_static.verify_dataset(a.out) if a.out.is_dir() else ["output directory missing"]
         if diff:
             print(f"{a.out} differs from a fresh build: {', '.join(diff[:10])}"
@@ -792,6 +838,7 @@ def main() -> int:
         print(f"{a.out} is up to date ({len(fresh)} files, verified)")
         return 0
     m = build(a.out, a.sources, a.local)
+    (a.sources / "LICENSE.md").write_text(license_text("sources"), encoding="utf-8")
     _print_report(m)
     print(f"wrote {m['count']} records to {a.out}")
     return 0

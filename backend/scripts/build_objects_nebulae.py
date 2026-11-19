@@ -113,6 +113,12 @@ ONGC_COLUMNS = ("Name", "Type", "RA", "Dec", "Const", "MajAx", "MinAx", "PosAng"
 CREDIT = "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
 LICENCE_NAME = "CC BY-SA 4.0"
 LICENCE_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
+# the manifest names both terms: the 59 PN distances and central-star ids are Gaia EDR3-derived (docs 18.18 item 1)
+GAIA_CREDIT = "Credit: ESA/Gaia/DPAC"
+GAIA_LICENCE_NAME = "CC BY-NC 3.0 IGO"
+GAIA_LICENCE_URL = "https://creativecommons.org/licenses/by-nc/3.0/igo/"
+MANIFEST_CREDIT = f"{CREDIT}; PN distances from Gaia EDR3: {GAIA_CREDIT}"
+MANIFEST_LICENCE_NAME = f"{LICENCE_NAME} (OpenNGC data); Gaia EDR3-based PN distances {GAIA_LICENCE_NAME}"
 VIZIER_TERMS = "https://cds.unistra.fr/vizier-org/licences_vizier.html"
 CITATIONS = {
     "sharpless": "Sharpless S., 1959, ApJS 4, 257: A Catalogue of H II Regions (1959ApJS....4..257S), VizieR VII/20",
@@ -811,7 +817,7 @@ def license_text(which: str) -> str:
         derived = ("These files are derived from OpenNGC: its objects, coordinates, sizes, magnitudes, names and "
                    "identifiers were merged with the Sharpless catalogue (matched by identifier, a committed override "
                    "table and position), given distances from Chornay & Walton 2021 and Russeil 2003, and converted "
-                   "to Space Maps' record format. They are licensed under the same CC BY-SA 4.0 licence.")
+                   "to Space Maps' record format. The OpenNGC-derived values are licensed under the same CC BY-SA 4.0 licence; the exception is below.")
     return f"""# Licence and credits: nebulae data
 
 Applies to **every file in `{folder}`**:
@@ -826,6 +832,14 @@ The OpenNGC data, and the data derived from it, are licensed under **{LICENCE_NA
 ({LICENCE_URL}).
 
 {CREDIT}
+
+## Values with other terms
+
+The distances of the 59 planetary nebulae and their central-star identifiers come from Chornay & Walton 2021, who
+derived them from Gaia EDR3. They are Gaia EDR3-derived values under **{GAIA_LICENCE_NAME}**
+({GAIA_LICENCE_URL}), with the credit "PN distances from Gaia EDR3: {GAIA_CREDIT}". ESA's terms ask for
+authorisation (data.licences@esa.int) before commercial use. They are **not** relicensed by {LICENCE_NAME}: each
+value keeps the terms of its source.
 
 OpenNGC is at {OPENNGC_URL}, release {OPENNGC_TAG}, commit `{OPENNGC_SHA}`. Changes made here: the rows of the
 types PN, HII, EmN, RfN, Neb, SNR, Cl+N and DrkN were selected, merged with the Sharpless catalogue, given
@@ -846,7 +860,7 @@ VizieR terms of use: {VIZIER_TERMS}
 ## Code
 
 The code that builds these files (`backend/scripts/build_objects_nebulae.py`) and the rest of the repository are
-under the MIT licence (see the repository `LICENSE`). Only the data files listed above are {LICENCE_NAME}.
+under the MIT licence (see the repository `LICENSE`). Only the data files listed above carry the data terms described here.
 """
 
 
@@ -908,9 +922,10 @@ def provenance_full(files: dict) -> dict:
     inputs = [{k: f.get(k) for k in ("role", "file", "sha256", "rows", "url", "mirror", "retrieved")}
               for f in sorted(files.values(), key=lambda f: f["role"])]
     return {"catalogue": CATALOGUE, "version": VERSION, "openngc_commit": OPENNGC_SHA, "url": OPENNGC_URL,
-            "credit": CREDIT, "licence_name": LICENCE_NAME, "licence": LICENCE_URL,
+            "credit": MANIFEST_CREDIT, "licence_name": MANIFEST_LICENCE_NAME, "licence": LICENCE_URL,
             "citation": " | ".join(["OpenNGC (Mattia Verga), " + OPENNGC_URL, *CITATIONS.values()]),
-            "data_licence_note": ("OpenNGC-derived data: CC BY-SA 4.0. Sharpless, Chornay & Walton and Russeil tables "
+            "data_licence_note": ("OpenNGC-derived data: CC BY-SA 4.0. PN distances and central-star ids: Gaia EDR3-derived, "
+                                  f"{GAIA_LICENCE_NAME} ({GAIA_LICENCE_URL}). Sharpless, Chornay & Walton and Russeil tables "
                                   f"via VizieR: {VIZIER_TERMS}"),
             "vizier_terms": VIZIER_TERMS, "inputs": inputs}
 

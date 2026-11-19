@@ -63,7 +63,9 @@ TAP_SERVICES = (("ESA Gaia archive", "https://gea.esac.esa.int/tap-server/tap/sy
                 ("GAVO Heidelberg", "https://dc.zah.uni-heidelberg.de/tap/sync"))
 GAIA_LICENCE_PAGE = "https://www.cosmos.esa.int/web/gaia-users/license"
 GAIA_TERMS_PAGE = "https://www.cosmos.esa.int/web/esdc/terms-and-conditions"
-GAIA_CREDIT = "Credit: ESA, Gaia DPAC"
+# records sent with every response (the sky tile, docs/object-framework.md 18.7)
+SKY_IDS = {"bh:Sgr A*"}
+GAIA_CREDIT = "Credit: ESA/Gaia/DPAC"
 GAIA_CITE = "Gaia Collaboration 2023, A&A 674, A1 (Gaia DR3)"
 
 RS_KM_PER_MSUN = Decimal("2.953250")      # 2 G Msun / c^2 in km
@@ -376,6 +378,8 @@ def black_hole_record(papers: dict, system: dict, snap: dict, prov: dict) -> dic
             raise CuratedError(f"{bh['id']}: a hosted black hole needs a companion")
         position, evidence = hosted_orbit(papers, bh, comp, snap)
         host = parent = f"gdr3:{comp['gaia_dr3']}"
+    if bh.get("parent"):        # a free-standing black hole may name its parent (Sgr A*: gal:milky_way, 18.8.3)
+        parent = bh["parent"]
     props = bh_props(papers, bh, comp)
     if pos["model"] == "fixed":
         rq, dq = pos["ra_hms"], pos["dec_dms"]
@@ -495,7 +499,7 @@ Applies to every file in this folder.
 
 - **Gaia DR3 values** (the companion stars' positions, parallaxes, G magnitudes and RUWE, from
   `backend/data/sources/bh-curated/gaia-dr3-companions.csv`) are ESA Gaia data, distributed under the
-  **CC BY-NC 3.0 IGO** licence (https://creativecommons.org/licenses/by-nc/3.0/igo/). Credit: ESA, Gaia DPAC.
+  **CC BY-NC 3.0 IGO** licence (https://creativecommons.org/licenses/by-nc/3.0/igo/). Credit: ESA/Gaia/DPAC.
   The ESA terms ask for authorisation (data.licences@esa.int) before commercial use.
 - **Everything else** (masses, distances, orbits and names) is curated by hand from the published papers
   cited in `manifest.json` (`provenance.papers`) and in each value's `src`, as facts with their citations.
@@ -516,7 +520,8 @@ def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> 
         records, out_dir, dataset=DATASET, kinds=["black_hole", "star"],
         provenance=provenance_full(inp["cur"], meta, inp, local=local is not None),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
-        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()})
+        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()},
+        sky_ids=SKY_IDS)
     (Path(out_dir) / "LICENSE.md").write_text(LICENSE_MD, encoding="utf-8")
     return m
 
@@ -553,7 +558,8 @@ def _licence_statement() -> tuple[str, str]:
     credit = re.search(r"Gaia All (Credit: ESA, Gaia DPAC)", text(GAIA_TERMS_PAGE))
     if not credit:
         raise SystemExit("could not read the Gaia credit line; check it by hand before refreshing")
-    return lic.group(0), credit.group(1)
+    # the page words it "Credit: ESA, Gaia DPAC"; Space Maps shows the form the design fixes (18.12)
+    return lic.group(0), GAIA_CREDIT
 
 
 def refresh(directory: Path) -> None:

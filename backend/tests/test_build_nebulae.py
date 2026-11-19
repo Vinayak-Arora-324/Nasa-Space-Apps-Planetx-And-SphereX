@@ -699,8 +699,10 @@ def test_license_files_exist_in_both_folders_and_say_what_17_2_requires():
 
 def test_the_manifest_provenance_carries_the_credit_and_the_licence():
     p = json.loads((COMMITTED / "manifest.json").read_text())["provenance"]
-    assert p["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
-    assert p["licence_name"] == "CC BY-SA 4.0" and p["licence"] == "https://creativecommons.org/licenses/by-sa/4.0/"
+    assert p["credit"] == ("Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC; "
+                           "PN distances from Gaia EDR3: Credit: ESA/Gaia/DPAC")
+    assert p["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Gaia EDR3-based PN distances CC BY-NC 3.0 IGO"
+    assert p["licence"] == "https://creativecommons.org/licenses/by-sa/4.0/"
     assert p["openngc_commit"] == "36cb178a0f69dba8bfc03a99c10512831edf1c6b"
     assert {i["role"] for i in p["inputs"]} == set(b.INPUTS)
 
@@ -936,3 +938,10 @@ def test_gzip_is_deterministic_and_nameless(tmp_path):
 def test_dataset_sizes_stay_small():
     size = sum(p.stat().st_size for p in COMMITTED.rglob("*") if p.is_file())
     assert size < 3_000_000
+
+
+def test_licence_files_keep_the_gaia_derived_values_under_their_own_terms():
+    for folder in (b.SOURCES, COMMITTED):
+        text = (folder / "LICENSE.md").read_text(encoding="utf-8")
+        assert "59 planetary nebulae" in text and "Gaia EDR3" in text and "CC BY-NC 3.0 IGO" in text
+        assert "Credit: ESA/Gaia/DPAC" in text and "not** relicensed by CC BY-SA 4.0" in text

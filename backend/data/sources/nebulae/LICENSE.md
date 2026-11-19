@@ -16,6 +16,14 @@ The OpenNGC data, and the data derived from it, are licensed under **CC BY-SA 4.
 
 Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC
 
+## Values with other terms
+
+The distances of the 59 planetary nebulae and their central-star identifiers come from Chornay & Walton 2021, who
+derived them from Gaia EDR3. They are Gaia EDR3-derived values under **CC BY-NC 3.0 IGO**
+(https://creativecommons.org/licenses/by-nc/3.0/igo/), with the credit "PN distances from Gaia EDR3: Credit: ESA/Gaia/DPAC". ESA's terms ask for
+authorisation (data.licences@esa.int) before commercial use. They are **not** relicensed by CC BY-SA 4.0: each
+value keeps the terms of its source.
+
 OpenNGC is at https://github.com/mattiaverga/OpenNGC, release v20260501, commit `36cb178a0f69dba8bfc03a99c10512831edf1c6b`. Changes made here: the rows of the
 types PN, HII, EmN, RfN, Neb, SNR, Cl+N and DrkN were selected, merged with the Sharpless catalogue, given
 distances and re-encoded as JSON records (see `docs/object-framework.md`, section 17).
@@ -49,4 +57,4 @@ VizieR terms of use: https://cds.unistra.fr/vizier-org/licences_vizier.html
 ## Code
 
 The code that builds these files (`backend/scripts/build_objects_nebulae.py`) and the rest of the repository are
-under the MIT licence (see the repository `LICENSE`). Only the data files listed above are CC BY-SA 4.0.
+under the MIT licence (see the repository `LICENSE`). Only the data files listed above carry the data terms described here.

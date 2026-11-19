@@ -7,7 +7,7 @@
  "id": "bh:Sgr A*",
  "kind": "black_hole",
  "name": "Sagittarius A*",
- "parent": null,
+ "parent": "gal:milky_way",
  "position": {
   "dec": -29.0078106,
   "dist": {

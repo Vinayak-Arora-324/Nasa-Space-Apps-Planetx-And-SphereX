@@ -592,7 +592,8 @@ function blackHoleCard(o, ctx) {
   rows.push(qtyRow(rescaled ? `Mass (rescaled ×${Number(factor.toPrecision(5))})` : 'Mass', mass, (q) => fq(q, 'M☉'), 'measured'));
   if (smbh && hasV(mpub)) rows.push(qtyRow('Published mass · not used', mpub, (q) => fq(q, 'M☉'), 'measured'));
   if (smbh && hasV(dpub)) rows.push(qtyRow('Published distance · not used', dpub, (q) => fq(q, dpub.unit || 'pc'), 'measured'));
-  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${smbh ? methodWord(p.method) : p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
+  if (smbh && p.dist && p.dist.unit && p.dist.unit !== 'pc') rows.push(qtyRow(`Distance (its galaxy's${p.method ? ', ' + methodWord(p.method) : ''})`, p.dist, (q) => kpcOrMpc(q), 'measured'));   // smbh-curated: kpc or Mpc, as on the galaxy card (Sgr A*, in pc, keeps its Phase 2 row)
+  else if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
   else {
     const h = ctx.hostRecord && ctx.hostRecord.position && ctx.hostRecord.position.dist, hq = unitScaled(h, 'pc');
     const pcs = place && place.galPc ? Math.hypot(...place.galPc) : null;

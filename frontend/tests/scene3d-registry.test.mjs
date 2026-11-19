@@ -638,7 +638,7 @@ test('supermassive black hole card: rescaled mass, published mass and distance n
   const spec = R.kindSpec('black_hole'), c = spec.card(m87, { fromYou: null, evidence: false, lensing: { enlarged: true, factor: 9e7, truePx: 1e-7 } }), row = (l) => c.rows.find((r) => r[0] === l);
   assert.ok(c.rows.find((r) => /^Mass \(rescaled ×1\.0035\)$/.test(r[0])), c.rows.map((r) => r[0]).join('|'));
   assert.equal(row('Published mass · not used')[1], '6.5 ± 0.7 × 10⁹ M☉'); assert.equal(row('Published distance · not used')[1], '16.8 +0.8/−0.7 Mpc');
-  assert.equal(row('Ring diameter')[1], '42.0 ± 3.0 μas'); assert.equal(row('Distance (surface-brightness fluctuations)')[2], 'measured');
+  assert.equal(row('Ring diameter')[1], '42.0 ± 3.0 μas'); assert.equal(row("Distance (its galaxy's, surface-brightness fluctuations)")[2], 'measured'); assert.match(row("Distance (its galaxy's, surface-brightness fluctuations)")[1], / Mpc$/);
   assert.ok(c.notes.some((n) => /^Drawn enlarged ×9e\+?7/.test(n) || /Drawn enlarged/.test(n))); assert.ok(c.notes.some((n) => /rescaled by ×1\.0035/.test(n) && /16\.8 \+0\.8/.test(n)));
   const m31bh = { ...m87, id: 'bh:M31*', name: 'M31*', props: { type: pcq('supermassive', ''), mass: { v: 1.4e8, lo: 1.1e8, hi: 2.3e8, unit: 'Msun', src: 'Bender', tier: 'measured' }, mass_note: { v: 'Bender et al. 2005 do not state the distance they assumed, so the mass is shown as published and not rescaled.', src: 't', tier: 'catalogue' } } };
   const c2 = spec.card(m31bh, { fromYou: null, evidence: false });

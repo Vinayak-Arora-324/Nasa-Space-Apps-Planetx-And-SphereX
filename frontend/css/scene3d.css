@@ -23,11 +23,26 @@
 .credits a { color: inherit; text-decoration: underline; }
 .credits[hidden] { display: none; }
 .hint { max-width: 100%; margin: 0; padding: 3px 10px; border-radius: 6px; background: rgba(5, 7, 11, 0.5); color: var(--text-2); text-shadow: var(--shadow); font-size: 13px; text-align: center; pointer-events: none; }
+/* keyboard devices only, and only after a few idle seconds (scene3d-main.js); idle-off keeps its space so the dock height holds still */
+.hint { transition: opacity 0.4s ease, visibility 0.4s; }
+.hint.idle-off { opacity: 0; visibility: hidden; transition-duration: 0.15s; }
+.hint.no-kbd { display: none; }
+@media (prefers-reduced-motion: reduce) { .hint, .hint.idle-off { transition: none; } }
 
 /* ---- HUD, top left ---- */
 .hud { position: absolute; z-index: 4; top: 10px; left: 10px; width: min(352px, calc(100% - 20px)); padding: 6px 10px 4px; border-radius: 10px; pointer-events: none; text-shadow: var(--shadow);
   /* a dark backing so the read-outs stay legible when a star's surface fills the view */
   background: rgba(5, 7, 11, 0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+/* folded it is just the title and the coordinates; the title row is the only part that takes clicks */
+.hud:not([open]) { width: auto; max-width: calc(100% - 20px); }
+.hud-head { display: grid; grid-template-columns: max-content 1fr; align-items: center; column-gap: 12px; list-style: none; cursor: pointer; pointer-events: auto; border-radius: 6px; }
+.hud-head::-webkit-details-marker { display: none; }
+.hud-chev { justify-self: start; width: 7px; height: 7px; margin-top: -4px; border-right: 1.5px solid var(--text-2); border-bottom: 1.5px solid var(--text-2); transform: rotate(45deg); transition: transform 0.15s ease; }
+.hud[open] .hud-chev { transform: rotate(-135deg); margin-top: 4px; }
+.hud-head:hover .hud-chev { border-color: var(--text); }
+.hud-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hud-head .coords { grid-column: 1 / -1; }
+.hud:not([open]) .coords { margin-bottom: 2px; }
 .title { margin: 0 0 2px; font: 500 28px/1.1 var(--serif); letter-spacing: 0.01em; }
 .coords { margin: 0 0 12px; color: var(--text-2); font-size: 12px; }
 .readout { margin: 0 0 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
@@ -109,6 +124,7 @@
 
 @media (max-width: 600px) {
   .hud { top: 12px; left: 12px; width: calc(100% - 24px); }
+  .hud:not([open]) { max-width: calc(100% - 24px); }
   .title { font-size: 24px; }
   .readout { font-size: 12px; gap: 2px 10px; }
   .bottom-dock { left: 8px; right: 8px; }

@@ -92,12 +92,12 @@ function onHud(h) {
   $('hud-dist').textContent = `${fmtDistPc(h.dist)}${h.scene === 'solar' && solarDate ? ' · ' + solarDate : ''}`;
   const moving = h.speedPc > 1e-15;
   $('hud-speed').textContent = `${moving ? fmtSpeedPc(h.speedPc) : `0 · cruise ${fmtSpeedPc(h.cruisePc).split(' · ')[0]}`}${h.flying ? ' · autopilot' : ''}`;
-  $('hud-mode').textContent = h.auto ? `Auto speed · ${fmtNum(h.throttle, 2)}/s of the way to the nearest surface · T switches` : 'Manual speed · wheel sets it · T switches';
+  $('hud-mode').textContent = h.auto ? `Auto · ${fmtNum(h.throttle, 2)}/s of the way · T` : 'Manual · T';
   $('hud-near').textContent = h.nearName && h.nearText ? `${h.nearName} · ${h.nearText}` : 'n/a';
   $('hud-ev').textContent = `${h.ev >= 0 ? '+' : '−'}${Math.abs(h.ev).toFixed(1)} EV`;
   const c = h.counts;
   $('hud-count').textContent = h.frame === 'system' && h.hostCount ? h.hostCount : stars ? starsCountText(h, c) : solarCountText(h.objCounts || {});
-  $('hud-limit').textContent = `${h.limit.toFixed(1)} mag · [ and ] change it`;
+  $('hud-limit').textContent = `${h.limit.toFixed(1)} mag · [ ]`;
   $('hint').textContent = h.flying ? 'Autopilot · Esc cancels' : h.locked ? 'WASD move · mouse look · wheel throttle · T auto/manual speed · Shift boost · G autopilot to the target · Esc release' : 'Click a star to select it · click empty sky to fly · WASD move · wheel throttle · T auto/manual speed · Shift boost · G autopilot';
   document.querySelectorAll('.scene-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === h.scene)));
   setEvidenceUi(h.evidence);
@@ -157,6 +157,27 @@ function putDockHeight() {
 putDockHeight();
 window.addEventListener('resize', putDockHeight);
 if (typeof ResizeObserver === 'function' && $('bottom-dock')) new ResizeObserver(putDockHeight).observe($('bottom-dock'));   // the hint's text changes too
+// ---------------------------------------------------------------- keyboard hint: keyboard devices only, and only once the user has gone idle
+// A fine pointer (mouse, trackpad) stands in for a keyboard until a key is actually pressed: laptops and an iPad with a trackpad keyboard
+// show it from the start, an iPad with a plain keyboard after its first key press, a touch-only phone or tablet never. It stays out of the
+// way while the user is moving and fades in after HINT_IDLE_MS without input; it keeps its space in the dock so the panels above don't jump.
+const HINT_IDLE_MS = 6000;
+const finePointer = window.matchMedia ? window.matchMedia('(any-pointer: fine)') : null;
+let keyboardSeen = false, hintTimer = 0;
+const hasKeyboard = () => keyboardSeen || !!(finePointer && finePointer.matches);
+function putHintKeyboard() { $('hint').classList.toggle('no-kbd', !hasKeyboard()); putDockHeight(); }
+function hintActivity() {
+  $('hint').classList.add('idle-off');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => $('hint').classList.remove('idle-off'), HINT_IDLE_MS);
+}
+const ACTIVITY = ['pointerdown', 'pointermove', 'wheel', 'touchstart'];
+ACTIVITY.forEach((t) => window.addEventListener(t, hintActivity, { capture: true, passive: true }));
+window.addEventListener('keydown', () => { if (!keyboardSeen) { keyboardSeen = true; putHintKeyboard(); } hintActivity(); }, { capture: true });
+if (finePointer && finePointer.addEventListener) finePointer.addEventListener('change', putHintKeyboard);
+putHintKeyboard();
+hintActivity();
+
 // Notes from independent loads (the bright stars, the objects) share one line, each under its own key.
 const notes = {};
 function setNote(text, key = 'ctx') {
@@ -336,6 +357,17 @@ window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.altKey || e.metaKey || !scene) return;
   if (e.code === 'KeyL' && !e.repeat) setLayersOpen(panel.hidden);
   else if (e.code === 'Escape' && !panel.hidden) { setLayersOpen(false); if (panel.contains(document.activeElement)) layersBtn.focus({ preventScroll: true }); }
+});
+
+// ---------------------------------------------------------------- HUD fold: closed by default, I or a click on the title toggles it
+const hud = $('hud'), HUD_KEY = 'scene3d-hud-open';
+try { hud.open = localStorage.getItem(HUD_KEY) === '1'; } catch (_) { /* storage blocked: start folded */ }
+hud.addEventListener('toggle', () => { try { localStorage.setItem(HUD_KEY, hud.open ? '1' : '0'); } catch (_) { /* ignore */ } });
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || e.repeat || e.code !== 'KeyI') return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  hud.open = !hud.open;
 });
 
 // ---------------------------------------------------------------- hand-off to and from the flat views

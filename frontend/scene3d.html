@@ -70,9 +70,12 @@
     <div id="layers-body"></div>
   </section>
 
-  <p id="credits" class="credits" aria-label="Data credits" hidden></p>
-
+  <!-- the bottom dock stacks the hint, the credits line and the nav in normal flow, so the credits (a CC BY-SA requirement) sit
+       above the nav however many rows it wraps to, never under it; its height is published as --dock-h for panels above it -->
+  <div id="bottom-dock" class="bottom-dock">
   <p id="hint" class="hint" aria-live="polite">Click the sky to fly</p>
+
+  <p id="credits" class="credits" aria-label="Data credits" hidden></p>
 
   <nav class="bottom" aria-label="Scene and view controls">
     <div class="pills" role="group" aria-label="Scene">
@@ -88,6 +91,7 @@
     </span>
     <a class="btn quiet" id="btn-back" href="./">Back to the whole sky</a>
   </nav>
+  </div>
   <div id="veil" class="veil" aria-hidden="true"></div>
 </main>
 <noscript><p class="noscript">The 3D view needs JavaScript.</p></noscript>

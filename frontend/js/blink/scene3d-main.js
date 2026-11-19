@@ -141,7 +141,19 @@ function refreshCredits(sources) {
     box.append(a);
   });
   box.hidden = !items.length;
+  putDockHeight();
 }
+/**
+ * The bottom dock (hint, credits, nav) is laid out in flow; its height goes to --dock-h so the panels that open above it (layers, the pinned
+ * card and the status on a phone) clear it however many rows the nav wraps to.
+ */
+function putDockHeight() {
+  const dock = $('bottom-dock');
+  if (dock) document.documentElement.style.setProperty('--dock-h', `${Math.ceil(dock.getBoundingClientRect().height)}px`);
+}
+putDockHeight();
+window.addEventListener('resize', putDockHeight);
+if (typeof ResizeObserver === 'function' && $('bottom-dock')) new ResizeObserver(putDockHeight).observe($('bottom-dock'));   // the hint's text changes too
 // Notes from independent loads (the bright stars, the objects) share one line, each under its own key.
 const notes = {};
 function setNote(text, key = 'ctx') {

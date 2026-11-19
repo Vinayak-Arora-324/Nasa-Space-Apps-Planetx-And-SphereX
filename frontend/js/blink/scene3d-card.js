@@ -29,6 +29,13 @@ const tierOf = (tier) => (TIER_INFO[tier] ? tier : 'illustrative');
  */
 function addChildren(doc, root, children) {
   const box = el(doc, 'div', 'card-kids');
+  // one list, or several (children.groups: [{ title, items }], a heading each, e.g. 'Exoplanets · 7' and 'Black holes · 1')
+  const groups = children.groups && children.groups.length ? children.groups : [{ title: children.title, items: children.items }];
+  for (const g of groups) addKidList(doc, box, g);
+  if (children.note) box.appendChild(el(doc, 'p', 'card-note', children.note));
+  root.appendChild(box);
+}
+function addKidList(doc, box, children) {
   box.appendChild(el(doc, 'div', 'card-kids-title', children.title || ''));
   const ul = el(doc, 'ul', 'card-kid-list');
   for (const it of children.items || []) {
@@ -49,8 +56,6 @@ function addChildren(doc, root, children) {
     ul.appendChild(li);
   }
   box.appendChild(ul);
-  if (children.note) box.appendChild(el(doc, 'p', 'card-note', children.note));
-  root.appendChild(box);
 }
 
 function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, children, goDisabled) {

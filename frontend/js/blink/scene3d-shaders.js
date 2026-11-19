@@ -379,6 +379,86 @@ void main(){
   o = vec4(c, 1.0);
 }`;
 
+// Nebula billboards (docs/object-framework.md section 17.6.2). A quad per item is built on the CPU in clip space (a_pos is NDC); a_uv is the
+// position in the ellipse's own units, so the elliptical radius is simply rho = length(v_uv) (1 on the catalogue ellipse). Illustrative looks.
+// a_mode: 0 emission, 1 reflection, 2 planetary, 3 supernova remnant, 4 dark (alpha-only output, drawn with blendFunc(ZERO, ONE_MINUS_SRC_ALPHA));
+// 10 / 11: Evidence outline, solid / dashed (no noise, no colour beyond the marker colour).
+export const NEBULA_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec2 a_uv;
+layout(location=2) in vec4 a_col;
+layout(location=3) in vec2 a_p;
+out vec2 v_uv;
+out vec4 v_col;
+out vec2 v_p;
+void main(){
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+  v_uv = a_uv; v_col = a_col; v_p = a_p;
+}`;
+export const NEBULA_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec4 v_col;
+in vec2 v_p;
+out vec4 o;
+uniform float u_k, u_dpr;
+${TONE_GLSL}
+float hash21(vec2 p, float s){
+  p = fract(p*vec2(123.34, 456.21) + s*17.13);
+  p += dot(p, p + 45.32 + s);
+  return fract(p.x*p.y);
+}
+float vnoise(vec2 p, float s){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0 - 2.0*f);
+  return mix(mix(hash21(i, s), hash21(i + vec2(1,0), s), f.x), mix(hash21(i + vec2(0,1), s), hash21(i + vec2(1,1), s), f.x), f.y);
+}
+float fbm(vec2 p, float s){   // 3 octaves of value noise, 0..1
+  float a = 0.5, t = 0.0, n = 0.0;
+  for (int i = 0; i < 3; i++) { t += a*vnoise(p, s); n += a; p = p*2.03 + 7.1; a *= 0.5; }
+  return t/n;
+}
+void main(){
+  float rho = length(v_uv);
+  float seed = v_p.y, mode = v_p.x;
+  vec3 c = vec3(0.0);
+  float alpha = v_col.a;
+  if (mode > 9.5) {                                                   // Evidence view: the catalogue ellipse at rho = 1
+    float w = fwidth(rho);                                            // rho change per device px
+    float hw = 0.75*u_dpr*w;                                          // half of ~1.5 CSS px, in rho units
+    float ring = 1.0 - smoothstep(hw - w, hw + w, abs(rho - 1.0));
+    if (mode > 10.5) ring *= step(0.5, fract(atan(v_uv.y, v_uv.x) * 3.8197186));   // dashed: 24 dashes
+    c = v_col.rgb * (alpha * u_k * ring);
+  } else {
+    float edge = 1.0 - smoothstep(1.0, 1.3, rho);                     // the quad reaches 1.3: nothing may be left at its edge
+    vec2 q = v_uv*2.2;
+    float n = fbm(q, seed);
+    float prof;
+    vec3 col = v_col.rgb;
+    if (mode < 0.5) prof = smoothstep(1.0, 0.55, rho) * (0.55 + 0.45*n);                          // emission
+    else if (mode < 1.5) prof = smoothstep(1.0, 0.3, rho) * (0.72 + 0.28*n);                      // reflection: softer
+    else if (mode < 2.5) {                                                                        // planetary: an annulus, a faint centre
+      float ring = exp(-pow((rho - 0.7)/0.17, 2.0));
+      prof = (ring + 0.12*smoothstep(0.7, 0.0, rho)) * (0.8 + 0.2*n);
+      col = mix(v_col.rgb, vec3(1.0, 0.32, 0.28), smoothstep(0.35, 0.95, rho));                   // teal core to red rim
+    } else if (mode < 3.5) {                                                                      // supernova remnant: a thin shell with filaments
+      float shell = exp(-pow((rho - 0.9)/0.09, 2.0));
+      float fil = pow(fbm(q*1.7 + 3.0, seed + 1.0), 2.0)*2.2;
+      prof = shell*(0.12 + fil) + 0.08*smoothstep(1.0, 0.0, rho)*n;
+      col = mix(v_col.rgb, vec3(0.3, 0.8, 0.85), smoothstep(0.35, 0.75, fbm(q*0.9 + 9.0, seed)));  // orange, teal
+    } else prof = smoothstep(1.0, 0.55, rho) * (0.55 + 0.45*n);                                   // dark: the emission profile
+    prof *= edge;
+    if (mode > 3.5) { o = vec4(0.0, 0.0, 0.0, clamp(alpha*prof, 0.0, 0.9)); if (o.a < 0.002) discard; return; }
+    c = col * (alpha * u_k * prof);
+  }
+  if (max(c.r, max(c.g, c.b)) < 1e-5) discard;
+#ifdef LDR
+  c = srgb(tonemap(c));
+#endif
+  o = vec4(c, 1.0);
+}`;
+
 export const SPRITE_UNIFORMS_STAR = ['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_dpr', 'u_maxPt', 'u_sig', 'u_skip'];
 export const BODY_UNIFORMS = ['u_rect', 'u_tan', 'u_c', 'u_col', 'u_light', 'u_pole', 'u_v2w', 'u_kind', 'u_u', 'u_surf', 'u_glow', 'u_time',
   'u_evid', 'u_w', 'u_ext', 'u_pix', 'u_ring', 'u_band', 'u_atm', 'u_gran', 'u_gamp', 'u_spots', 'u_seed'];

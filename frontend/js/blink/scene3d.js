@@ -11,9 +11,10 @@ import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
-import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, planetLine, fmtNum as regFmtNum } from './scene3d-registry.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
-  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature, billboardItems, markerPoints, mergeStarSystem } from './scene3d-objects.js';
+  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature, billboardItems, markerPoints, mergeStarSystem,
+  MW_FADE_PC, skyFade, fromYouFor, visibleCounts } from './scene3d-objects.js';
 import { orbitPath } from './scene3d-orbits.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
 import * as S from './scene3d-shaders.js';
@@ -31,7 +32,7 @@ const NEAR_PC = 0.05;            // stars this close to the camera are drawn exa
 // Milky Way glow (frontend/data/milkyway.webp, see backend/scripts/build_milkyway.py). MW_K sets its brightness against
 // the stars at the default limit and exposure; it brightens with the limit by the same sqrt-of-flux law as the stars.
 // The map is the sky seen from the Sun, so it fades out once the camera is a few hundred parsecs away.
-const MW_URL = './data/milkyway.webp', MW_K = 0.11, MW_FADE_PC = 800;
+const MW_URL = './data/milkyway.webp', MW_K = 0.11;
 // Arriving from and leaving for a flat picture (the sphere or the frames), see intro() and flatten().
 const INTRO_S = 3.2, FLATTEN_S = 1.3;
 const REVEAL_REF = 0.3;          // the dolly zoom keeps stars at this fraction of the median Gaia distance in place
@@ -44,7 +45,11 @@ const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;
 // Cluster glow brightness: BB_K x the exposure (capped), so a glow stays a faint wash even in a dark, high-exposure view. The Evidence
 // ring is a thin line, drawn at a fixed linear level (not scaled by the exposure: a bright star nearby drives the exposure down and a
 // scaled ring vanished with it).
-const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;   // a grouped system's marker: warm white, a little larger
+const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;
+// Nebula glows (illustrative look): NEB_K x the exposure, capped, like the cluster glows; the Evidence outline is at a fixed level (BB_RING).
+// The dark pass multiplies its alpha by NEB_DARK (it only darkens the Milky Way glow behind it).
+const NEB_K = 0.45, NEB_MAX = 0.9, NEB_DARK = 1.6, NEB_QUAD = 1.3, NEB_PX_MAX = 2e5, LOOK_TURN_S = 0.8;
+const NEB_MODE = { emission: 0, reflection: 1, planetary: 2, snr: 3, dark: 4 };   // the nebula shader's a_mode (10 and 11: Evidence outline, solid and dashed)   // a grouped system's marker: warm white, a little larger
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
 
@@ -115,7 +120,7 @@ export class Scene3D {
     this._intro = null; this._outro = null; this._arrival = null;   // camera animations to and from a flat picture
     this._snap = null;                                               // the flat picture laid over the canvas (showSnap)
     this._frame = this._frame.bind(this);
-    this._pj = (rel) => this._proj(rel); this._fp = (e) => framePos(e, this.cam);   // closures for the object helpers
+    this._pj = (rel) => this._proj(rel); this._pjAll = (rel) => this._projAll(rel); this._fp = (e) => framePos(e, this.cam);   // closures for the object helpers
     this.cam = this._startCam('stars');
     this.fov = this.fovStars;
     this._initGL();
@@ -145,11 +150,12 @@ export class Scene3D {
       body: makeProgram(gl, S.BODY_VS, S.BODY_FS, S.BODY_UNIFORMS, d),
       sky: makeProgram(gl, S.SKY_VS, S.SKY_FS, ['u_tan', 'u_sky', 'u_v2w', 'u_k'], d),
       bb: makeProgram(gl, S.BB_VS, S.BB_FS, ['u_vp', 'u_k', 'u_dpr'], d),
+      nebula: makeProgram(gl, S.NEBULA_VS, S.NEBULA_FS, ['u_k', 'u_dpr'], d),
     };
     this.skyTex = null;
     if (this.mwImg) this._uploadSky();
     this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
-    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer() };
+    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer(), nebula: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
   }
@@ -691,11 +697,12 @@ export class Scene3D {
     const px = (GO_DEG * D2R) * this.pxPerRad;
     this._go(this._pickAt(this.cssW / 2, this.cssH / 2, px) || this.sel);
   }
-  /** What "Go there" does for this selection (see planGo): { type: 'star' | 'fly' | 'solar-scene' | 'via-host' | 'fly-galaxy', hostId? }. */
+  /** What "Go there" does for this selection (see planGo): { type: 'star' | 'fly' | 'solar-scene' | 'via-host' | 'fly-galaxy' | 'look', hostId?, dir? }. */
   _planFor(sel) {
     const cam = this.cam;
     const target = sel.kind === 'star' ? { kind: 'star' } : sel.kind === 'group' ? { kind: 'group', id: sel.id } : { kind: sel.kind, id: sel.id, host: (this.store.get(sel.id) || {}).host };
-    return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null, resolveHost: (h) => this.store.resolveHost(h) });
+    return planGo(target, { camFrame: cam.frame, camHostKey: cam.host ? cam.host.key : null, resolveHost: (h) => this.store.resolveHost(h),
+      placement: (id) => this.store.placement(id) });
   }
   /** A via-host trip whose host star is not in the star list cannot start (the card's button says so). */
   _hostMissing(plan) { return plan.type === 'via-host' && this._starIdx(plan.hostId) < 0; }
@@ -703,6 +710,7 @@ export class Scene3D {
     if (!sel) return;
     const plan = this._planFor(sel);
     if (plan.type === 'star') this._goStar(sel, null);
+    else if (plan.type === 'look') this._lookAt(plan.dir, sel);
     else if (plan.type === 'fly') this._flyTo(sel);
     else if (plan.type === 'solar-scene') {
       this.setScene('solar');
@@ -747,8 +755,27 @@ export class Scene3D {
     this.ap = { obj, sel, type: 'object', host: t.host, then: null, unitsPerPc: AU_PER_PC };
     cam.vel = [0, 0, 0];
   }
+  /**
+   * "Turn to it" (a direction-only target, plan type 'look'): the camera turns to face dir over LOOK_TURN_S (at once with reduced motion).
+   * Position, velocity and speed are untouched. Yaw and pitch are eased separately (the camera has no roll), yaw the short way round.
+   */
+  _lookAt(dir, sel) {
+    const cam = this.cam, to = M.yawPitchFromDir(dir), instant = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    let dy = to.yaw - cam.yaw;
+    dy -= Math.round(dy / (2 * Math.PI)) * 2 * Math.PI;
+    this.ap = { type: 'look', sel, yaw0: cam.yaw, dYaw: dy, pitch0: cam.pitch, pitch1: clamp(to.pitch, -1.5, 1.5), s: instant ? 1 : 0, dur: LOOK_TURN_S };
+    if (instant) this._stepLook(0);
+  }
+  _stepLook(dt) {
+    const ap = this.ap, cam = this.cam;
+    ap.s = Math.min(1, ap.s + dt / ap.dur);
+    const e = ease(ap.s);
+    cam.yaw = ap.yaw0 + ap.dYaw * e; cam.pitch = ap.pitch0 + (ap.pitch1 - ap.pitch0) * e;
+    if (ap.s >= 1) this.ap = null;
+  }
   _stepAutopilot(dt) {
     const ap = this.ap, cam = this.cam; if (!ap) return;
+    if (ap.type === 'look') { this._stepLook(dt); return; }
     const world = ap.type === 'star' || ap.type === 'galaxy';          // trips in world parsecs: they cross frame switches
     if (!world && !this._inHost(ap.host)) { this.ap = null; return; }   // left the object's system
     const t = this._resolve(ap.sel);
@@ -1050,8 +1077,10 @@ export class Scene3D {
     if (hdr) hdr.begin(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     this._drawSky();
-    const bb = this._billboards();                                // cluster glows and rings; the items also feed markers and picking
-    this._drawBillboards(bb);
+    const bb = this._billboards();                                // cluster and nebula items; they also feed markers and picking
+    this._drawNebulae(bb, true);                                  // dark nebulae: right after the Milky Way glow, before every other glow and star
+    this._drawBillboards(bb);                                     // cluster glows and rings
+    this._drawNebulae(bb, false);                                 // emission, reflection, planetary and SNR glows, and the Evidence outlines
     const sun = this._inSun(), inSys = cam.frame === 'system', vis = this._vis, groups = this._groups;
     const bufOk = inSys && this._bufHost === cam.host.key;       // points and lineSys belong to the camera's host (rebuilt on every frame change)
     const bodies = [];                                            // spheres to draw, with their crossfade weight
@@ -1110,7 +1139,8 @@ export class Scene3D {
     const hasBb = this._vis.some((e) => e.renderer === 'billboard');
     if (!hasBb) return [];
     const near = this.cam.disarm ? Infinity : this._nearBody().d;    // while leaving the start star (the Sun) it is not "about to enter" anything
-    const items = billboardItems(this._vis, this.cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, nearPc: near });
+    // project: null only for points behind the camera (a nebula needs the ends of its axes even where they fall off screen)
+    const items = billboardItems(this._vis, this.cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, nearPc: near, project: this._pjAll });
     const by = new Map(items.map((i) => [i.id, i]));
     for (const e of this._vis) if (e.renderer === 'billboard') { const it = by.get(e.id); e.markerOnly = !!(it && it.markerOnly); }
     return items;
@@ -1121,7 +1151,7 @@ export class Scene3D {
    * and before the stars. An item whose r50 is under 2 px (markerOnly) or that has faded out draws no quad: its marker is enough.
    */
   _drawBillboards(items) {
-    const quads = items.filter((it) => it.markerOnly ? false : (it.mode === 'outline' ? it.lineAlpha : it.alpha) > 1e-3);
+    const quads = items.filter((it) => it.billboard !== 'nebula' && (it.markerOnly ? false : (it.mode === 'outline' ? it.lineAlpha : it.alpha) > 1e-3));
     if (!quads.length) return;
     const cam = this.cam, f = M.dirFromYawPitch(cam.yaw, cam.pitch), r = M.norm(M.cross(f, Z_UP)), u = M.cross(r, f);
     const data = new Float32Array(quads.length * 6 * 10);
@@ -1150,6 +1180,54 @@ export class Scene3D {
     gl.uniform1f(pr.u.u_dpr, this.dpr);
     gl.drawArrays(gl.TRIANGLES, 0, k / 10);
     gl.disableVertexAttribArray(3);
+  }
+  /**
+   * The nebula billboards (docs/object-framework.md section 17.6.2): per item a screen-aligned quad (a rotated rectangle covering NEB_QUAD x its
+   * ellipse) built here from the item's screen centre, semi-axes and angle, in clip space. dark: true draws only the dark nebulae, with
+   * blendFunc(ZERO, ONE_MINUS_SRC_ALPHA) (they darken what is behind them: the Milky Way glow); false draws the rest, additive, no depth.
+   * In the Evidence view the pass draws the catalogue ellipse (dashed for derived records and an unknown PA) in the marker colour, and the
+   * dark pass draws nothing. Items that are markers only, inside, or faded out draw no quad (markerPoints gives the marker).
+   */
+  _drawNebulae(items, dark) {
+    const ev = this.evidence, quads = [];
+    for (const it of items) {
+      if (it.billboard !== 'nebula' || it.markerOnly || it.inside || !it.screen || it.semiMajorPx == null) continue;
+      if ((!ev && it.look === 'dark') !== dark) continue;   // the Evidence view draws every outline in the additive pass
+      if ((ev ? it.lineAlpha : it.alpha) > 1e-3) quads.push(it);
+    }
+    if (!quads.length) return;
+    const gl = this.gl, pr = this.prog.nebula, W = this.cssW, H = this.cssH, st = 40;   // 10 floats a vertex: clip xy, ellipse uv, rgba, mode and seed
+    const data = new Float32Array(quads.length * 6 * 10);
+    const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+    let k = 0;
+    for (const it of quads) {
+      const a = Math.min(it.semiMajorPx, NEB_PX_MAX), b = Math.min(Math.max(it.semiMinorPx, 0.5), NEB_PX_MAX), th = it.angle || 0;
+      const ct = Math.cos(th), sn = Math.sin(th);
+      const ext = ev ? 1 + Math.min(Math.max(0.3, 4 / b), 6) : NEB_QUAD;          // the outline's line is a few px wide: leave room around a thin ellipse
+      const alpha = ev ? it.lineAlpha : dark ? it.alpha * NEB_DARK : it.alpha;
+      const mode = ev ? (it.dashed ? 11 : 10) : NEB_MODE[it.look] ?? 0;
+      for (const [cx, cy] of CORNERS) {
+        const u = cx * ext, v = cy * ext;
+        const px = it.screen[0] + u * a * ct - v * b * sn, py = it.screen[1] + u * a * sn + v * b * ct;   // the major axis along (cos, sin) in px, y down
+        data[k++] = px / W * 2 - 1; data[k++] = 1 - py / H * 2;
+        data[k++] = u; data[k++] = v;
+        data[k++] = it.rgb[0]; data[k++] = it.rgb[1]; data[k++] = it.rgb[2]; data[k++] = alpha;
+        data[k++] = mode; data[k++] = it.seed * 97.0;
+      }
+    }
+    gl.blendFunc(dark ? gl.ZERO : gl.ONE, dark ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
+    gl.useProgram(pr.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.nebula);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, k), gl.STREAM_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, st, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, st, 8);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, st, 16);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, st, 32);
+    gl.uniform1f(pr.u.u_k, ev ? BB_RING : Math.min(NEB_K * this.expo, NEB_MAX));
+    gl.uniform1f(pr.u.u_dpr, this.dpr);
+    gl.drawArrays(gl.TRIANGLES, 0, k / 10);
+    gl.disableVertexAttribArray(3);
+    gl.blendFunc(gl.ONE, gl.ONE);
   }
   _drawSky() {
     if (!this.skyTex || !this.layers.mw) return;
@@ -1293,6 +1371,13 @@ export class Scene3D {
     if (nx < -1.1 || nx > 1.1 || ny < -1.1 || ny > 1.1) return null;
     return [(nx * 0.5 + 0.5) * this.cssW, (0.5 - ny * 0.5) * this.cssH];
   }
+  /** Like _proj, but null only for points behind the camera: off-screen points still give a (possibly far) screen position. */
+  _projAll(rel) {
+    const v = this.vp, x = rel[0], y = rel[1], z = rel[2];
+    const w = v[3] * x + v[7] * y + v[11] * z + v[15];
+    if (w <= 1e-30) return null;
+    return [((v[0] * x + v[4] * y + v[8] * z + v[12]) / w * 0.5 + 0.5) * this.cssW, (0.5 - (v[1] * x + v[5] * y + v[9] * z + v[13]) / w * 0.5) * this.cssH];
+  }
   /**
    * What is under (px, py) in CSS px within maxPx, or null: { kind: 'star', id, idx } | { kind, id } | { kind: 'group', id }.
    * One star candidate (the brightest in reach, priority 20) and one object candidate (pickObjects) go through choosePick:
@@ -1311,7 +1396,7 @@ export class Scene3D {
     }
     const cands = [];
     if (bi >= 0) cands.push({ sel: this._starSel(bi), priority: kindSpec('star').pick.priority, d: bd });
-    cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0 }));
+    cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0, skyFade: skyFade(cam) }));
     const win = choosePick(cands);
     return win ? this._pickTarget(win.sel) : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
   }
@@ -1364,14 +1449,13 @@ export class Scene3D {
     if (!kids.length) return null;
     const off = [...new Set(kids.map((o) => layerOf(o.kind)).filter((l) => l && this.layers[l] === false))];
     const go = !this.evidence && !off.length;
-    const items = kids.map((o) => {
-      const p = planetLine(o, fmtNum);
-      return { name: o.name, line: p.line, tier: p.tier, onGo: pinned && go ? () => this._go({ kind: o.kind, id: o.id }) : null };
-    });
+    const groups = childGroups(kids, fmtNum).map((g) => ({ title: g.title, items: g.items.map((it) => ({ name: it.name, line: it.line, tier: it.tier,
+      onGo: pinned && go ? () => this._go({ kind: it.o.kind, id: it.o.id }) : null })) }));
+    const items = groups.flatMap((g) => g.items);
     const label = (id) => (layerDefs().find((l) => l.id === id) || { label: id }).label;
     const note = this.evidence ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
       : off.length ? `The ${off.map(label).join(' and ')} layer is off, so they are not drawn.` : null;
-    return { title: `${kindsPhrase([...new Set(kids.map((o) => o.kind))])} · ${kids.length}`, items, total: kids.length, note };
+    return { groups, items, total: kids.length, note };   // one heading per kind: 'Exoplanets · 7', 'Black holes · 1'
   }
   _renderCard(sel, pinned) {
     const rel = this._selPos(sel);
@@ -1384,7 +1468,7 @@ export class Scene3D {
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
     }
-    const plan = this._planFor(sel), goLabel = plan.type === 'solar-scene' ? 'Show in the Solar system' : 'Go there';
+    const plan = this._planFor(sel), goLabel = plan.type === 'solar-scene' ? 'Show in the Solar system' : plan.type === 'look' ? 'Turn to it' : 'Go there';
     const onGo = pinned ? () => this._go(sel) : undefined;     // clusters too: their plan is fly-galaxy
     const goDisabled = this._hostMissing(plan) ? 'host star not in this view' : null;
     if (sel.kind === 'group') {
@@ -1402,8 +1486,9 @@ export class Scene3D {
       return;
     }
     const e = this._entry(sel.id);
-    const c = e.spec.card(e.o, { fromYou: this.evidence ? null : this._fromYou(rel), evidence: this.evidence, fmtNum,
-      place: this.store.placement(e.id), hostName: e.host ? this.store.hostName(e.host) : null });
+    const c = e.spec.card(e.o, { fromYou: this.evidence ? null : fromYouFor(e, rel, (r) => this._fromYou(r)), evidence: this.evidence, fmtNum,
+      place: this.store.placement(e.id), hostName: e.host ? this.store.hostName(e.host) : null,
+      hostRecord: e.host ? this.store.starRecord(e.host) : null });
     renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled });
   }
   _updateCard(t) {
@@ -1446,7 +1531,7 @@ export class Scene3D {
         out.push({ x: p[0], y: p[1], key: mag, text: st.meta[i].name });
       }
     }
-    const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0 });
+    const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0, skyFade: skyFade(cam) });
     for (const l of L) out.push(l);
     return out;
   }
@@ -1465,9 +1550,10 @@ export class Scene3D {
       const box = { x0: L.x + 6, y0: L.y - 7, x1: L.x + 10 + w, y1: L.y + 7 };
       if (placed.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
-      lab.fillStyle = 'rgba(233, 230, 223, 0.9)';
+      const la = L.alpha != null ? L.alpha : 1;                  // a direction-only label fades with the sky (skyFade)
+      lab.fillStyle = `rgba(233, 230, 223, ${(0.9 * la).toFixed(3)})`;
       lab.beginPath(); lab.arc(L.x, L.y, 1.6, 0, Math.PI * 2); lab.fill();
-      lab.fillStyle = 'rgba(233, 230, 223, 0.8)';
+      lab.fillStyle = `rgba(233, 230, 223, ${(0.8 * la).toFixed(3)})`;
       lab.fillText(L.text, L.x + 8, L.y);
     }
     lab.shadowBlur = 0;
@@ -1484,7 +1570,10 @@ export class Scene3D {
       if (xh) {
         lab.textAlign = 'center'; lab.lineJoin = 'round'; lab.lineWidth = 3.5; lab.strokeStyle = 'rgba(5, 7, 11, 0.9)';   // outlined: stays readable on a bright disc
         const line = (text, y, fill) => { lab.strokeText(text, cx, y); lab.fillStyle = fill; lab.fillText(text, cx, y); };
-        line(xh.name, cy + 24, 'rgb(240, 237, 230)'); line(xh.dist, cy + 40, 'rgb(225, 222, 214)'); line('G to autopilot', cy + 56, 'rgb(250, 200, 100)');
+        line(xh.name, cy + 24, 'rgb(240, 237, 230)');
+        let y = cy + 40;
+        if (xh.dist) { line(xh.dist, y, 'rgb(225, 222, 214)'); y += 16; }          // a direction-only target has no distance
+        line(xh.turn ? 'G to turn to it' : 'G to autopilot', y, 'rgb(250, 200, 100)');
         lab.textAlign = 'start'; lab.lineWidth = 1;
       }
     }
@@ -1501,11 +1590,12 @@ export class Scene3D {
     const rel = this._selPos(sel); if (!rel) return (this._xh = null);
     const d = Math.hypot(...rel), u = F.unitsPerPc(this.cam), e = sel.kind === 'star' || sel.kind === 'group' ? null : this._entry(sel.id);
     // Distance to the surface, like the HUD's Nearest row (radius in frame units).
-    const rad = sel.kind === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : e ? e.spec.arriveAu(e.o) * u / AU_PER_PC : 0;
+    const rad = sel.kind === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : e && !e.atInfinity ? e.spec.arriveAu(e.o) * u / AU_PER_PC : 0;
     const surf = d > 0 ? rel.map((v) => v * Math.max(0, d - rad) / d) : rel;
     const name = sel.kind === 'star' ? this._starName(sel.idx) : sel.kind === 'group' ? this._groups[String(sel.id).replace(/^group:/, '')].name : e.o.name;
     const short = name.length > 28 && /^Gaia/i.test(name) ? 'Gaia …' + name.slice(-8) : name;
-    return (this._xh = { name: short, dist: this._fromYou(surf), sel });
+    const inf = !!(e && e.atInfinity);
+    return (this._xh = { name: short, dist: inf ? null : this._fromYou(surf), turn: inf, sel });
   }
   /** "7 exoplanets (positions illustrative)" in a system frame of a star with planets, else ''. */
   _hostCountText() {
@@ -1513,13 +1603,9 @@ export class Scene3D {
     return key && key !== SUN_HOST.key ? hostCountText(this.store, key, { evidence: this.evidence, layers: this.layers }) : '';
   }
   /** Visible object counts by kind in the galaxy frame ({} elsewhere), for the HUD's exoplanet and cluster phrases. */
-  _visCounts() {
-    const out = {};
-    if (this.cam.frame === 'galaxy') for (const e of this._vis) out[e.kind] = (out[e.kind] || 0) + 1;
-    return out;
-  }
+  _visCounts() { return this.cam.frame === 'galaxy' ? visibleCounts(this._vis) : { counts: {}, direct: {} }; }
   _hudData() {
-    const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody();
+    const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody(), vc = this._visCounts();
     return {
       scene: this.scene, frame: cam.frame, unit: inSys ? 'AU' : 'pc',
       hostName: inSys ? near.name : null,
@@ -1527,7 +1613,7 @@ export class Scene3D {
       sunPc: F.worldPc(cam), speed: this.speedPc * F.unitsPerPc(cam), speedPc: this.speedPc, cruise: this._cruise(), auto: this.autoSpeed, throttle: this.throttle,
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
-      hostCount: this._hostCountText(), visCounts: this._visCounts(),
+      hostCount: this._hostCountText(), visCounts: vc.counts, visDirect: vc.direct,
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };
   }

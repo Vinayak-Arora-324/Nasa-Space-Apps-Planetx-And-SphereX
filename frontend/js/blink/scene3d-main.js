@@ -6,8 +6,8 @@ import { getScene3D, getObjects, getCoverage } from '../api.js';
 import { Scene3D, fmtNum } from './scene3d.js';
 import { contextStars, LY_PER_PC as LY } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
-import { layers as layerList, kinds as kindList, kindSpec } from './scene3d-registry.js';
-import { kindsPhrase, countPhrase, capNotes } from './scene3d-objects.js';
+import { layers as layerList, kinds as kindList, kindSpec, beyondKinds } from './scene3d-registry.js';
+import { kindsPhrase, countPhrase, capNotes, creditItems, datasetCounts } from './scene3d-objects.js';
 import { C_PC_PER_S, fmtTimesC } from './scene3d-nav.js';
 import { fmtRA, fmtDec, fmtDeg, separation } from './util.js';
 
@@ -116,13 +116,31 @@ function solarCountText(c) {
 function starsCountText(h, c) {
   const gaia = c.gaia ? `${c.gaia.toLocaleString('en-US')} Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around`
     : gaiaState === 'error' ? `No Gaia stars · ${c.ctx.toLocaleString('en-US')} bright stars around` : 'Gaia stars loading…';
-  const status = scene ? scene.store.kindStatus : {}, vis = h.visCounts || {};
-  const beyond = h.frame === 'galaxy' ? ['exoplanet', 'cluster'].filter((k) => vis[k] > 0).map((k) => countPhrase([k], vis, status)) : [];
+  const status = scene ? scene.store.kindStatus : {}, vis = h.visCounts || {}, direct = h.visDirect || {};
+  const beyond = h.frame === 'galaxy' ? beyondKinds().filter((k) => vis[k] > 0).map((k) => countPhrase([k], vis, status, direct)) : [];
   return [gaia, ...beyond].join(' · ');
 }
 function setEvidenceUi(on) {
   $('btn-evidence').setAttribute('aria-pressed', String(!!on));
   $('ev-chip').hidden = !on;
+}
+/**
+ * The credits line (section 17.2): `credit · licence` for every dataset that has records in the cone and a credit (OpenNGC's CC BY-SA 4.0 for the
+ * nebulae). Shown in both scenes, small; the licence name links to its page in a new tab.
+ */
+function refreshCredits(sources) {
+  const box = $('credits');
+  box.textContent = '';
+  const items = scene ? creditItems(sources, datasetCounts(scene.store)) : [];
+  items.forEach((it, i) => {
+    if (i) box.append(' | ');
+    if (!it.licenceName || !it.licence || !/^https?:\/\//i.test(it.licence)) { box.append(it.text); return; }
+    box.append(`${it.credit} · `);
+    const a = document.createElement('a');
+    a.href = it.licence; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = it.licenceName;
+    box.append(a);
+  });
+  box.hidden = !items.length;
 }
 // Notes from independent loads (the bright stars, the objects) share one line, each under its own key.
 const notes = {};
@@ -215,6 +233,7 @@ async function loadObjects() {
   try {
     const p = await getObjects({ ra, dec, radius, mjd });
     const r = scene.setObjects(p);
+    refreshCredits(p.sources);
     if (!r.ok) { objectsState = 'error'; setNote(r.error, 'objects'); }
     else {
       objectsState = 'ok';

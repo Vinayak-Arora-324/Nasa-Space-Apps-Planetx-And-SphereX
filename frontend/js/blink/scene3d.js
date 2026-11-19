@@ -53,7 +53,9 @@ const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;
 // Nebula glows (illustrative look): NEB_K x the exposure, capped, like the cluster glows; the Evidence outline is at a fixed level (BB_RING).
 // The dark pass multiplies its alpha by NEB_DARK (it only darkens the Milky Way glow behind it).
 const NEB_K = 0.45, NEB_MAX = 0.9, NEB_DARK = 1.6, NEB_QUAD = 1.3, NEB_PX_MAX = 2e5, LOOK_TURN_S = 0.8;
-const GAL_K = NEB_K, GAL_MAX = NEB_MAX;   // galaxy glows: the nebulae's brightness law (illustrative), the same exposure factor and cap
+// galaxy glows: the nebulae's alpha law (section 18.6, from the surface brightness), drawn 3x brighter than a nebula glow: at the nebulae's factor a
+// 22-23 mag/arcsec^2 galaxy (M31, M87) peaked near 5 % and could not be seen against the black (illustrative either way; browser check 2026-11-19)
+const GAL_K = 3 * NEB_K, GAL_MAX = 3 * NEB_MAX;
 const WORLD_TRIPS = new Set(['star', 'galaxy', 'point']);   // autopilot trips in world parsecs: they cross frame switches
 const FLY_POINT_STOP_PC = 1;   // a flight to a point (the Milky Way's face-on view) ends this far from it
 const LENS_PX_MAX = 2e4;   // a drawn shadow is never wider than this (CSS px) however close the camera is

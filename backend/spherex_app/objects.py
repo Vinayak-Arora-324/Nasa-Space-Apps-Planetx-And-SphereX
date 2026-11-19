@@ -12,6 +12,9 @@ allows at most `measured`, `inferred` allows at most `derived`, `illustrative` a
 An orbit whose phase is unknown is always `illustrative`. Phase 1 adds three rules: an orbit whose
 inclination or node is unknown, or that has an `illustrative` element, must have an `illustrative`
 position tier; and a `fixed` position with method `assumed` must have an `illustrative` distance.
+Phase 2 adds: direction-only records (`fixed`, no distance) have no host, no method and no inferred or illustrative `size.radius`; an
+orbit's tier is no stronger than its weakest element; `render.style` is in RENDER_STYLES (`lensing` on black
+holes only); and `prefer_record` is allowed only on the ids in PREFER_RECORD_IDS.
 
 Data comes from sources (`Source`): live ones (`objects_live`: ephemeris, SkyBoT) and prebuilt static
 datasets (`objects_static`: tiled JSON under config.OBJECTS_DIR). `build_objects` runs every source that
@@ -55,7 +58,22 @@ NAMESPACES = ("ss", "mp", "comet", "gdr3", "hip", "nea", "neahost", "hr23", "ong
               "gal", "test")
 # Kinds that live in a host's system frame but are stored in static tiles (as `orbit` positions that
 # carry the host's direction in `host_radec`). Backend mirror of the frontend registry's `hosted: true`.
-HOSTED_KINDS = ("exoplanet",)
+# Phase 2 adds black holes with a Gaia companion (hosted `orbit` records, docs/object-framework.md 17.7).
+HOSTED_KINDS = ("exoplanet", "black_hole")
+# `render.style` values the frontend registry may honour (a hint, never data). `lensing` is black holes only.
+RENDER_STYLES = ("lensing",)
+# Star records that may carry `prefer_record` (the seven companions of the curated black holes, 17.8).
+# This list is deliberately explicit: prefer_record replaces a star's distance, so it must not grow into a
+# general override mechanism without a reviewed code change (17.7 item 5).
+PREFER_RECORD_IDS = (
+    "gdr3:4373465352415301632",  # Gaia BH1 companion
+    "gdr3:5870569352746779008",  # Gaia BH2 companion
+    "gdr3:4318465066420528000",  # Gaia BH3 companion (LS II +14 13)
+    "gdr3:2059383668236814720",  # Cyg X-1 (HD 226868)
+    "gdr3:2056188624872569088",  # V404 Cyg
+    "gdr3:3118721026600835328",  # A0620-00 (V616 Mon)
+    "gdr3:4477902563164690816",  # MAXI J1820+070
+)
 POSITION_MODELS = ("fixed", "state", "orbit")
 DIST_UNITS = ("pc", "Mpc")
 
@@ -65,6 +83,8 @@ MJD_MIN, MJD_MAX = 15020.0, 88069.0
 _ID_RE = re.compile(r"^([a-z][a-z0-9]*):(\S.*)$")
 # strength of an evidence level, and the strongest evidence each tier allows
 _EVIDENCE_RANK = {"illustrative": 0, "derived": 1, "measured": 2}
+# strength of a tier (measured and catalogue are equally strong), for the orbit tier floor
+_TIER_RANK = {"illustrative": 0, "inferred": 1, "catalogue": 2, "measured": 2}
 _TIER_CAP = {"measured": "measured", "catalogue": "measured", "inferred": "derived",
              "illustrative": "illustrative"}
 _ANGLE_TO_DEG = {"deg": 1.0, "arcmin": 1.0 / 60.0, "arcsec": 1.0 / 3600.0}
@@ -177,6 +197,10 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
         if method is not None and method not in METHODS:
             out.append(f"position.method: must be one of {', '.join(METHODS)}")
         if dist is None:
+            # Phase 2 (17.5, 17.7): a direction-only record has no host, no method and no physical radius.
+            # `host` and `size` are checked in `_validate`; the method is checked here.
+            if method is not None:
+                out.append("position.method: must be null when position.dist is null (direction only)")
             if pos.get("tier") not in TIERS:
                 out.append("position.tier: required when position.dist is null")
                 return None
@@ -231,7 +255,60 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
     if must_be_illustrative and pos.get("tier") != "illustrative":
         out.append("position.tier: an orbit must be 'illustrative' when "
                    + "; ".join(must_be_illustrative))
+    # Phase 2 (17.7 item 3): the tier of an orbit may not be stronger than its weakest element
+    if isinstance(el, dict) and pos.get("tier") in TIERS:
+        weakest = min((q["tier"] for q in el.values() if isinstance(q, dict) and q.get("tier") in TIERS),
+                      key=_TIER_RANK.__getitem__, default=None)
+        if weakest is not None and _TIER_RANK[pos["tier"]] > _TIER_RANK[weakest]:
+            out.append(f"position.tier: {pos['tier']!r} is stronger than the weakest orbital element "
+                       f"({weakest!r})")
     return pos.get("tier") if pos.get("tier") in TIERS else None
+
+
+def _check_direction_only(rec: dict, out: list[str]) -> None:
+    """A `fixed` position with no distance has no host and no physical radius (method: see `_check_position`)."""
+    pos = rec.get("position")
+    if not (isinstance(pos, dict) and pos.get("model") == "fixed" and pos.get("dist") is None):
+        return
+    if rec.get("host") is not None:
+        out.append("host: a direction-only record (no distance) must have host null")
+    size = rec.get("size")
+    rad = size.get("radius") if isinstance(size, dict) else None
+    # a radius of tier measured or catalogue is an independent measurement of the object's own size (a star's
+    # radius); an inferred or illustrative one would have to be made up without a distance
+    if rad is not None and not (isinstance(rad, dict) and rad.get("tier") in ("measured", "catalogue")):
+        out.append("size.radius: a direction-only record (no distance) may only have a measured or "
+                   "catalogue radius")
+
+
+def _check_render_style(rec: dict, out: list[str]) -> None:
+    render = rec.get("render")
+    if not isinstance(render, dict) or render.get("style") is None:
+        return
+    style = render["style"]
+    if style not in RENDER_STYLES:
+        out.append(f"render.style: must be one of {', '.join(RENDER_STYLES)}")
+    elif style == "lensing" and rec.get("kind") != "black_hole":
+        out.append("render.style: 'lensing' is only for black_hole records")
+
+
+def _check_prefer_record(rec: dict, out: list[str]) -> None:
+    """`prefer_record` (17.7 item 5): exactly {replace: "dist", reason}, on a listed star with a
+    measured or catalogue distance."""
+    if "prefer_record" not in rec:
+        return
+    pr = rec["prefer_record"]
+    if not (isinstance(pr, dict) and set(pr) == {"replace", "reason"} and pr["replace"] == "dist"
+            and isinstance(pr["reason"], str) and pr["reason"].strip()):
+        out.append('prefer_record: must be exactly {"replace": "dist", "reason": <non-empty string>}')
+    if rec.get("kind") != "star":
+        out.append("prefer_record: only star records may carry it")
+    if rec.get("id") not in PREFER_RECORD_IDS:
+        out.append("prefer_record: this id is not in PREFER_RECORD_IDS")
+    pos = rec.get("position")
+    dist = pos.get("dist") if isinstance(pos, dict) and pos.get("model") == "fixed" else None
+    if not (isinstance(dist, dict) and dist.get("tier") in ("measured", "catalogue")):
+        out.append("prefer_record: needs a distance of tier measured or catalogue")
 
 
 def validate_record(rec: Any) -> list[str]:
@@ -270,6 +347,9 @@ def _validate(rec: Any) -> list[str]:
         out.append("in_cone: must be a boolean")
 
     gov = _check_position(rec.get("position"), rec.get("host"), out)
+    _check_direction_only(rec, out)
+    _check_render_style(rec, out)
+    _check_prefer_record(rec, out)
 
     size = rec.get("size")
     if size is not None:

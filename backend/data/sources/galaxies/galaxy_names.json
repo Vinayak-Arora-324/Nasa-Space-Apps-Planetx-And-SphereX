@@ -1,0 +1,22 @@
+{
+  "about": "Curated common names (src 'curated common name'). Keys are record ids.",
+  "names": {
+    "ongc:NGC0224": "Andromeda Galaxy",
+    "ongc:NGC0598": "Triangulum Galaxy",
+    "ongc:ESO056-115": "Large Magellanic Cloud",
+    "ongc:NGC0292": "Small Magellanic Cloud",
+    "ongc:NGC4486": "Messier 87",
+    "ongc:NGC5194": "Whirlpool Galaxy",
+    "ongc:NGC4594": "Sombrero Galaxy",
+    "ongc:NGC5457": "Pinwheel Galaxy",
+    "ongc:NGC3031": "Bode's Galaxy",
+    "ongc:NGC3034": "Cigar Galaxy",
+    "ongc:NGC5128": "Centaurus A",
+    "ongc:NGC0221": "M32",
+    "ongc:NGC0205": "M110",
+    "ongc:NGC4258": "M106",
+    "ongc:NGC0253": "Sculptor Galaxy",
+    "ongc:NGC4826": "Black Eye Galaxy",
+    "ongc:NGC4889": "NGC 4889"
+  }
+}

@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, awaiting approval.**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18 and approved 2026-11-19 (decisions in §18.18).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -2360,7 +2360,7 @@ The open questions Q1–Q5 were answered as follows, and each condition is folde
 
 ## 18. Phase 3: megaparsec frame, galaxies, the Milky Way and supermassive black holes (design)
 
-Status: **design, awaiting approval** (open questions in §18.17). Sections of §1–§17 that Phase 3 changes carry a
+Status: **approved 2026-11-19 with the decisions in §18.18**, which override anything in §18.1–§18.17 they contradict. Sections of §1–§17 that Phase 3 changes carry a
 "Phase 3 change" note pointing here. Where this section and an earlier one disagree, this one wins.
 
 Every catalogue fact below was checked against the live source on **2026-11-19**:
@@ -2555,11 +2555,64 @@ For a galaxy with no catalogue distance and a velocity (OpenNGC `RadVel`, or UNG
    km/s/Mpc" (Tully et al. 2023, abstract). Same scale as the catalogue distances shown beside them. Riess et al.
    2022's 73.04 ± 1.04 is 2 % lower; Planck 2018 VI's 67.36 ± 0.54 (Table 2, TT,TE,EE+lowE+lensing) would put every
    Hubble-flow galaxy about 11 % farther, and the card says so. (Q2.)
-5. **Interval.** `σ_D/D = √((σ_v/v_CMB)² + (σ_H0/H0)²)` with `σ_v = 300 km/s` ("The distribution of peculiar
-   velocities with well-constrained distances is approximated by a Gaussian distribution with standard deviation 300
-   km/s", CF4 §13) and `σ_H0 = √(0.8² + 3²) = 3.1`. That is 30 % at the threshold, 9.5 % at 3,500 km/s and 4 % far out.
+5. **Interval** (changed at approval, §18.18 item 2). `σ_D/D = σ_v / v_CMB` with `σ_v = 300 km/s` ("The distribution of
+   peculiar velocities with well-constrained distances is approximated by a Gaussian distribution with standard
+   deviation 300 km/s", CF4 §13), or a cluster's dispersion inside the rich clusters of §18.4.6. H0 adds nothing: the
+   CF4 distances beside them do not include it either. That is 30 % at the threshold and 8.5 % at 3,500 km/s.
 6. `method: redshift`, `dist.tier: inferred`, `evidence: derived` (hollow marker, dashed outline). The src names the
    velocity, the frame, H0 and σ_v.
+
+**Changed at approval (§18.18 items 3 and 6):** galaxies in rich nearby clusters take the cluster's CF4 group distance
+(§18.4.6), and Local Group galaxies have two more distance sources: the curated Magellanic Clouds and McConnachie 2012
+(§18.4.7).
+
+#### 18.4.6 Rich nearby clusters (added at approval, §18.18 item 3)
+
+Inside a rich cluster a galaxy's velocity is mostly its motion within the cluster, so a Hubble-flow distance would
+smear the cluster into a streak along the line of sight with an interval that understates the error. The research
+run counted Hubble-flow candidates (no catalogue distance, v_CMB ≥ 1000 km/s): **147 within 8° of M87 below 3000 km/s**,
+41 within 3° of Coma, 19 within 2° of Perseus, 13 near Centaurus, 13 near Abell 1367 and Hercules each, 9 within 4° of
+Fornax, 6 near Hydra.
+
+**Rule** (`backend/data/sources/galaxies/clusters.json`, every number with `src`/`where`): a galaxy that would get a
+Hubble-flow distance is a **member** when it lies within the cluster's cited radius of the centre galaxy on the sky
+and its heliocentric velocity is within 3σ of the CF4 group's heliocentric velocity `Vh` (3σ as Colless & Dunn 1996
+clipped Coma). A member is placed at the **CF4 group distance** (the `groups` table's `DMzp ± e_DMzp`, converted as in
+§18.4.1), `method: group-member`, tier `inferred`, `evidence: derived`, with the interval widened in quadrature by the
+cluster's radius along the line of sight. The card says: "Placed at the distance of the Virgo cluster (Cosmicflows-4
+group 41220), because its velocity mostly reflects its motion inside the cluster."
+
+| Cluster | Centre | CF4 group (1PGC, DMzp, D) | σ (km/s) | Radius |
+|---|---|---|---|---|
+| Virgo | M87 | 41220, 31.048 ± 0.008, 16.2 Mpc | 638 ± 35 (Kashibadze et al. 2020, A&A 635, A135, cluster-parameter table) | 6° = 1.7 Mpc, the virial radius (same, Sect. 1) |
+| Fornax | NGC 1399 | 13418, 31.468 ± 0.013, 19.7 Mpc | 374 ± 26 (Drinkwater et al. 2001, ApJ 548, L139, Sect. 3) | 0.7 Mpc virial radius at their 20 Mpc → 2.005° |
+| Coma | NGC 4874 | 44715, 34.891 ± 0.025, 95.1 Mpc | 1038 ± 60 (Colless & Dunn 1996, ApJ 458, 435, Sect. 3.1) | 97′ = 2.9 Mpc (Łokas & Mamon 2003, MNRAS 343, 401, Sect. 5) |
+| Perseus | NGC 1275 | 12429, 34.185 ± 0.036, 68.7 Mpc | 1163 ± 49 (Meusinger et al. 2020, A&A 640, A30, Table 2) | R_vir,200 2.8 Mpc at their 74 Mpc → 2.168° |
+
+The CF4 `groups` table (`J/ApJ/944/94/groups`, 38,053 rows; columns `1PGC, Ngal, DMzp, e_DMzp, Vh, V3k`) joins the
+snapshot: the same catalogue, so still two distance catalogues. Centaurus, Abell 1367, Hercules and Hydra are left
+out: no cited radius was found for Centaurus, and the others were not researched; their candidates keep the 300 km/s
+floor. Galaxies with their own catalogue distance are never moved. The build report counts and lists the members.
+
+#### 18.4.7 The Local Group (added at approval, §18.18 item 6)
+
+UNGC's 0.01 Mpc rounding is too coarse for Milky Way satellites (the SMC at 0.06 Mpc, Sgr dSph at 0.02 Mpc instead
+of about 26 kpc), so two more sources join, **for the Local Group only** (an approved exception to "at most two"):
+- **The curated Magellanic Clouds** (`local_group_curated.json`): the LMC at 49.59 ± 0.09 (stat) ± 0.54 (sys) kpc
+  (Pietrzyński et al. 2019, Nature 567, 200, abstract) and the SMC at 62.44 ± 0.47 ± 0.81 kpc (Graczyk et al. 2020,
+  ApJ 904, 13, abstract), errors in quadrature, `method: eclipsing-binary` (new, measured). They win over every
+  catalogue value, which go to `alt_distances`.
+- **McConnachie 2012** (AJ 144, 4; arXiv:1204.1562; VizieR `J/AJ/144/4/catalog`, 102 rows, checked 2026-11-19 on the
+  CfA mirror; VizieR terms). "All distance moduli are based on resolved stellar population analysis (generally
+  Cepheid, RR Lyrae or TRGB measurements, but also horizontal branch level and main-sequence fitting)" (the column notes of its position-and-distance table), so
+  `method: resolved-stars` (new, measured), with its asymmetric modulus errors. Only rows associated with the Milky
+  Way, M31 or the Local Group (`n_Name` containing G, A or L: 75 rows, 70 usable) are used, not the nearby neighbours (N), and not
+  rows whose modulus is flagged (`u_(m-M)` non-blank: Canis Major, Pisces II, Triangulum, Andromeda XXII) or the
+  Milky Way row. Rows are matched to
+  OpenNGC/UNGC records by name (also `OName`) and then position (≤ 3′); the report lists every pair. A McConnachie
+  distance is an ordinary candidate in §18.4.2 (catalogue order CF4, McConnachie, UNGC), so it wins wherever it has
+  the smaller fractional error and always over UNGC's error-less values. Expected: Sgr dSph at 26 kpc, Draco and Ursa
+  Minor at 76 kpc.
 
 #### 18.4.5 Expected counts (research run on the 2026-11-19 snapshot; the build report gives the final ones)
 
@@ -2638,13 +2691,16 @@ about 170 kpc.
 
 #### 18.5.5 The Magellanic Clouds at the boundary
 
-- **LMC** (`ongc:ESO056-115`, UNGC `LMC` merged by override): CF4 Cepheid 18.469 ± 0.070 → **49.4 kpc** (47.8–51.0).
-  Its 646′ major axis makes its disc radius 4.6 kpc, so it spans about 44.8–54.0 kpc from the Sun: **entirely inside
-  the 40–60 kpc hysteresis band**. A camera near it can be in either frame, depending on where it came from.
-- **SMC** (`ongc:NGC0292`): CF4 Cepheid 19.029 ± 0.050 → **63.9 kpc** (62.5–65.4), radius 2.8 kpc, spanning about
-  61–67 kpc: just beyond the band.
-- For reference only (not catalogue distances, so not used): Pietrzyński et al. 2019 give the LMC at 49.59 ± 0.09
-  (stat) ± 0.54 (sys) kpc, and Graczyk et al. 2020 the SMC at 62.44 ± 0.47 ± 0.81 kpc.
+**Changed at approval (§18.18 item 6): the Clouds take their curated eclipsing-binary distances.**
+- **LMC** (`ongc:ESO056-115`, UNGC `LMC` merged by override): Pietrzyński et al. 2019, 49.59 ± 0.09 (stat) ± 0.54
+  (sys) kpc → **49.59 ± 0.55 kpc** (49.04–50.14). Its 646′ major axis makes its disc radius 4.7 kpc, so it spans about
+  44.9–54.3 kpc from the Sun: **entirely inside the 40–60 kpc hysteresis band**. A camera near it can be in either
+  frame, depending on where it came from. CF4's Cepheid 49.4 kpc is shown as not used.
+- **SMC** (`ongc:NGC0292`): Graczyk et al. 2020, 62.44 ± 0.47 ± 0.81 kpc → **62.44 ± 0.94 kpc** (61.50–63.38); its
+  300′ major axis gives a radius of 2.7 kpc, so it spans about 59.7–65.2 kpc. Its centre is beyond the 60 kpc entry
+  line and its near edge just inside it: the cloud straddles the line where the camera enters `cosmos`. CF4's Cepheid
+  63.9 kpc is shown as not used.
+- UNGC's rounded 0.05 and 0.06 Mpc are never used for them.
 
 Why crossing the boundary cannot make them flicker or jump:
 1. Their placement is `galPc` in doubles, and both frames reach the screen through `relFromCam` (pc × `perPc` minus
@@ -2772,7 +2828,7 @@ A curated record in the `galaxies` dataset, built from `milky_way.json`, always 
 - **Sgr A\*:** its `parent` becomes `gal:milky_way` in `black_holes.json` (§17.8's one-line change). A test asserts
   the Milky Way's `position.dist` and Sgr A*'s are equal, field for field.
 
-### 18.8 Supermassive black holes (`bh-curated`)
+### 18.8 Supermassive black holes (`smbh-curated`; changed at approval, §18.18 item 1)
 
 #### 18.8.1 The list
 
@@ -3142,3 +3198,54 @@ and SMBHs; (9) docs and mock server.
    Milky Way satellites near the 60 kpc boundary). *Recommendation:* keep them `measured`, with no interval on the card
    and the rounding stated in the src and a card note. The alternative is to mark them `derived` (hollow), which
    undersells a TRGB distance.
+
+### 18.18 Decisions at approval (2026-11-19)
+
+The open questions of §18.17 were answered as follows. Each decision is folded into the section named; where an
+earlier part of §18 says otherwise, this section wins.
+
+1. **Non-commercial terms: accepted.** Space Maps is treated as non-commercial education; everything is labelled, and
+   the question is decided again before any commercial use. Conditions:
+   - The repository `LICENSE` says which data files are **not** MIT: Gaia-derived values (CC BY-NC 3.0 IGO),
+     Cosmicflows-4/EDD-derived values (EDD terms, with citations) and OpenNGC-derived files (CC BY-SA 4.0), plus a short
+     **"Before any commercial use"** list of exactly which datasets would have to be removed, replaced or cleared.
+   - **Files that mix terms** (checked file by file; nothing is relicensed, and each value keeps its source's terms,
+     named per folder in `LICENSE.md` and per value in its `src`):
+     - **`nebulae` mixes CC BY-SA 4.0 OpenNGC data with Gaia-derived values**: the 59 planetary-nebula distances and
+       central-star ids come from Chornay & Walton 2021, which are Gaia EDR3 parallaxes (CC BY-NC 3.0 IGO). Handled by
+       labelling: both nebula `LICENSE.md` files say so, the manifest's `credit` adds "PN distances from Gaia EDR3:
+       Credit: ESA/Gaia/DPAC", and the dataset is on the "Before any commercial use" list (a commercial build would
+       rebuild it without the Chornay & Walton distances, leaving those 59 nebulae direction-only).
+     - **`galaxies` mixes CC BY-SA 4.0 OpenNGC data with Cosmicflows-4 distances** under EDD's "research and education"
+       terms (and VizieR-served UNGC and McConnachie values). No Gaia values. Handled the same way.
+     - **The supermassive black holes move to their own dataset, `smbh-curated`** (§18.8), instead of `bh-curated`,
+       because they copy their galaxies' OpenNGC positions and CF4 distances; `bh-curated` holds Gaia values, and the two
+       are kept out of one file. `smbh-curated` mixes OpenNGC, CF4 and the papers' values like `galaxies`; no Gaia.
+     - `bh-curated` (Gaia + papers), `nea-exoplanets` (NEA + Gaia) and `hr23-clusters` (Hunt & Reffert's values derived
+       from Gaia DR3) hold no OpenNGC data. The Milky Way record copies Sgr A*'s values, which come from GRAVITY and
+       Reid & Brunthaler, not Gaia.
+2. **H0 = 74.6 (Cosmicflows-4): accepted.** The Hubble-flow interval is **not** widened by H0's uncertainty (the CF4
+   distances beside them do not include it either): `σ_D/D = σ_v / v_CMB` (§18.4.4). Every Hubble-flow `src` and card
+   note states "H0 = 74.6 km/s/Mpc (Cosmicflows-4 scale); Planck's 67.4 would place it about 11 % farther".
+3. **CMB frame, 1000 km/s threshold, 300 km/s floor: accepted, with the rich clusters handled separately.** 147
+   Hubble-flow candidates lie within 8° of M87 below 3000 km/s, so the count is significant. Chosen: **members of Virgo,
+   Fornax, Coma and Perseus take their CF4 group distance as `derived`** (`group-member`), with the cluster radius from
+   a cited paper as extra line-of-sight depth, and membership by the cited radius and a 3σ velocity window around the
+   CF4 group velocity using cited dispersions (§18.4.6). The build report gives how many galaxies this touches.
+4. **Cone plus the context set: accepted.** Membership is computed by the build from the stated rule (adopted distance
+   ≤ 3 Mpc, B < 10, the SMBH hosts, the Milky Way) and listed in the build report. A record in both the cone and the
+   context set is sent once (the sky tile's records are in no cone tile, and the merge de-duplicates ids). **The
+   context set stays per-request**, not a separate cached file: the store replaces its contents on every payload, so a
+   second, once-fetched file would need a merge path in the store and the renderer, which is more than a small change.
+   Compressed, it adds about 25 KB per request.
+5. **The eight black holes and the distance rule: accepted as designed.** Also: a mass rescaled by a `derived` distance
+   becomes `inferred` (NGC 4889*); NGC 4258's galaxy and black hole share the CF4 maser distance (7.586 Mpc), and the
+   card shows Reid et al. 2019's 7.576 ± 0.082 ± 0.076 Mpc as not used, explaining that CF4's maser modulus is that
+   measurement rounded to 0.01 mag; tests assert every rescaling factor. The SMBHs live in `smbh-curated` (item 1).
+6. **UNGC distances without errors: kept `measured`, with no invented interval and the rounding stated on the card,
+   but not for the Local Group.** The LMC and SMC get curated eclipsing-binary distances; other Local Group galaxies
+   get McConnachie 2012's distances with errors (VizieR `J/AJ/144/4`, verified live), an approved exception to "at most
+   two" (§18.4.7). The boundary is re-checked with the real distances: the LMC (49.59 kpc) lies wholly inside the
+   40–60 kpc band, the SMC (62.44 kpc) straddles the 60 kpc entry line (§18.5.5).
+
+Everything else in §18 is approved as written.

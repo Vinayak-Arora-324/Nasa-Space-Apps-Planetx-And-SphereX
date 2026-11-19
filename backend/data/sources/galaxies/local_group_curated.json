@@ -1,0 +1,15 @@
+{
+  "format": "space-maps.local-group-distances/1",
+  "curated": "2026-11-19",
+  "about": "Curated eclipsing-binary distances for the Magellanic Clouds (approved exception, object framework section 18.18 item 6). They replace every catalogue distance for these two records; the catalogue values are shown as not used. Errors: statistical and systematic added in quadrature, as measured 1-sigma intervals. Every number carries `src` and `where`, re-read in the paper text on 2026-11-19.",
+  "papers": {
+    "pietrzynski2019": {"cite": "Pietrzyński et al. 2019, Nature 567, 200", "arxiv": "1903.08096", "doi": "10.1038/s41586-019-0999-4"},
+    "graczyk2020": {"cite": "Graczyk et al. 2020, ApJ 904, 13", "arxiv": "2010.08754", "doi": "10.3847/1538-4357/abbb2b"}
+  },
+  "distances": [
+    {"record": "ongc:ESO056-115", "name": "Large Magellanic Cloud", "method": "eclipsing-binary",
+     "dist": {"v": 49.59, "err_stat": 0.09, "err_sys": 0.54, "unit": "kpc", "src": "pietrzynski2019", "where": "abstract: 'The final distance is 49.59 ± 0.09 (statistical) ± 0.54 (systematic) kiloparsecs' (20 detached eclipsing binaries)"}},
+    {"record": "ongc:NGC0292", "name": "Small Magellanic Cloud", "method": "eclipsing-binary",
+     "dist": {"v": 62.44, "err_stat": 0.47, "err_sys": 0.81, "unit": "kpc", "src": "graczyk2020", "where": "abstract: 'We derive a distance to the SMC center of DSMC = 62.44 ± 0.47 (stat.) ± 0.81 (syst.) kpc corresponding to a distance modulus (m − M)SMC = 18.977 ± 0.016 ± 0.028 mag'"}}
+  ]
+}

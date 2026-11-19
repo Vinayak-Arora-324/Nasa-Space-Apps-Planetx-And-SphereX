@@ -1,0 +1,28 @@
+{
+  "format": "space-maps.milky-way/1",
+  "curated": "2026-11-19",
+  "about": "The curated Milky Way record gal:milky_way (object framework section 18.7). Every number carries `src` (a key of `papers`) and `where`; the build refuses any number without both. The centre is not written here: `centre_from` names the bh-curated record whose position and distance the build copies from backend/data/sources/bh-curated/black_holes.json, so R0 exists once. The drawn look (a generic barred spiral) is illustrative; the sizes it is drawn to are the measured values below.",
+  "centre_from": "bh:Sgr A*",
+  "id": "gal:milky_way",
+  "name": "Milky Way",
+  "designations": ["Galaxy", "Milky Way (UNGC)"],
+  "papers": {
+    "esa1997": {"cite": "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200, Vol. 1", "arxiv": null, "doi": null, "url": "https://www.cosmos.esa.int/documents/532822/552851/vol1_all.pdf"},
+    "bhg2016": {"cite": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529", "arxiv": "1602.07702", "doi": "10.1146/annurev-astro-081915-023441"}
+  },
+  "props": {
+    "ngp_ra": {"v": 192.85948, "unit": "deg", "tier": "catalogue", "src": "esa1997", "where": "Sec. 1.5.3, eq. 1.5.9: north galactic pole in ICRS, alpha_G = 192.85948 deg ('to be regarded as exact quantities')"},
+    "ngp_dec": {"v": 27.12825, "unit": "deg", "tier": "catalogue", "src": "esa1997", "where": "Sec. 1.5.3, eq. 1.5.9: delta_G = +27.12825 deg"},
+    "l_node": {"v": 32.93192, "unit": "deg", "tier": "catalogue", "src": "esa1997", "where": "Sec. 1.5.3, eq. 1.5.10: galactic longitude of the ascending node of the galactic plane on the ICRS equator, l_Omega = 32.93192 deg"},
+    "thin_disc_scale_length": {"v": 2600, "lo": 2100, "hi": 3100, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 5.1 margin box: 'Rt: 2.6±0.5 kpc, thin disk radial scalelength'"},
+    "thin_disc_scale_height": {"v": 300, "lo": 250, "hi": 350, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 5.1 margin box: 'zt: 300±50 pc, thin disk vertical scalelength at R0'"},
+    "thick_disc_scale_length": {"v": 2000, "lo": 1800, "hi": 2200, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 5.1 margin box: 'RT: 2.0 ± 0.2 kpc, thick disk radial scalelength'"},
+    "thick_disc_scale_height": {"v": 900, "lo": 720, "hi": 1080, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 5.1 margin box: 'zT: 900±180 pc, thick disk vertical scalelength at R0'"},
+    "bar_half_length": {"v": 5000, "lo": 4800, "hi": 5200, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 4.3 margin box: 'Rlb: 5.0 ± 0.2 kpc, bar half-length' (long bar)"},
+    "bar_angle": {"v": 27, "lo": 25, "hi": 29, "unit": "deg", "tier": "measured", "src": "bhg2016", "where": "Sec. 4.2: 'The near side of the b/p bulge has its major axis in the first Galactic quadrant (0° < l < 90°). The bar angle between major axis and the Sun-Galactic center line ... is φbp = 27° ± 2°'; Sec. 4.3 gives the long bar 28°−33°"},
+    "stellar_mass": {"v": 5e10, "lo": 4e10, "hi": 6e10, "unit": "Msun", "tier": "measured", "src": "bhg2016", "where": "Sec. 6.4: 'our estimate of the total stellar mass in the Milky Way is M⋆ = 5±1×10^10 Msun'"},
+    "sun_height": {"v": 25, "lo": 20, "hi": 30, "unit": "pc", "tier": "measured", "src": "bhg2016", "where": "Sec. 3.3: 'we adopt here the best estimate from the complete SDSS photometric survey, i.e. z0 = 25 ± 5 pc (Jurić et al. 2008)'"}
+  },
+  "no_edge": {"src": "bhg2016", "where": "Sec. 5.5: 'there is no strong evidence for a truncation to date in either old or young populations'"},
+  "type": {"v": "Galaxy (ours): barred spiral", "src": "bhg2016", "where": "Sec. 4: the Galaxy's b/p bulge and long bar"}
+}

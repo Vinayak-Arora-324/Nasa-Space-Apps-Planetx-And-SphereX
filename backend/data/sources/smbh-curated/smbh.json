@@ -1,0 +1,86 @@
+{
+  "format": "space-maps.smbh-curated/1",
+  "curated": "2026-11-19",
+  "about": "Hand-curated supermassive black holes for Space Maps (object framework section 18.8). Every number carries `src` (a key of `papers`) and `where` (the passage, table or equation it was read from, re-read in the paper text on 2026-11-19); the build refuses any number without both. Each black hole sits at the centre of its host galaxy record (`host_galaxy`), whose position and distance the build copies from the built `galaxies` dataset, so a black hole and its galaxy never have two distances. `assumed_dist` is the distance the mass paper assumed or measured; it is shown on the card as not used. When `rescale` is true the mass is multiplied by D_adopted / D_assumed, because a dynamical mass scales linearly with the assumed distance (`scaling` quotes where the paper says so). These records hold no Gaia values and no Gaia-licensed data.",
+  "papers": {
+    "eht2019a": {"cite": "Event Horizon Telescope Collaboration 2019, ApJL 875, L1 (Paper I)", "arxiv": "1906.11238", "doi": "10.3847/2041-8213/ab0ec7"},
+    "eht2019f": {"cite": "Event Horizon Telescope Collaboration 2019, ApJL 875, L6 (Paper VI)", "arxiv": "1906.11243", "doi": "10.3847/2041-8213/ab1141"},
+    "reid2019": {"cite": "Reid, Pesce & Riess 2019, ApJL 886, L27", "arxiv": "1908.05625", "doi": "10.3847/2041-8213/ab552d"},
+    "bender2005": {"cite": "Bender et al. 2005, ApJ 631, 280", "arxiv": "astro-ph/0509839", "doi": "10.1086/432434"},
+    "vdbosch2010": {"cite": "van den Bosch & de Zeeuw 2010, MNRAS 401, 1770", "arxiv": "0910.0844", "doi": "10.1111/j.1365-2966.2009.15832.x"},
+    "cappellari2009": {"cite": "Cappellari et al. 2009, MNRAS 394, 660", "arxiv": "0812.1000", "doi": "10.1111/j.1365-2966.2008.14377.x"},
+    "devereux2003": {"cite": "Devereux et al. 2003, AJ 125, 1226", "arxiv": null, "doi": "10.1086/367595"},
+    "jardel2011": {"cite": "Jardel et al. 2011, ApJ 739, 21", "arxiv": "1107.1238", "doi": "10.1088/0004-637X/739/1/21"},
+    "mcconnell2011": {"cite": "McConnell et al. 2011, Nature 480, 215", "arxiv": "1112.1078", "doi": "10.1038/nature10636"}
+  },
+  "black_holes": [
+    {
+      "id": "bh:M87*", "name": "M87*", "designations": ["M87*"], "host_galaxy": "ongc:NGC4486",
+      "state": "accreting: the EHT ring and a relativistic jet",
+      "method_text": "mass from the size of the black hole's shadow (Event Horizon Telescope)",
+      "mass": {"v": 6.5e9, "err_stat": 0.2e9, "err_sys": 0.7e9, "unit": "Msun", "src": "eht2019f", "where": "abstract and Sec. 9.2: M = 6.5 ± 0.2 (stat) ± 0.7 (sys) × 10^9 Msun; Table 7, last row"},
+      "assumed_dist": {"v": 16.8, "lo": 16.1, "hi": 17.6, "unit": "Mpc", "src": "eht2019f", "where": "Sec. 8.1: 'we adopt a distance of D = 16.8 +0.8 −0.7 Mpc to M87' (one TRGB and two SBF measurements; Table 9)"},
+      "rescale": true,
+      "scaling": {"src": "eht2019f", "where": "abstract: the angular gravitational radius GM/Dc^2 = 3.8 ± 0.4 μas is measured, so M ∝ D; Appendix I.2: dynamical masses 'measure, in reality, a mass-to-distance ratio'"},
+      "ring_diameter": {"v": 4.2e-5, "lo": 3.9e-5, "hi": 4.5e-5, "unit": "arcsec", "src": "eht2019a", "where": "abstract: 'an asymmetric bright emission ring with a diameter of 42±3 μas'"}
+    },
+    {
+      "id": "bh:NGC 4258*", "name": "NGC 4258*", "designations": ["M106*"], "host_galaxy": "ongc:NGC4258",
+      "state": "water-maser disc",
+      "method_text": "mass from the orbits of water masers in its disc",
+      "mass": {"v": 3.98e7, "lo": 3.94e7, "hi": 4.02e7, "unit": "Msun", "src": "reid2019", "where": "Table 2 (Fitted Disk Model), 'Black hole mass (10^7 Msun) 3.98 ± 0.04'"},
+      "assumed_dist": {"v": 7.576, "err_stat": 0.082, "err_sys": 0.076, "unit": "Mpc", "src": "reid2019", "where": "abstract: 'we find the distance to NGC 4258 to be 7.576 ± 0.082 (stat.) ± 0.076 (sys.) Mpc'"},
+      "assumed_dist_is_measurement": true,
+      "rescale": true,
+      "scaling": {"src": "reid2019", "where": "the maser model fits the mass and the distance together (Table 2); the mass at a given distance scales as M ∝ D for the same rotation curve"}
+    },
+    {
+      "id": "bh:M31*", "name": "M31*", "designations": ["M31*"], "host_galaxy": "ongc:NGC0224",
+      "method_text": "mass from the motions of stars in its nucleus (P3 disc)",
+      "mass": {"v": 1.4e8, "lo": 1.1e8, "hi": 2.3e8, "unit": "Msun", "src": "bender2005", "where": "abstract: 'the best fit and the lowest black hole mass are obtained for a thin disk model with M• = 1.4 × 10^8 Msun ... the 1-σ confidence range becomes (1.1 to 2.3) ×10^8 Msun'"},
+      "assumed_dist": null,
+      "rescale": false,
+      "no_rescale_reason": "Bender et al. 2005 do not state the distance they assumed, so the mass is shown as published and not rescaled."
+    },
+    {
+      "id": "bh:M32*", "name": "M32*", "designations": ["M32*"], "host_galaxy": "ongc:NGC0221",
+      "method_text": "mass from the motions of stars in its centre",
+      "mass": {"v": 2.4e6, "lo": 1.4e6, "hi": 3.4e6, "unit": "Msun", "src": "vdbosch2010", "where": "Sec. 3.1.2 and Conclusions: 'our M• mass estimate of (2.4±1.0)×10^6 Msun'"},
+      "assumed_dist": {"v": 0.79, "unit": "Mpc", "src": "vdbosch2010", "where": "Sec. 3.1: 'For our modeling of M32 we assumed a distance of 0.79 Mpc'"},
+      "rescale": true,
+      "scaling": {"src": "vdbosch2010", "where": "orbit-based dynamical model at an assumed distance (Sec. 3.1); a dynamical mass scales as M ∝ D"}
+    },
+    {
+      "id": "bh:Cen A*", "name": "Cen A*", "designations": ["Centaurus A*", "NGC 5128*"], "host_galaxy": "ongc:NGC5128",
+      "method_text": "mass from the motions of stars in its centre",
+      "mass": {"v": 5.5e7, "lo": 4.5e7, "hi": 6.5e7, "unit": "Msun", "src": "cappellari2009", "where": "abstract: 'MBH = (5.5 ± 3.0) × 10^7 Msun (3σ errors)'; stored as 1σ = 3.0/3 = 1.0 × 10^7, the paper's 3σ error divided by 3"},
+      "assumed_dist": {"v": 3.5, "unit": "Mpc", "src": "cappellari2009", "where": "Sec. 2: 'Here we adopt a value D = 3.5 Mpc to be consistent with all the earlier papers on MBH determination on this galaxy'"},
+      "rescale": true,
+      "scaling": {"src": "cappellari2009", "where": "footnote 2: 'lengths and masses scale as D, while mass-to-light ratios scale as D^−1'"}
+    },
+    {
+      "id": "bh:M81*", "name": "M81*", "designations": ["M81*"], "host_galaxy": "ongc:NGC3031",
+      "method_text": "mass from the motion of ionised gas in its centre",
+      "mass": {"v": 7.0e7, "lo": 6.0e7, "hi": 9.0e7, "unit": "Msun", "src": "devereux2003", "where": "abstract and Sec. 4: MBH = 7.0 +2/−1 × 10^7 Msun (1σ, 68% contour)"},
+      "assumed_dist": {"v": 3.63, "unit": "Mpc", "src": "devereux2003", "where": "Sec. 3: 'based on a distance to M81 of 3.63 Mpc (Freedman et al. 2001)'"},
+      "rescale": true,
+      "scaling": {"src": "devereux2003", "where": "Introduction: the black hole mass and the bulge luminosity 'both scale with distance'"}
+    },
+    {
+      "id": "bh:M104*", "name": "M104*", "designations": ["Sombrero*", "NGC 4594*"], "host_galaxy": "ongc:NGC4594",
+      "method_text": "mass from the motions of stars in its centre",
+      "mass": {"v": 6.6e8, "lo": 6.2e8, "hi": 7.0e8, "unit": "Msun", "src": "jardel2011", "where": "abstract: 'We find a black hole of mass M• = (6.6 ± 0.4) × 10^8 Msun' (68% confidence band)"},
+      "assumed_dist": {"v": 9.8, "unit": "Mpc", "src": "jardel2011", "where": "Sec. 1: 'Throughout this paper we assume a distance to NGC 4594 of 9.8 Mpc, calculated from surface brightness fluctuations (Tonry et al. 2001)'"},
+      "rescale": true,
+      "scaling": {"src": "jardel2011", "where": "Sec. 1: 'Black hole mass scales as M• ∝ D'"}
+    },
+    {
+      "id": "bh:NGC 4889*", "name": "NGC 4889*", "designations": ["NGC 4889*"], "host_galaxy": "ongc:NGC4889",
+      "method_text": "mass from the motions of stars in its centre",
+      "mass": {"v": 2.1e10, "lo": 5.5e9, "hi": 3.7e10, "unit": "Msun", "src": "mcconnell2011", "where": "Supplementary Table 4, row N4889: MBH 2.1 × 10^10, MBH,min 5.5 × 10^9, MBH,max 3.7 × 10^10 (68%); the main text rounds the interval to (0.6 − 3.7) × 10^10"},
+      "assumed_dist": {"v": 103.2, "unit": "Mpc", "src": "mcconnell2011", "where": "Supplementary Table 4, row N4889: D = 103.2 Mpc; notes: 'assuming H0 = 70 km/s/Mpc'"},
+      "rescale": true,
+      "scaling": {"src": "mcconnell2011", "where": "Supplementary Table 4 notes: 'MBH ∝ D'"}
+    }
+  ]
+}

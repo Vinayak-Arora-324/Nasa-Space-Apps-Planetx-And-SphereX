@@ -1,0 +1,5 @@
+[
+  {"ungc": "LMC", "ongc": "ESO056-115", "reason": "OpenNGC lists the Large Magellanic Cloud under its ESO number (addendum row)"},
+  {"ungc": "SMC", "ongc": "NGC0292", "reason": "the Small Magellanic Cloud is NGC 292 in OpenNGC"},
+  {"ungc": "Milky Way", "ongc": "gal:milky_way", "reason": "the curated record gal:milky_way; UNGC's 'geom' row at 0.01 Mpc is not used"}
+]

@@ -1221,9 +1221,15 @@ export class Scene3D {
       const ext = ev ? 1 + Math.min(Math.max(0.3, 4 / b), 6) : NEB_QUAD;          // the outline's line is a few px wide: leave room around a thin ellipse
       const alpha = ev ? it.lineAlpha : dark ? it.alpha * NEB_DARK : it.alpha;
       const mode = ev ? (it.dashed ? 11 : 10) : NEB_MODE[it.look] ?? 0;
+      // The quad is drawn as its screen bounding box cut to the viewport, each corner given the ellipse coordinates of that pixel (the map is
+      // affine, so the interpolation is exact). No vertex leaves the screen: clipped triangles showed a seam along the quad's diagonal.
+      const ex = ext * (Math.abs(a * ct) + Math.abs(b * sn)), ey = ext * (Math.abs(a * sn) + Math.abs(b * ct));
+      const x0 = Math.max(0, it.screen[0] - ex), x1 = Math.min(W, it.screen[0] + ex), y0 = Math.max(0, it.screen[1] - ey), y1 = Math.min(H, it.screen[1] + ey);
+      if (!(x1 > x0 && y1 > y0)) continue;
       for (const [cx, cy] of CORNERS) {
-        const u = cx * ext, v = cy * ext;
-        const px = it.screen[0] + u * a * ct - v * b * sn, py = it.screen[1] + u * a * sn + v * b * ct;   // the major axis along (cos, sin) in px, y down
+        const px = cx < 0 ? x0 : x1, py = cy < 0 ? y0 : y1;
+        const dx = px - it.screen[0], dy = py - it.screen[1];
+        const u = (dx * ct + dy * sn) / a, v = (-dx * sn + dy * ct) / b;   // inverse of px = c + u a (cos, sin) + v b (-sin, cos), y down
         data[k++] = px / W * 2 - 1; data[k++] = 1 - py / H * 2;
         data[k++] = u; data[k++] = v;
         data[k++] = it.rgb[0]; data[k++] = it.rgb[1]; data[k++] = it.rgb[2]; data[k++] = alpha;

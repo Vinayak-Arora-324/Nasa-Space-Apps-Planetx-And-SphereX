@@ -89,7 +89,7 @@ function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, child
  * goLabel: the button's text (default 'Go there'). goDisabled: a reason string; the button is shown disabled with it as its title.
  * children: the list of a star's planets (see addChildren), after the rows and before the notes.
  */
-export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children } = {}) {
+export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || 'Star'));
@@ -103,7 +103,9 @@ export function renderStarCard(host, model, { title, subtitle, distFromCameraTex
   row('Mass', m.massMsun, 'M☉', 2);
   row('Age', m.ageGyr, 'Gyr', 1);
   if (m.spectralType && m.spectralType.v) addRow(doc, dl, 'Spectral type', String(m.spectralType.v), m.spectralType.tier, m.spectralType.src, used);
-  row('Distance from Sun', m.distPc, 'pc', 2);
+  // distRows ([label, text, tier, src]): a curated distance (prefer_record) and its Gaia 'not used' row, in place of the catalogue's Distance row
+  if (distRows && distRows.length) distRows.forEach(([label, text, tier, src]) => addRow(doc, dl, label, text, tier, src || '', used));
+  else row('Distance from Sun', m.distPc, 'pc', 2);
   row('G', m.gMag, 'mag', 2);
   row('BP−RP', m.bpRp, 'mag', 2);
   if (distFromCameraText) addRow(doc, dl, 'From you', distFromCameraText, 'illustrative', 'distance from the camera right now', used);

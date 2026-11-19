@@ -378,7 +378,7 @@ function nebulaCard(o, ctx) {
   const rows = [], ty = prop(o, 'type');
   rows.push(['Type', (ty && ty.v) || 'Nebula', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (dirOnly) rows.push(['Distance', 'unknown · drawn on the sky as seen from the Sun', 'catalogue', 'no distance in the adopted catalogues']);
-  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc'), 'measured')); }
+  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc', (q.hi - q.lo) / q.v < 0.01 ? 4 : 3), 'measured')); }   // a tight interval gets 4 digits: R0 = 8,277 +- 9 pc is not 8,280
   if (hasV(ang.major)) {
     const sz = hasV(ang.minor) ? `${arcminText(ang.major, f)} × ${arcminText(ang.minor, f)}` : `${arcminText(ang.major, f)} across`;
     rows.push(['Angular size', `${sz}, ${hasV(ang.pa) ? `PA ${f(ang.pa.v)}°` : 'PA unknown'}`, ang.major.tier || 'catalogue', srcOf(ang.major)]);
@@ -414,7 +414,7 @@ function blackHoleCard(o, ctx) {
   rows.push(['Type', (ty && ty.v) || 'black hole', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (st) rows.push(['State', String(st.v), st.tier || 'catalogue', srcOf(st)]);
   rows.push(qtyRow('Mass', mass, (q) => valueWithRange(q, 'M☉'), 'measured'));
-  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc'), 'measured')); }
+  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => valueWithRange(q, 'pc', (q.hi - q.lo) / q.v < 0.01 ? 4 : 3), 'measured')); }   // a tight interval gets 4 digits: R0 = 8,277 +- 9 pc is not 8,280
   else {
     const h = ctx.hostRecord && ctx.hostRecord.position && ctx.hostRecord.position.dist, hq = unitScaled(h, 'pc');
     const pcs = place && place.galPc ? Math.hypot(...place.galPc) : null;
@@ -553,7 +553,7 @@ registerKind({ kind: 'nebula', layer: 'nebulae', noun: ['nebula', 'nebulae'], fr
   arrivePc: (o) => 3 * (nebulaSemiMajorPc(o) || 0), color: (o) => NEBULA_RGB[nebulaLook(o)].slice(), markerPx: () => 4 });
 registerKind({ kind: 'black_hole', layer: 'blackHoles', noun: ['black hole', 'black holes'], hosted: true,
   frames: { system: (o) => (isHostedBh(o) ? 'lensing' : null), galaxy: (o) => (isHostedBh(o) ? 'marker' : 'lensing') }, galaxyScope: 'cone',
-  pick: { priority: 12, marker: 15 }, label: { key: () => 15, max: 12, hideOverDiscPx: null }, card: blackHoleCard, arriveAu: () => 0, arrivePc: () => 2,
+  pick: { priority: 12, marker: 15 }, label: { key: () => 15, max: 12, hideOverDiscPx: null }, card: blackHoleCard, arriveAu: () => 0, arrivePc: () => 2, go: 'fly-galaxy',
   color: () => [0.78, 0.72, 1.0], pointSize: () => 5, markerPx: () => 5 });
 // Stars stay columnar and are handled by scene3d.js; this entry gives them an id for dispatch, a priority and a noun.
 registerKind({ kind: 'star', layer: null, builtin: true, noun: ['star', 'stars'], frames: { system: 'point', galaxy: 'point' }, pick: { priority: 20 } });

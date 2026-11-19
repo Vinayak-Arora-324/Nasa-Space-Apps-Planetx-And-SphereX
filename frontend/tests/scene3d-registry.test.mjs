@@ -464,7 +464,7 @@ test('black hole card, fixed (Sgr A*): type, state, mass, distance, r_s inferred
   const c = R.kindSpec('black_hole').card(sgrRec(), ctx({ lensing: { enlarged: true, factor: 3e9, truePx: 3e-9 }, fromYou: '8,277 pc' }));
   assert.equal(c.title, 'Sagittarius A*'); assert.equal(c.subtitle, 'Black hole');
   assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (orbit-fit)', 'Event horizon (r_s)', 'From you', 'Look']);
-  assert.deepEqual(row(c, 'Mass').slice(1, 3), ['4,300,000 M☉ (4,290,000–4,310,000)', 'measured']); assert.deepEqual(row(c, 'Distance (orbit-fit)').slice(1, 3), ['8,280 pc (8,270–8,290)', 'measured']);
+  assert.deepEqual(row(c, 'Mass').slice(1, 3), ['4,300,000 M☉ (4,290,000–4,310,000)', 'measured']); assert.deepEqual(row(c, 'Distance (orbit-fit)').slice(1, 3), ['8,277 pc (8,268–8,286)', 'measured']);
   assert.deepEqual(row(c, 'Event horizon (r_s)').slice(1, 3), ['12,700,000 km', 'inferred']); assert.match(row(c, 'Event horizon (r_s)')[3], /Schwarzschild/);
   assert.match(row(c, 'Look')[1], /accretion disc/); assert.equal(row(c, 'Look')[2], 'illustrative');
   assert.deepEqual(c.notes, ['Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.', 'The disc and ring are illustrative.']);
@@ -516,4 +516,11 @@ test('the star card for a prefer_record star: the curated distance with its pape
   assert.equal(R.evidenceRows(c.rows, true).length, 2, 'measured rows stay in the Evidence view');
   assert.equal(R.preferredDistanceRows({ ...rec, prefer_record: undefined }), null);
   assert.equal(R.preferredDistanceRows({ ...rec, props: {} }).rows[1][1], 'not used', 'no parallax on the record: the row still says it is not used');
+});
+
+test('a fixed black hole is reached by a galaxy-frame trip (go fly-galaxy, stop at arrivePc), and a tight distance interval keeps four digits', () => {
+  const spec = R.kindSpec('black_hole');
+  assert.equal(spec.go, 'fly-galaxy'); assert.equal(spec.arrivePc(sgrRec()), 2);
+  const wide = sgrRec(); wide.position.dist = { v: 787.7, lo: 761.4, hi: 815.8, unit: 'pc', src: 'x', tier: 'measured' };
+  assert.equal(row(spec.card(wide, ctx()), 'Distance (orbit-fit)')[1], '788 pc (761–816)');   // a wide interval: three digits as before
 });

@@ -459,6 +459,60 @@ void main(){
   o = vec4(c, 1.0);
 }`;
 
+// Black-hole lensing look (section 17.9, illustrative): one screen-space quad per black hole, radius 4 x its drawn shadow radius, drawn after the stars
+// with premultiplied "over" blending (blendFunc(ONE, ONE_MINUS_SRC_ALPHA)). v_uv is the position in units of the shadow radius, so rho = length(v_uv):
+// a black disc at rho < 1 (alpha 1: it hides the stars behind it), a thin photon ring at rho ~ 1, a soft halo out to ~2.5 and, for an accreting black
+// hole, an inclined annulus from rho 1.5 to 4, brighter on one side (Doppler beaming). The back half of the disc is hidden by the shadow, the front half is not.
+// a_p: x = disc (0 or 1), y = cos(inclination), z = the disc's position angle on screen (arbitrary but stable, seeded from the id), w = unused.
+export const LENS_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec2 a_uv;
+layout(location=2) in vec4 a_p;
+out vec2 v_uv;
+out vec4 v_p;
+void main(){
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+  v_uv = a_uv; v_p = a_p;
+}`;
+export const LENS_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec4 v_p;
+out vec4 o;
+${TONE_GLSL}
+void main(){
+  float rho = length(v_uv);
+  if (rho > 4.0) discard;
+  float w = max(fwidth(rho), 1e-4);
+  float shadow = 1.0 - smoothstep(1.0 - w, 1.0 + w, rho);
+  float ring = exp(-pow((rho - 1.035)/0.05, 2.0));
+  float halo = 0.30*exp(-(rho - 1.0)*2.4) * (1.0 - smoothstep(1.6, 2.5, rho)) * step(1.0, rho + w);
+  vec3 c = ring*vec3(1.45, 1.15, 0.80) + halo*vec3(0.95, 0.62, 0.36);
+  if (v_p.x > 0.5) {
+    float ca = cos(v_p.z), sa = sin(v_p.z);
+    vec2 q = vec2(ca*v_uv.x + sa*v_uv.y, -sa*v_uv.x + ca*v_uv.y);     // the disc's frame: its line of nodes along x, the near side at y < 0
+    float cosI = max(v_p.y, 0.07);
+    float r = length(vec2(q.x, q.y/cosI));                            // radius in the disc's own plane
+    float band = smoothstep(1.5, 1.75, r) * (1.0 - smoothstep(3.0, 4.0, r));
+    float phi = atan(q.y/cosI, q.x);
+    float beam = pow(clamp(0.5 + 0.5*sin(phi + 1.2), 0.0, 1.0), 1.6);  // brighter on one side, still visible on the other
+    float temp = clamp((r - 1.5)/2.5, 0.0, 1.0);
+    vec3 hot = vec3(1.5, 1.1, 0.75), cool = vec3(0.85, 0.34, 0.12);
+    vec3 d = mix(hot, cool, temp) * (band * (0.12 + 1.05*beam) * (1.7/r));
+    float front = step(0.0, -q.y);
+    d *= max(front, step(1.0, rho));                                  // the shadow hides the back half
+    c += d;
+  }
+  vec3 col = c;
+  float a = shadow;
+  if (a < 0.002 && max(col.r, max(col.g, col.b)) < 1e-4) discard;
+#ifdef LDR
+  col = srgb(tonemap(col));
+#endif
+  o = vec4(col, a);
+}`;
+
 export const SPRITE_UNIFORMS_STAR = ['u_vp', 'u_eye', 'u_toPc', 'u_expo', 'u_limit', 'u_dpr', 'u_maxPt', 'u_sig', 'u_skip'];
 export const BODY_UNIFORMS = ['u_rect', 'u_tan', 'u_c', 'u_col', 'u_light', 'u_pole', 'u_v2w', 'u_kind', 'u_u', 'u_surf', 'u_glow', 'u_time',
   'u_evid', 'u_w', 'u_ext', 'u_pix', 'u_ring', 'u_band', 'u_atm', 'u_gran', 'u_gamp', 'u_spots', 'u_seed'];

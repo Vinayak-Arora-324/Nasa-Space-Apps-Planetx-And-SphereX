@@ -11,9 +11,9 @@ import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
-import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups } from './scene3d-registry.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
-  objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature, billboardItems, markerPoints, mergeStarSystem,
+  objectStarParams, starValuesFromRecord, resolveStarAliases, preferredStarPlacement, starSignature, billboardItems, lensingItems, markerPoints, mergeStarSystem,
   MW_FADE_PC, skyFade, fromYouFor, visibleCounts } from './scene3d-objects.js';
 import { orbitPath } from './scene3d-orbits.js';
 import { makeProgram, supportsHdr, HdrChain } from './scene3d-gl.js';
@@ -49,6 +49,7 @@ const BB_GLOW_K = 0.08, BB_GLOW_MAX = 0.16, BB_RING = 0.4;
 // Nebula glows (illustrative look): NEB_K x the exposure, capped, like the cluster glows; the Evidence outline is at a fixed level (BB_RING).
 // The dark pass multiplies its alpha by NEB_DARK (it only darkens the Milky Way glow behind it).
 const NEB_K = 0.45, NEB_MAX = 0.9, NEB_DARK = 1.6, NEB_QUAD = 1.3, NEB_PX_MAX = 2e5, LOOK_TURN_S = 0.8;
+const LENS_PX_MAX = 2e4;   // a drawn shadow is never wider than this (CSS px) however close the camera is
 const NEB_MODE = { emission: 0, reflection: 1, planetary: 2, snr: 3, dark: 4 };   // the nebula shader's a_mode (10 and 11: Evidence outline, solid and dashed)   // a grouped system's marker: warm white, a little larger
 // No Ctrl here: holding Ctrl while pressing W would close the tab.
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
@@ -151,11 +152,12 @@ export class Scene3D {
       sky: makeProgram(gl, S.SKY_VS, S.SKY_FS, ['u_tan', 'u_sky', 'u_v2w', 'u_k'], d),
       bb: makeProgram(gl, S.BB_VS, S.BB_FS, ['u_vp', 'u_k', 'u_dpr'], d),
       nebula: makeProgram(gl, S.NEBULA_VS, S.NEBULA_FS, ['u_k', 'u_dpr'], d),
+      lens: makeProgram(gl, S.LENS_VS, S.LENS_FS, [], d),
     };
     this.skyTex = null;
     if (this.mwImg) this._uploadSky();
     this.vaoEmpty = this.hdr ? this.hdr.vao : gl.createVertexArray();
-    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer(), nebula: gl.createBuffer() };
+    this.dynBuf = { stars: gl.createBuffer(), points: gl.createBuffer(), bb: gl.createBuffer(), nebula: gl.createBuffer(), lens: gl.createBuffer() };
     this.maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
     this.gpu = {};
   }
@@ -342,13 +344,21 @@ export class Scene3D {
       k++;
     }
     // Host stars from the objects payload that Gaia and the context stars lack. Their colour is an illustrative estimate from Teff.
-    const { append, alias } = resolveStarAliases(this.store.stars, (key) => keyIdx.has(key));
+    const { append, alias, prefer } = resolveStarAliases(this.store.stars, (key) => keyIdx.has(key));
     for (const rec of append) {
       const sp = objectStarParams(rec), o = 7 * k;
       pos.set(M.radecToXyz(sp.ra, sp.dec, sp.d), 3 * k); gal[o + 3] = sp.abs; gal.set(M.bpRpToRgb(sp.bp), o + 4);
       meta.push({ kind: 'obj', key: rec.id, id: rec.id, rec, name: rec.name || null, d: sp.d, abs: sp.abs, bp: sp.bp });
       keyIdx.set(rec.id, k);
       k++;
+    }
+    // prefer_record (section 17.8): a loaded star whose record carries a curated distance keeps its Gaia sky position and apparent G and takes the
+    // curated distance (and the absolute magnitude that goes with it). The Bailer-Jones distance stays as meta.gaiaPc for the card.
+    for (const [key, rec] of prefer) {
+      const i = keyIdx.get(key), pl = i === undefined ? null : preferredStarPlacement(rec, { xyz: [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]], abs: gal[7 * i + 3] });
+      if (!pl) continue;
+      pos.set(pl.pos, 3 * i); gal[7 * i + 3] = pl.abs;
+      Object.assign(meta[i], { abs: pl.abs, d: pl.d, gaiaPc: pl.gaiaPc, preferred: true });
     }
     const n = k;
     for (let i = 0; i < n; i++) { gal[7 * i] = pos[3 * i]; gal[7 * i + 1] = pos[3 * i + 1]; gal[7 * i + 2] = pos[3 * i + 2]; }
@@ -687,7 +697,7 @@ export class Scene3D {
     }
     const o = this.store.get(sel.id), pl = o && this.store.placement(sel.id), spec = o && kindSpec(o.kind);
     // a cluster (go 'fly-galaxy'): { type: 'galaxy', pc, stopPc (spec.arrivePc, 2 x r50), name }, a trip in galaxy parsecs
-    if (o && spec && spec.go === 'fly-galaxy' && pl && pl.galPc) return { type: 'galaxy', pc: pl.galPc, stopPc: spec.arrivePc(o), name: o.name, o };
+    if (o && spec && spec.go === 'fly-galaxy' && !o.host && pl && pl.galPc) return { type: 'galaxy', pc: pl.galPc, stopPc: spec.arrivePc(o), name: o.name, o };
     if (!o || !spec || !pl || !pl.sysAu) return null;
     return { type: 'object', host: this.store.resolveHost(o.host), pos: pl.sysAu, rAu: spec.arriveAu(o), name: o.name, o };   // host: the key the camera's frame carries
   }
@@ -1099,6 +1109,9 @@ export class Scene3D {
       dynStars.push(rel[0], rel[1], rel[2], this.st.gal[7 * c.idx + 3], col[0] * wPoint, col[1] * wPoint, col[2] * wPoint);
       if (s > 0 && !inside) bodies.push({ kind: 0, rel, dist: distAu, rAu, s, md, idx: c.idx, units: cam.frame === 'system' ? 1 : AU_PER_PC });
     });
+    const lens = lensingItems(vis, cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, project: this._pjAll });   // black holes: the lensing look (never in the Evidence view)
+    this._lens = new Map(lens.map((it) => [it.id, it]));
+    for (const it of lens) this.dyn.set(it.id, it.px);            // the pick reach and the selection ring follow the drawn size
     for (const e of vis) {
       if (e.renderer === 'sphere') {                              // a point that cross-fades into a ray-traced sphere
         const rAu = e.spec.arriveAu(e.o), relv = framePos(e, cam), dist = Math.hypot(relv[0], relv[1], relv[2]);
@@ -1118,7 +1131,9 @@ export class Scene3D {
     if (dynStars.length) this._drawDynStars(new Float32Array(dynStars));
     if (bufOk) this._drawPoints(this.gpu.points, cam.pos);
     if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
-    const marks = markerPoints(vis, groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
+    this._drawLensing(lens);                                      // after the stars, "over" blending: the black disc hides what is behind it
+    // a lensing entry keeps its marker only in the Evidence view; otherwise its look is the marker
+    const marks = markerPoints(this.evidence ? vis : vis.filter((e) => e.renderer !== 'lensing'), groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
     if (marks.length) this._drawDynPoints(marks);
     // spheres, far to near, premultiplied "over"
     bodies.sort((a, b) => b.dist - a.dist);
@@ -1227,6 +1242,41 @@ export class Scene3D {
     gl.uniform1f(pr.u.u_dpr, this.dpr);
     gl.drawArrays(gl.TRIANGLES, 0, k / 10);
     gl.disableVertexAttribArray(3);
+    gl.blendFunc(gl.ONE, gl.ONE);
+  }
+  /**
+   * Black-hole lensing looks (section 17.9, illustrative): per item a screen-aligned quad of half-size 4 x its drawn shadow radius, built here from the
+   * item's screen centre (the shader draws the disc, ring, halo and accretion disc). Premultiplied "over", so the black disc hides the stars behind it.
+   * The disc's position angle is arbitrary but stable (seeded from the id); its inclination is the record's i (60 degrees when unknown).
+   */
+  _drawLensing(items) {
+    const quads = items.filter((it) => it.screen && Math.abs(it.screen[0]) < 1e7 && Math.abs(it.screen[1]) < 1e7);
+    if (!quads.length) return;
+    const W = this.cssW, H = this.cssH, data = new Float32Array(quads.length * 6 * 8);
+    const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+    let k = 0, n = 0;
+    for (const it of quads) {
+      const R = 4 * Math.min(it.px, LENS_PX_MAX / 4), [sx, sy] = it.screen;
+      if (sx + R < 0 || sx - R > W || sy + R < 0 || sy - R > H) continue;
+      let h = 2166136261; for (const ch of String(it.id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+      const ang = ((h >>> 0) % 6283) / 1000;
+      for (const [cx, cy] of CORNERS) {
+        data[k++] = (sx + cx * R) / W * 2 - 1; data[k++] = 1 - (sy + cy * R) / H * 2;
+        data[k++] = 4 * cx; data[k++] = 4 * cy;
+        data[k++] = it.disc ? 1 : 0; data[k++] = Math.cos(it.incl * D2R); data[k++] = ang; data[k++] = 0;
+      }
+      n++;
+    }
+    if (!n) return;
+    const gl = this.gl, pr = this.prog.lens, st = 32;
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(pr.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf.lens);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, k), gl.STREAM_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, st, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, st, 8);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, st, 16);
+    gl.drawArrays(gl.TRIANGLES, 0, k / 8);
     gl.blendFunc(gl.ONE, gl.ONE);
   }
   _drawSky() {
@@ -1463,7 +1513,11 @@ export class Scene3D {
       const onGo = pinned ? () => this._go(sel) : undefined;
       const m = this.st.meta[sel.idx], md = this._modelFor(sel.idx), s = this._system(sel.idx), dSun = m.kind === 'sun' ? 0 : Math.hypot(...this._starPc(sel.idx));
       const sub = m.kind === 'sun' ? 'The Sun' : m.kind === 'ctx' ? 'Bright star (XHIP parallax)' : `${fmtNum(dSun)} pc · ${fmtNum(dSun * LY)} ly from the Sun`;
-      renderStarCard(this.card, md, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo,
+      // prefer_record (section 17.8): the curated distance (with its paper) replaces the Distance row, and the Gaia single-star value is listed as not used
+      const rec = m.kind === 'sun' ? null : this.store.starRecord(m.key), pv = s && s.payload && s.payload.values && s.payload.values.dist_pc;
+      const pref = rec ? preferredDistanceRows(rec, { bjPc: Number.isFinite(m.gaiaPc) ? m.gaiaPc : m.kind === 'obj' && pv && Number.isFinite(pv.v) ? pv.v : null }) : null;
+      const model = pref ? { ...md, notes: [...(md.notes || []), ...pref.notes] } : md;
+      renderStarCard(this.card, model, { title: this._starName(sel.idx), subtitle: sub, distFromCameraText: this.evidence ? null : this._fromYou(rel), onGo, distRows: pref ? pref.rows : null,
         children: this._childrenFor(m.key, pinned),
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
@@ -1487,7 +1541,7 @@ export class Scene3D {
     }
     const e = this._entry(sel.id);
     const c = e.spec.card(e.o, { fromYou: this.evidence ? null : fromYouFor(e, rel, (r) => this._fromYou(r)), evidence: this.evidence, fmtNum,
-      place: this.store.placement(e.id), hostName: e.host ? this.store.hostName(e.host) : null,
+      place: this.store.placement(e.id), lensing: this._lens && this._lens.get(e.id) || null, hostName: e.host ? this.store.hostName(e.host) : null,
       hostRecord: e.host ? this.store.starRecord(e.host) : null });
     renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled });
   }

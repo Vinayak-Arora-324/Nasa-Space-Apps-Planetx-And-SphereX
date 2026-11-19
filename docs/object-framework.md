@@ -1587,7 +1587,7 @@ mirrors answered. All seven black-hole companions were cross-checked there by th
 | Data licence | The OpenNGC-derived `nebulae` data files are **CC BY-SA 4.0**; the code stays MIT. A licence notice sits in both nebula dataset folders, the main `LICENSE` says which data files are CC BY-SA 4.0, and the credit is shown **in the app** (nebula cards and a credits line in the 3D view), not only in the manifest. The same applies to the Phase 3 galaxy files (§17.2). |
 | Black holes | `bh-curated`: a hand-curated, committed JSON source in which every number carries its paper and table location. Records: Sgr A*, Gaia BH1, BH2 and BH3, Cyg X-1, V404 Cyg, A0620-00, MAXI J1820+070 and GRS 1915+105, plus `star` records for the seven companions (§17.8). |
 | Hosted black holes | `black_hole` joins `HOSTED_KINDS`. Each BH with a Gaia companion is an `orbit` record hosted by the companion's `gdr3:` id. **Gaia BH1 and BH2 are `measured`**: their astrometric orbits give P, e, i, Ω, ω and T_p. **BH3 is `derived`**, because its relative semi-major axis is scaled from a₁. **The X-ray binaries are `illustrative`**: Ω is unknown, so they are hidden in the Evidence view but still counted on the host card, with no special case (a general rule for all hosted kinds is a follow-up, §17.15). |
-| Companion distances | A new optional star-record field, **`prefer_record: {replace: "dist", reason}`**, allowed **only on the seven curated companions, listed by id in the validator** (not a general override). When the star payload holds that star, its **distance only** comes from the record (orbit-corrected, VLBI or the cited parallax); its sky position and Gaia identity stay Gaia's. The single-star Gaia value is shown on the card as "not used", with the reason (§17.8). |
+| Companion distances | A new optional star-record field, **`prefer_record: {replace: ["dist", …], reason}`**, allowed **only on the seven curated companions, listed by id in the validator** (not a general override). When the star payload holds that star, its **distance** comes from the record (orbit-corrected, VLBI or the cited parallax), and since 2026-11-19 also the mass, radius and Teff its paper prints; its sky position and Gaia identity stay Gaia's. The single-star Gaia values are shown on the card as "not used", with the reason (§17.8). |
 | `lensing` style | A new renderer: a shadow disc, a photon ring and a soft lensed halo, plus an accretion disc for accreting systems. Its size comes from the real shadow radius (2.6 r_s, with r_s from the mass) when that exceeds a few pixels; otherwise it is drawn enlarged and the card says by how much. It is illustrative, and the Evidence view shows the marker only (§17.9). |
 | Sgr A*'s parent | `null` in Phase 2. `gal:milky_way` arrives with Phase 3 galaxies (§17.8). |
 | Layers | `nebulae` ("Nebulae") and `blackHoles` ("Black holes") in group `beyond`, default on, persisted in the existing map. **No sub-switches.** Planetary nebulae are small and drawn as markers anyway, and dark nebulae are two objects. |
@@ -1870,12 +1870,12 @@ All additive; the schema stays at version 1.
 2. **Direction-only guards** (`fixed`, `dist: null`): `host` must be null, `method` must be null, and `size.radius` must be null **unless its tier is `measured` or `catalogue`**. A radius at those tiers is an independent measurement of the object's own size; an inferred or illustrative one could only be made up without a distance. The design first said `size.radius` must always be null, but 19 of the 28 direction-only NEA host stars carry a catalogue stellar radius, so the rule was narrowed at implementation. `--check` on every existing dataset proves the narrowed rule holds.
 3. **Orbit tier floor:** an `orbit` position's `tier` may not be stronger than its weakest element tier (measured = catalogue > inferred > illustrative). BH3's inferred `a_au` therefore makes it `derived`. NEA orbits are all `illustrative` already.
 4. **`render.style`**, when present, must be in `RENDER_STYLES = ("lensing",)`, and `lensing` only on `black_hole`. It stays a hint, never data.
-5. **`prefer_record`** (star records, optional): exactly `{"replace": "dist", "reason": <non-empty string>}`. Allowed only
+5. **`prefer_record`** (star records, optional): exactly `{"replace": [<field>, ...], "reason": <non-empty string>}`. Allowed only
    - on `kind: star`;
    - on an id in **`PREFER_RECORD_IDS`**, a tuple in `objects.py` listing the seven companions of §17.8 explicitly. Any other id is rejected, so this cannot grow into a general override mechanism without a reviewed code change;
    - with a `dist` of tier `measured` or `catalogue`.
 
-   `replace` names the one thing replaced; nothing else (sky position, epoch, Gaia identity, photometry) may be.
+   `replace` lists exactly the fields replaced, from **`PREFER_RECORD_FIELDS = ("dist", "mass", "radius", "teff")`**, distinct and in that order, always including `"dist"`. Each named stellar parameter must be in the record (`props.mass`, `size.radius`, `props.teff`) with a `src`. Nothing else (sky position, epoch, Gaia identity, photometry) may be named. **Changed 2026-11-19:** `replace` was the string `"dist"`; it became a field list so the companions also take their papers' stellar parameters instead of Gaia's single-star ones (§17.18).
 6. **Props tiers.** No new rule. Each build test asserts its own: a nebula's `size.radius` is `inferred`, and a black hole's event-horizon `size.radius` is `inferred`, never `measured`.
 
 ### 17.8 Black holes: `bh-curated`
@@ -1935,9 +1935,10 @@ All additive; the schema stays at version 1.
   The name's src is "SIMBAD (simbad.cfa.harvard.edu mirror), 2026-11-18". GRS 1915+105 has no Gaia DR3 entry in SIMBAD either.
 - Position from the committed Gaia DR3 snapshot, epoch 2016.
 - `dist` as in the table above, `method: parallax`. **The distance of a system is stored once, on the companion.** The hosted black hole has no distance of its own and is placed from its host, so the two cannot differ (approval condition 3).
-- **`prefer_record: {"replace": "dist", "reason": …}`**, with a reason per star, e.g. "The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together". For A0620-00 the curated value is the inverse of the same Gaia DR3 parallax, as cited; the reason says that the star layer's Bailer-Jones distance adds a Galactic prior.
+- **`prefer_record: {"replace": ["dist", …], "reason": …}`**, with a reason per star, e.g. "The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together". For A0620-00 the curated value is the inverse of the same Gaia DR3 parallax, as cited; the reason says that the star layer's Bailer-Jones distance adds a Galactic prior.
 - **`props.gaia_parallax`**: the single-star Gaia DR3 parallax from the snapshot, `{v, lo, hi, unit: "mas", src: "Gaia DR3 single-star solution (RUWE r)", tier: "measured"}`. The card shows it, with its inverse in pc, as "not used".
 - `props`: `teff`, `radius`, `mass` and `spectral_type`/description as printed (e.g. BH1 5850 ± 50 K, 0.99 ± 0.05 R☉, 0.93 ± 0.05 M☉), and `gmag` from Gaia.
+- **`replace` lists `dist` plus each of `mass`, `radius`, `teff` the paper prints** (the curated file carries exactly those): Gaia BH1, BH2 and LS II +14 13 replace all four; HD 226868, V616 Mon and the MAXI J1820+070 companion `dist` and `mass`; V404 Cyg `dist` only. `build_objects_bh.py` derives the list from the curated file, and a test checks it against the file.
 - `render.mag` = G.
 
 **How `prefer_record` is applied (frontend).** A pure function, `preferredStarDistance(rec)`, returns
@@ -1945,6 +1946,7 @@ All additive; the schema stays at version 1.
 - When the star payload holds the star (`gdr3:<id>` is loaded), `_rebuildStars` keeps the Gaia row's sky position and apparent G and replaces only its distance (and the absolute magnitude derived from it) with the record's. The meta keeps the Gaia (Bailer-Jones) distance as `gaiaPc` for the card.
 - When the payload lacks the star (outside the star cone, or below the payload's parallax S/N cut, as for V404 Cyg and MAXI J1820+070), the record is appended as today, at the same position and distance.
 - **The star card** shows `Distance` = the curated value with its paper (its own tier), and a row **"Gaia single-star distance · not used"**: the parallax and its inverse (and the Bailer-Jones value when the payload has one), followed by the reason.
+- **Stellar parameters** (`mergeStarSystem`): each parameter in `replace` is the record's value whatever the tiers (the general rule keeps Gaia's on a tie), and Gaia's GSP-Phot/FLAME value is listed under it as **"Gaia single-star \<temperature | radius | mass\> · not used"**, with a note saying why. A Gaia value the paper does not replace (luminosity, age, spectral type, or Teff and radius for the X-ray binaries) stays, with the note "\<Params\>: Gaia single-star model; may be biased for this binary." The renderer draws the star (size, colour, surface) from the same star model as the card, so the picture and the card agree.
 - Hosted black holes resolve through the same key, so the black hole sits at its companion's curated distance in both cases.
 
 **Black hole `props`:**
@@ -2123,7 +2125,7 @@ The position src is "Reid & Brunthaler 2004, ApJ 616, 872 / 2020, ApJ 892, 39: J
 { "id": "gdr3:4373465352415301632", "kind": "star", "name": "Gaia BH1 companion",
   "designations": ["Gaia DR3 4373465352415301632", "GALEX J172841.0-003451", "2MASS J17284110-0034514"],
   "same_as": [], "host": null, "parent": null,
-  "prefer_record": { "replace": "dist", "reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together." },
+  "prefer_record": { "replace": ["dist", "mass", "radius", "teff"], "reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 fit the parallax and the orbit together." },
   "position": { "model": "fixed", "ra": 262.1712073, "dec": -0.581092, "epoch": 2016.0, "method": "parallax",
     "dist": { "v": 478.47, "lo": 473.93, "hi": 483.09, "unit": "pc", "src": "El-Badry et al. 2023, Table 1: parallax 2.09 ± 0.02 mas (orbit-corrected)", "tier": "measured" } },
   "size": { "radius": { "v": 0.99, "lo": 0.94, "hi": 1.04, "unit": "Rsun", "src": "El-Badry et al. 2023, Table 1", "tier": "catalogue" }, "angular": null },
@@ -2149,7 +2151,7 @@ These replace the hypothetical black-hole example in §10.
     - a direction-only record with a host, a method or a `size.radius`;
     - an orbit whose tier is stronger than an inferred element;
     - `render.style: 'lensing'` on a nebula, and an unknown style;
-    - `prefer_record` that is not exactly `{replace: "dist", reason}`, on an id not in `PREFER_RECORD_IDS`, on a non-star, or with an inferred distance.
+    - `prefer_record` that is not exactly `{replace: [fields], reason}` (a field outside `PREFER_RECORD_FIELDS`, no `dist`, a repeat, the wrong order, or a named field the record lacks), on an id not in `PREFER_RECORD_IDS`, on a non-star, or with an inferred distance.
   - A hosted `black_hole` orbit is accepted.
 - **`test_objects_static.py`**
   - A hosted `black_hole` is tiled by `host_radec`.
@@ -2288,7 +2290,7 @@ The open questions Q1–Q5 were answered as follows, and each condition is folde
 2. **X-ray binaries in the Evidence view: keep the rule.** Illustrative placements are hidden there and counted on the host card, with no special case. A general rule for all hosted kinds is a follow-up (§17.15).
 3. **`prefer_record`: yes, with conditions** (§17.7 item 5, §17.8):
    - only the seven curated companions, listed explicitly, not a general override mechanism;
-   - it replaces the distance only, never the sky position or the Gaia identity;
+   - it replaces the distance only, never the sky position or the Gaia identity (amended 2026-11-19: also the mass, radius and Teff a star's paper prints, never the sky position or the Gaia identity; §17.7 item 5, §17.18);
    - the star card shows the curated distance and its paper, and lists the Gaia single-star value as "not used", with the reason;
    - the black hole and its companion use the same distance;
    - tests cover BH2 (≈ 1.16 kpc, not ≈ 1.5).
@@ -2331,7 +2333,15 @@ The open questions Q1–Q5 were answered as follows, and each condition is folde
   - BH3's position tier is `inferred`;
   - `src` strings are the long "cite (arXiv), where" form.
 
-**Open points found in the browser checks:**
-- **Stellar parameters of the companions.** A loaded Gaia companion's star card shows Gaia FLAME's single-star values where they exist. For BH2 that is a flagged FLAME mass of 2.60 M☉, while the black-hole card quotes El-Badry et al. 2023's 1.07 M☉. The existing merge rule keeps Gaia's value on a tier tie, and `prefer_record` replaces only the distance (approval condition 3). Whether the papers' values should win for these seven stars is a decision for the owner.
-- **Credits line.** It can overlap the nav buttons on narrow screens (not checked on mobile).
-- **Card rounding.** Cards round to 3 significant digits except narrow distance intervals, so Sgr A*'s mass shows as 4,300,000 M☉.
+**Open points found in the browser checks:** none left.
+
+**Resolved (2026-11-19):**
+- **Stellar parameters of the companions.** `prefer_record.replace` is now a field list (§17.7 item 5); the seven companions take the mass, radius and Teff their papers print, and Gaia's single-star values are listed as not used (BH2: 1.07 ± 0.19 M☉ shown, FLAME's 2.60 not used) (§17.8).
+- **Credits line.** The hint, the credits line and the nav are stacked in one bottom dock, so the CC BY-SA credit sits above the nav however it wraps; checked at 375, 768 and 1280 px.
+- **Card rounding.** Every card uses one formatter (`scene3d-format.js`, rule below); Sgr A*'s mass reads 4.297 ± 0.012 × 10⁶ M☉.
+
+**Card numbers** (`frontend/js/blink/scene3d-format.js`, `fmtQuantity`; the star card's `fmtValue` and every registry card use it, with no per-kind cases):
+- **With an uncertainty** (finite `lo ≤ v ≤ hi`, not all equal): the larger of the two errors is rounded by the Particle Data Group rule (first three digits 100–354 keep 2 significant figures, 355–949 keep 1, 950–999 round up to 1000 and keep 2), and the other error and the value are rounded to the same decimal place. Equal errors read `8.94 ± 0.34 M☉`, unequal ones `2,220 +180/−170 pc`. The larger error sets the precision so an asymmetric interval never claims more digits than its wider side supports. A nonzero error never rounds to 0.
+- **Scientific notation** for such values when **|v| ≥ 10⁵ or 0 < |v| < 10⁻³**: `4.297 ± 0.012 × 10⁶ M☉`.
+- **Without an uncertainty:** unchanged, 3 significant figures (`12,700,000 km`).
+- An interval that does not bracket its value is shown as before (`v unit (lo–hi)`). A string bound such as `"< 0.12"` passes through untouched.

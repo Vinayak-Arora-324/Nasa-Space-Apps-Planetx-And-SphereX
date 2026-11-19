@@ -1,0 +1,158 @@
+{
+  "dataset": "galaxies",
+  "files": [
+    {
+      "bytes": 3876288,
+      "citation": "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC",
+      "commit": "36cb178a0f69dba8bfc03a99c10512831edf1c6b",
+      "file": "openngc-36cb178a-NGC.csv.gz",
+      "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
+      "mirror": "raw.githubusercontent.com",
+      "release": "v20260501",
+      "retrieved": "2026-11-19",
+      "role": "openngc",
+      "rows": 13969,
+      "sha256": "840fe0c9ee1332e551b2e722a0e92726cd7b157914a3d2177602832aadd3aa9e",
+      "source": "OpenNGC",
+      "url": "https://raw.githubusercontent.com/mattiaverga/OpenNGC/36cb178a0f69dba8bfc03a99c10512831edf1c6b/database_files/NGC.csv"
+    },
+    {
+      "bytes": 17484,
+      "citation": "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC",
+      "commit": "36cb178a0f69dba8bfc03a99c10512831edf1c6b",
+      "file": "openngc-36cb178a-addendum.csv.gz",
+      "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
+      "mirror": "raw.githubusercontent.com",
+      "release": "v20260501",
+      "retrieved": "2026-11-19",
+      "role": "openngc-addendum",
+      "rows": 64,
+      "sha256": "1d8f0914e643ada325a5a94d88d8fefad6a4937a2f77cc34f21483af22b11983",
+      "source": "OpenNGC",
+      "url": "https://raw.githubusercontent.com/mattiaverga/OpenNGC/36cb178a0f69dba8bfc03a99c10512831edf1c6b/database_files/addendum.csv"
+    },
+    {
+      "bytes": 238501,
+      "citation": "Karachentsev I. D., Makarov D. I., Kaisina E. I., 2013, AJ 145, 101: Updated Nearby Galaxy Catalog (arXiv:1303.5328), doi:10.26093/cds/vizier.51450101, VizieR J/AJ/145/101",
+      "file": "ungc-catalog.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-19",
+      "role": "ungc",
+      "rows": 869,
+      "sha256": "877b0d658b6e4c49bc53fdf650be668011010d6fa87dc490ec00aee7946eda9d",
+      "source": "VizieR",
+      "table": "J/AJ/145/101/catalog",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FAJ%2F145%2F101%2Fcatalog&-out.all&-out.max=unlimited",
+      "vizier_id": "J/AJ/145/101"
+    },
+    {
+      "bytes": 8381936,
+      "citation": "Tully R. B., Courtois H. M., Sorce J. G., 2023, ApJ 944, 94: Cosmicflows-4 (arXiv:2209.11238), VizieR J/ApJ/944/94; Extragalactic Distance Database: Tully R. B. et al., 2009, AJ 138, 323",
+      "columns": [
+        "PGC",
+        "Vcmb",
+        "DM",
+        "e_DM",
+        "DMsnIa",
+        "e_DMsnIa",
+        "DMtf",
+        "e_DMtf",
+        "DMfp",
+        "e_DMfp",
+        "DMsbf",
+        "e_DMsbf",
+        "DMsnII",
+        "e_DMsnII",
+        "DMtrgb",
+        "e_DMtrgb",
+        "DMceph",
+        "e_DMceph",
+        "DMmas",
+        "e_DMmas",
+        "RAJ2000",
+        "DEJ2000"
+      ],
+      "file": "cf4-table2.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-19",
+      "role": "cf4-table2",
+      "rows": 55877,
+      "sha256": "d82aa6186bf8517404e5f3f45d028d22ce9e5d3ae1f6496a9d5b7302c70261d7",
+      "source": "VizieR",
+      "table": "J/ApJ/944/94/table2",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Ftable2&-out=PGC,Vcmb,DM,e_DM,DMsnIa,e_DMsnIa,DMtf,e_DMtf,DMfp,e_DMfp,DMsbf,e_DMsbf,DMsnII,e_DMsnII,DMtrgb,e_DMtrgb,DMceph,e_DMceph,DMmas,e_DMmas,RAJ2000,DEJ2000&-out.max=unlimited",
+      "vizier_id": "J/ApJ/944/94"
+    },
+    {
+      "bytes": 1446103,
+      "citation": "Tully R. B., Courtois H. M., Sorce J. G., 2023, ApJ 944, 94: Cosmicflows-4 (arXiv:2209.11238), VizieR J/ApJ/944/94; Extragalactic Distance Database: Tully R. B. et al., 2009, AJ 138, 323",
+      "columns": [
+        "1PGC",
+        "Ngal",
+        "DMzp",
+        "e_DMzp",
+        "Vh",
+        "V3k"
+      ],
+      "file": "cf4-groups.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-19",
+      "role": "cf4-groups",
+      "rows": 38053,
+      "sha256": "37d617fbf0d743c461a86b8c51efd433a3f6a9976535bb8d49047c54017a4d36",
+      "source": "VizieR",
+      "table": "J/ApJ/944/94/groups",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Fgroups&-out=1PGC,Ngal,DMzp,e_DMzp,Vh,V3k&-out.max=unlimited",
+      "vizier_id": "J/ApJ/944/94"
+    },
+    {
+      "bytes": 90051,
+      "citation": "McConnachie A. W., 2012, AJ 144, 4: The Observed Properties of Dwarf Galaxies in and around the Local Group (arXiv:1204.1562), VizieR J/AJ/144/4",
+      "file": "mcconnachie2012.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-19",
+      "role": "mcconnachie",
+      "rows": 102,
+      "sha256": "730b90243de3389b49c1f6742db692150952bb8914267603ed71db081033a4ed",
+      "source": "VizieR",
+      "table": "J/AJ/144/4/catalog",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FAJ%2F144%2F4%2Fcatalog&-out.all&-out.max=unlimited",
+      "vizier_id": "J/AJ/144/4"
+    },
+    {
+      "file": "ungc_ongc_overrides.json",
+      "kind": "committed",
+      "licence": "Space Maps curated; each number cites its paper",
+      "role": "curated:ungc_ongc_overrides.json"
+    },
+    {
+      "file": "galaxy_names.json",
+      "kind": "committed",
+      "licence": "Space Maps curated; each number cites its paper",
+      "role": "curated:galaxy_names.json"
+    },
+    {
+      "file": "milky_way.json",
+      "kind": "committed",
+      "licence": "Space Maps curated; each number cites its paper",
+      "role": "curated:milky_way.json"
+    },
+    {
+      "file": "local_group_curated.json",
+      "kind": "committed",
+      "licence": "Space Maps curated; each number cites its paper",
+      "role": "curated:local_group_curated.json"
+    },
+    {
+      "file": "clusters.json",
+      "kind": "committed",
+      "licence": "Space Maps curated; each number cites its paper",
+      "role": "curated:clusters.json"
+    }
+  ],
+  "note": "Pinned inputs of backend/scripts/build_objects_galaxies.py. Regenerate with --refresh. `sha256` is of the uncompressed committed bytes: OpenNGC exactly as published at the pinned commit; VizieR tables without their # comment lines and empty lines (the lines carry the request date). The hand-written files are committed, not downloaded; their sha256 is in manifest.build.report."
+}

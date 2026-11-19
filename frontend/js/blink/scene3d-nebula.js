@@ -6,7 +6,16 @@
 //   MW_FADE_PC = 800                 the Milky Way glow's fade distance (pc) and the one shared constant for direction-only objects;
 //                                    SKY_FADE_PC is the same number. scene3d.js imports it from scene3d-objects.js
 //   SKY_PICK_MIN = 0.25              below this skyFade a direction-only object is neither labelled nor picked
-//   skyFade(cam) -> 0..1             1 / (1 + (dSun_pc / SKY_FADE_PC)^2), dSun the camera's distance from the Sun
+//   skyFade(cam, scalePc = SKY_FADE_PC) -> 0..1   1 / (1 + (dSun_pc / scalePc)^2), dSun the camera's distance from the Sun. Phase 3 (section 18.5.4):
+//                                    the fade scale is per kind (spec.skyFadePc: nebulae 800 pc as here, galaxies 1e5 pc); the default is unchanged
+//   projectAxes(center, [A, B, C], project) -> { semiMajorPx, semiMinorPx, angle, cov, inside, screen, ax: [a, b, c] }   Phase 3: the projected-ellipsoid
+//       core of nebulaItem and galaxyItem. center: camera-relative vector (frame units); A, B, C: the three semi-axis vectors (frame units; C may be
+//       null: a flat ellipse); project as for nebulaItem (null ONLY for points behind the camera). Each axis is projected through its two ends,
+//       a = (P(c + A) - P(c - A)) / 2, and the screen covariance is S = a a^T + b b^T + c c^T.
+//         ax          [a, b, c] the screen images of the axes ([x, y] px, y DOWN; c is [0, 0] when C is null)
+//         cov         { xx, xy, yy } of S;  semiMajorPx, semiMinorPx: sqrt of its eigenvalues;  angle: the major axis' atan2(y, x), in (-pi/2, pi/2]
+//         screen      project(center);  inside: the centre or an axis end cannot be projected (the camera is within the ellipsoid, or it is behind
+//                     the camera): then semiMajorPx, semiMinorPx, angle and cov are null and ax is null
 //   infinityPickable(fade) -> bool   fade >= SKY_PICK_MIN
 //   relOfEntry(entry, cam) -> [x, y, z] | null   camera-relative position of a galaxy-frame entry in frame units. An entry with atInfinity
 //                                    gives dir * INF_PC * unitsPerPc(cam): the same for every camera position
@@ -50,9 +59,9 @@ export const SKY_PICK_MIN = 0.25;
 export const NEBULA_MIN_PX = 3;   // a semi-major axis under this is a marker only
 const D2R = Math.PI / 180;
 
-export function skyFade(cam) {
+export function skyFade(cam, scalePc = SKY_FADE_PC) {
   const w = F.worldPc(cam), d = Math.hypot(w[0], w[1], w[2]);
-  return 1 / (1 + (d / SKY_FADE_PC) ** 2);
+  return 1 / (1 + (d / scalePc) ** 2);
 }
 export const infinityPickable = (fade) => fade >= SKY_PICK_MIN;
 
@@ -77,6 +86,25 @@ export function nebulaBase(o, aArcmin, bArcmin) {
   }
   const br = pr.sh2_bright && pr.sh2_bright.v;
   return SH2_BRIGHT[typeof br === 'string' ? br.toLowerCase() : br] ?? 0.1;
+}
+
+/** The projected ellipsoid (see the header): the covariance of the screen images of the axes and its ellipse. */
+export function projectAxes(center, axes, project) {
+  const [A, B, C = null] = axes, screen = project(center), ax = [];
+  let sxx = 0, sxy = 0, syy = 0, inside = !screen;
+  if (!inside) {
+    for (const v of [A, B, C]) {
+      if (!v) { ax.push([0, 0]); continue; }
+      const p1 = project(add(center, v)), p2 = project(add(center, v, -1));
+      if (!p1 || !p2) { inside = true; break; }
+      const x = (p1[0] - p2[0]) / 2, y = (p1[1] - p2[1]) / 2;
+      ax.push([x, y]); sxx += x * x; sxy += x * y; syy += y * y;
+    }
+  }
+  if (inside) return { semiMajorPx: null, semiMinorPx: null, angle: null, cov: null, inside: true, screen, ax: null };
+  const mean = (sxx + syy) / 2, R = Math.hypot((sxx - syy) / 2, sxy);
+  return { semiMajorPx: Math.sqrt(mean + R), semiMinorPx: Math.sqrt(Math.max(mean - R, 0)), angle: 0.5 * Math.atan2(2 * sxy, sxx - syy),
+    cov: { xx: sxx, xy: sxy, yy: syy }, inside: false, screen, ax };
 }
 
 export function nebulaItem(e, cam, ctx = {}) {
@@ -107,22 +135,13 @@ export function nebulaItem(e, cam, ctx = {}) {
   const Mh = [0, 1, 2].map((k) => cp * B0.N[k] + sp * B0.E[k]), mh = [0, 1, 2].map((k) => -sp * B0.N[k] + cp * B0.E[k]);
   const lenA = D * upc * Math.tan((majorAm * D2R / 60) / 2), lenB = D * upc * Math.tan((minor * D2R / 60) / 2);
   const axes = [Mh.map((x) => x * lenA), mh.map((x) => x * lenB)];
-  if (!atInf) axes.push(B0.u.map((x) => x * lenB));   // the depth axis: illustrative, as long as the minor semi-axis
-  let sxx = 0, sxy = 0, syy = 0, inside = false;
-  for (const v of axes) {
-    const p1 = project(add(rel, v)), p2 = project(add(rel, v, -1));
-    if (!p1 || !p2) { inside = true; break; }
-    const ax = (p1[0] - p2[0]) / 2, ay = (p1[1] - p2[1]) / 2;
-    sxx += ax * ax; sxy += ax * ay; syy += ay * ay;
-  }
-  const hasCentre = !!base.screen;
-  if (inside || !hasCentre) inside = true;
+  const pj = projectAxes(rel, atInf ? axes : [...axes, B0.u.map((x) => x * lenB)], project);   // the depth axis (last): illustrative, as long as the minor semi-axis
+  const inside = pj.inside;
   const dashed = evidence && (hollow || paUnknown);
   if (inside) {
     return { ...base, radiusUnits: lenA, alpha: 0, fade: 0, lineAlpha: 0, pxRadius: Infinity, semiMajorPx: null, semiMinorPx: null, angle: null, inside: true, markerOnly: false, dashed };
   }
-  const mean = (sxx + syy) / 2, R = Math.hypot((sxx - syy) / 2, sxy);
-  const semiMajorPx = Math.sqrt(mean + R), semiMinorPx = Math.sqrt(Math.max(mean - R, 0)), angle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const { semiMajorPx, semiMinorPx, angle } = pj;
   const fade = atInf ? 1 : smoothstep(1, 3, dist / lenA);
   const alpha = nebulaBase(o, majorAm / 2, minor / 2) * (atInf ? sFade : fade) * nearFade;
   const markerOnly = semiMajorPx < NEBULA_MIN_PX;

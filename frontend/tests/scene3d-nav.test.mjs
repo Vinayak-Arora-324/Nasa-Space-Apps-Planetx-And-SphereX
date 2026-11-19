@@ -136,3 +136,10 @@ test('corridorDistance: only stars on your path brake you', () => {
   assert.equal(corridorDistance(10, Math.hypot(10, 1)), Math.hypot(10, 1) * 50);   // 1 pc off the path: cruise cap only
   assert.equal(corridorDistance(-5, 5), 250);                             // behind you
 });
+
+test('suggestSpeed takes the level cap: the default keeps 100 pc/s, the galaxy and cosmos levels pass 1e8', () => {
+  assert.equal(suggestSpeed(1e9, 1), 100); assert.equal(suggestSpeed(1e9, 1, 100), 100);
+  assert.equal(suggestSpeed(3e6, 1, 1e8), 1e6); assert.equal(suggestSpeed(3e12, 1, 1e8), 1e8);
+  assert.equal(suggestSpeed(3e12, 1e-6, 1e8), 1e2);                          // cosmos units: 1e8 pc/s is 100 Mpc/s
+  assert.equal(suggestSpeed(NaN, 1, 1e8), 1e-9);
+});

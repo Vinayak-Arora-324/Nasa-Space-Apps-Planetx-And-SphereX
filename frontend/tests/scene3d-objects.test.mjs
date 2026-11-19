@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, markerPoints, markerSize, isHollowSize, mergeStarSystem, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature,
   skyFade, INF_PC, MW_FADE_PC, SKY_FADE_PC, nebulaItem, lensingItems, LENS_MIN_PX, fromYouFor, visibleCounts, creditItems, creditsLine, datasetCounts,
-  preferredStarDistance, preferredStarPlacement } from '../js/blink/scene3d-objects.js';
+  preferredStarDistance, preferredStarPlacement, galaxyFade, smbhVisible, withSmbh, starCreditItem, skyFadeOf } from '../js/blink/scene3d-objects.js';
+import { galacticAxes } from '../js/blink/scene3d-galaxy.js';
 import { preferredDistanceRows, beyondKinds } from '../js/blink/scene3d-registry.js';
 import { orbitPlacement, hashUnit } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
@@ -61,7 +62,7 @@ test('a schema major of 2 is refused and the store stays empty', () => {
 
 test('unknown kinds are counted and skipped; bad records and duplicates are skipped', () => {
   const s = new ObjectStore();
-  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'galaxy' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
+  const r = s.ingest(payload([earth, { ...mars, id: 'nea:x', kind: 'quasar' }, { ...mars, id: undefined }, { ...mars, position: undefined }, { ...mars, kind: undefined },
     { ...earth }, { id: 'gdr3:1', kind: 'star', name: 's', position: { model: 'fixed' } }, mars]));
   assert.deepEqual(r, { ok: true, unknownKinds: 1 });
   assert.deepEqual([...s.byId.keys()].sort(), ['ss:earth', 'ss:mars']); assert.equal(s.skipped, 4);   // star records are kept in store.stars, not skipped
@@ -932,7 +933,7 @@ test('credits line: only datasets that returned records in the cone and carry a 
 });
 
 test('HUD: the kinds of group beyond, and the direction-only count text', () => {
-  assert.deepEqual(beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole']);
+  assert.deepEqual(beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole', 'galaxy']);
   const kinds = beyondKinds(), counts = { nebula: 12, cluster: 1 }, direct = { nebula: 8 };
   assert.equal(countPhrase(['nebula'], counts, {}, direct), '12 nebulae (8 direction only)');
   assert.equal(countPhrase(['nebula'], counts, {}), '12 nebulae'); assert.equal(countPhrase(['cluster'], counts, {}, direct), '1 star cluster');
@@ -1029,4 +1030,190 @@ test('prefer_record stellar parameters: BH2\'s companion card shows the paper\'s
   assert.ok(notes.includes('Luminosity and age: Gaia single-star model; may be biased for this binary.'));
   assert.ok(notes.some((n) => /^The Gaia single-star temperature, radius and mass are not used/.test(n)));
   assert.ok(notes.some((n) => /^The Gaia single-star distance is not used: /.test(n)));
+});
+
+// ====================================================================== Phase 3: cosmos, galaxies, the Milky Way, supermassive black holes
+const gq = (v, unit, tier = 'catalogue') => ({ v, unit, src: 't', tier });
+const galRec = (id, ra, dec, distKpc, major, minor, pa, o = {}) => ({
+  id, kind: 'galaxy', name: id, designations: [], host: null, parent: null,
+  position: { model: 'fixed', ra, dec, epoch: 2000, method: 'cepheid', tier: 'catalogue', dist: distKpc == null ? null : { v: distKpc, unit: 'pc', src: 'Cosmicflows-4', tier: 'measured', ...(distKpc ? { v: distKpc * 1e3 } : {}) } },
+  in_cone: false, size: { radius: null, angular: { major: gq(major, 'arcmin'), minor: gq(minor, 'arcmin'), pa: pa == null ? null : gq(pa, 'deg') } },
+  props: { type: gq('Galaxy', ''), hubble: gq('SBm', ''), surface_brightness: gq(23.5, 'mag/arcsec2') }, provenance: { source: 'static:galaxies', dataset: 'galaxies' }, evidence: 'measured', render: { mag: 0.9 }, ...o,
+});
+const LMC = galRec('ongc:ESO056-115', 80.89375, -69.75611, 49.59, 646, 550, 170), SMC = galRec('ongc:NGC0292', 13.1865833, -72.8286111, 62.44, 299.92, 179.89, 45);
+const mwG = () => ({
+  id: 'gal:milky_way', kind: 'galaxy', name: 'Milky Way', designations: [], host: null, parent: null, in_cone: false, size: { radius: null, angular: null },
+  position: { model: 'fixed', ra: 266.4168371, dec: -29.0078106, epoch: 2000, method: 'orbit-fit', tier: 'measured', dist: { v: 8277, lo: 8268, hi: 8286, unit: 'pc', src: 'GRAVITY', tier: 'measured' } },
+  props: { ngp_ra: gq(192.85948, 'deg'), ngp_dec: gq(27.12825, 'deg'), l_node: gq(32.93192, 'deg'), thin_disc_scale_length: gq(2600, 'pc', 'measured'), thin_disc_scale_height: gq(300, 'pc', 'measured'),
+    bar_half_length: gq(5000, 'pc', 'measured'), bar_angle: gq(27, 'deg', 'measured') },
+  provenance: { source: 'static:galaxies', dataset: 'galaxies' }, evidence: 'measured', render: { style: 'milky_way' },
+});
+const smbh = (id, parent, o = {}) => ({ ...sgr(), id, name: id, parent, in_cone: false, props: { ...sgr().props, type: { v: 'supermassive', src: 't', tier: 'catalogue' } }, ...o });
+const cosmosCtx = (o = {}) => gctx({ frame: 'cosmos', ...o });
+const camAtPc = (pc, frame) => F.makeCam({ pos: frame === 'cosmos' ? pc.map((v) => v * 1e-6) : pc.slice(), frame });
+const lookAt = (cam, target) => {   // a pinhole camera at cam looking at a world point (pc)
+  const w = F.worldPc(cam), f = unit(target.map((v, i) => v - w[i])), up0 = Math.abs(f[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1];
+  const R = unit(crossv(f, up0)), up = crossv(R, f);
+  return pinhole(f, up, 1000);
+};
+
+test('galaxyFade: 1 to 20 kpc, 0.5 at 30, 0 from 40 kpc, in either frame', () => {
+  const g = (pc, fr) => galaxyFade(camAtPc([pc, 0, 0], fr));
+  assert.deepEqual([0, 2e4, 4e4, 6e4].map((p) => g(p)), [1, 1, 0, 0]); assert.ok(Math.abs(g(3e4) - 0.5) < 1e-12); assert.ok(Math.abs(g(3e4, 'cosmos') - 0.5) < 1e-12);
+});
+
+test('cosmos frame: only kinds with a cosmos renderer; sky scope draws every record sent; the others fade with galaxyFade in the galaxy frame', () => {
+  const nb = neb('ongc:NGC1976'), pl = rec('ss:mars', 'planet', 'Mars', [1.2, -0.5, -0.27], { in_cone: true });
+  const s = store([earth, pl, nb, LMC, mwG(), smbh('bh:Sgr A*', 'gal:milky_way'), smbh('bh:M87*', 'ongc:NGC4486')]);
+  const co = visibleObjects(s, cosmosCtx());
+  assert.deepEqual(ids(co), ['bh:M87*', 'bh:Sgr A*', 'gal:milky_way', 'ongc:ESO056-115']);   // galaxies in the cosmos, SMBHs from a sky tile whatever the cone
+  assert.equal(co.every((e) => e.galaxyFade == null && e.mwFade == null), true);
+  const cam = camAtPc([2e4 + 1e4, 0, 0]);   // 30 kpc: galaxyFade 0.5
+  const ga = visibleObjects(s, gctx({ cam })), by = Object.fromEntries(ga.map((e) => [e.id, e]));
+  assert.equal(by['ongc:NGC1976'].galaxyFade, 0.5); assert.equal(by['ss:mars'].galaxyFade, 0.5); assert.equal(by['ongc:ESO056-115'].galaxyFade, undefined);
+  assert.equal(by['gal:milky_way'].mwFade, 0.5); assert.equal(by['bh:Sgr A*'].galaxyFade, undefined, 'a supermassive black hole has a cosmos renderer');
+  assert.equal(visibleObjects(s, gctx()).find((e) => e.id === 'ss:mars').galaxyFade, undefined, 'without cam or galaxyFade nothing is set');
+  assert.equal(visibleObjects(s, gctx({ galaxyFade: 0.1 })).find((e) => e.id === 'ss:mars').galaxyFade, 0.1);
+  // a stellar-mass black hole has no cosmos renderer (cone scope still applies in the galaxy frame)
+  assert.deepEqual(visibleObjects(store([bh('bh:gaia2')]), cosmosCtx()), []);
+});
+
+test('populations without a cosmos renderer: alpha x galaxyFade on billboards, markers and labels; not labelled or picked below 0.25', () => {
+  const nb = neb('ongc:NGC1976', {}, {}, {}), s = store([earth, nb, LMC]);
+  const cam = camAtPc([2e4 + 1e4, 0, 0]), vis = visibleObjects(s, gctx({ cam })), proj = (rel) => [100 + rel[0] * 1e-9, 100 + rel[1] * 1e-9];
+  const items = billboardItems(vis, cam, { pxPerRad: 1000, project: lookAt(cam, [0, 0, 0]) });
+  const full = billboardItems(visibleObjects(s, gctx()), cam, { pxPerRad: 1000, project: lookAt(cam, [0, 0, 0]) });
+  const a = items.find((i) => i.id === 'ongc:NGC1976'), b = full.find((i) => i.id === 'ongc:NGC1976');
+  assert.ok(Math.abs(a.alpha - b.alpha * 0.5) < 1e-12); assert.ok(Math.abs(a.lineAlpha - b.lineAlpha * 0.5) < 1e-12); assert.ok(Math.abs(a.markerAlpha - 0.5 * (b.markerAlpha ?? 1)) < 1e-12);
+  assert.equal(items.find((i) => i.id === 'ongc:ESO056-115').alpha, full.find((i) => i.id === 'ongc:ESO056-115').alpha, 'a galaxy is unaffected');
+  const pos = (e) => framePos(e, sunCam);
+  assert.equal(labelCandidates(vis, {}, { project: proj, framePos: pos }).find((l) => l.text === 'ongc:NGC1976').alpha, 0.5);
+  const low = visibleObjects(s, gctx({ galaxyFade: 0.2 }));
+  assert.ok(!labelCandidates(low, {}, { project: proj, framePos: pos }).some((l) => l.text === 'ongc:NGC1976'));
+  assert.equal(pickObjects(low, {}, 100, 100, 1e9, { project: proj, framePos: pos }).sel.id, 'ongc:ESO056-115', 'the nebula is not pickable');
+  assert.equal(pickObjects(visibleObjects(s, gctx({ galaxyFade: 0.3 })), {}, 100, 100, 1e9, { project: proj, framePos: pos }) !== null, true);
+  const mk = markerPoints(visibleObjects(store([earth, rec('ss:mars', 'planet', 'Mars', [1.2, -0.5, -0.27], { in_cone: true })]), gctx({ galaxyFade: 0.4 })), {}, sunCam);
+  assert.ok(Math.abs(mk[4] - 0.4) < 1e-6); assert.equal(markerPoints(visibleObjects(store([earth, mars]), gctx({ galaxyFade: 0 })), {}, sunCam).length, 0);
+});
+
+test('per-kind skyFade: galaxies fade over 1e5 pc, nebulae over 800; pick and label gates follow the kind', () => {
+  assert.equal(skyFade(F.makeCam({ pos: [1e5, 0, 0] }), 1e5), 0.5); assert.equal(skyFade(F.makeCam({ pos: [800, 0, 0] })), 0.5);
+  const dg = galRec('ongc:IC47', 10.7, -13.7, null, 5, 4, 10), dn = dirNeb('ongc:NGC1952'), vis = visibleObjects(store([dg, dn]), gctx());
+  const cam = camAtPc([1500, 0, 0]), of = skyFadeOf(cam), by = Object.fromEntries(vis.map((e) => [e.id, e]));
+  assert.ok(of(by['ongc:NGC1952']) < 0.25); assert.ok(of(by['ongc:IC47']) > 0.99);
+  const proj = () => [100, 100], pos = (e) => framePos(e, cam);
+  assert.deepEqual(labelCandidates(vis, {}, { project: proj, framePos: pos, skyFade: of }).map((l) => l.text), ['ongc:IC47']);
+  assert.equal(pickObjects(vis, {}, 100, 100, 5, { project: proj, framePos: pos, skyFade: of }).sel.id, 'ongc:IC47');
+  const far = camAtPc([1.8e5, 0, 0]), sf = skyFade(far, 1e5);
+  assert.ok(sf < 0.25 && sf > 0.2); assert.equal(pickObjects(vis.filter((e) => e.id === 'ongc:IC47'), {}, 100, 100, 5, { project: proj, framePos: pos, skyFade: skyFadeOf(far) }), null);
+  assert.equal(by['ongc:IC47'].spec.skyFadePc, 1e5); assert.equal(by['ongc:NGC1952'].spec.skyFadePc, 800);
+});
+
+test('the boundary (section 18.5.5): a path through the LMC and SMC across 40-60 kpc gives identical items, screen positions, alphas, labels and picks in both frames', () => {
+  const nb = neb('ongc:NGC1976'), s = store([earth, nb, LMC, SMC, galRec('ongc:IC47', 10.7, -13.7, null, 5, 4, 10), mwG()]);
+  const lmcPc = M.radecToXyz(80.89375, -69.75611, 49590), smcPc = M.radecToXyz(13.1865833, -72.8286111, 62440);
+  const path = [];
+  for (const k of [0, 0.25, 0.5, 0.75, 1]) {   // toward the LMC across the band, on to the SMC, and back
+    path.push(lmcPc.map((v, i) => v * (0.6 + 0.4 * k) + 3000 * (1 - k) * [0.3, -0.5, 0.2][i]));
+    path.push(smcPc.map((v, i) => v * (0.8 + 0.2 * k) + 4000 * k * [0.2, 0.1, -0.4][i]));
+  }
+  path.push(...path.slice().reverse());
+  let compared = 0;
+  for (const w of path) {
+    const target = lmcPc.map((v, i) => (v + smcPc[i]) / 2), cams = [camAtPc(w, 'galaxy'), camAtPc(w, 'cosmos')];
+    const out = cams.map((cam) => {
+      const proj = lookAt(cam, target), vis = visibleObjects(s, { ...(cam.frame === 'cosmos' ? cosmosCtx() : gctx()), cam });
+      const items = billboardItems(vis, cam, { pxPerRad: 1000, project: proj }).filter((i) => i.kind === 'galaxy');
+      const sky = skyFade(cam, 1e5), pos = (e) => framePos(e, cam);
+      const gv = vis.filter((e) => e.kind === 'galaxy');
+      return { items, labels: labelCandidates(gv, {}, { project: proj, framePos: pos, skyFade: sky }), pick: pickObjects(gv, {}, 500, 500, 1e9, { project: proj, framePos: pos, skyFade: sky }),
+        popGone: vis.filter((e) => e.kind === 'nebula').map((e) => e.galaxyFade) };
+    });
+    const [g, c] = out; compared++;
+    assert.deepEqual(g.items.map((i) => i.id), c.items.map((i) => i.id)); assert.ok(g.items.length >= 3);
+    for (let k = 0; k < g.items.length; k++) {
+      const a = g.items[k], b = c.items[k];
+      for (const key of ['alpha', 'fade', 'lineAlpha', 'markerAlpha', 'skyFade', 'semiMajorPx', 'semiMinorPx', 'angle', 'markerOnly', 'inside', 'look', 'dashed', 'hollow']) {
+        if (typeof a[key] === 'number') assert.ok(Math.abs(a[key] - b[key]) < 1e-6 * Math.max(1, Math.abs(a[key])), `${a.id} ${key} ${a[key]} ${b[key]}`); else assert.equal(a[key], b[key], `${a.id} ${key}`);
+      }
+      if (a.screen) for (let j = 0; j < 2; j++) assert.ok(Math.abs(a.screen[j] - b.screen[j]) < 1e-6, `${a.id} screen`);
+      if (a.affine) for (const m of ['a', 'b', 'c']) for (let j = 0; j < 2; j++) assert.ok(Math.abs(a.affine[m][j] - b.affine[m][j]) < 1e-6, `${a.id} affine`);
+    }
+    assert.deepEqual(g.labels.map((l) => [l.text, l.alpha]), c.labels.map((l) => [l.text, l.alpha]));
+    g.labels.forEach((l, k) => { assert.ok(Math.abs(l.x - c.labels[k].x) < 1e-6 && Math.abs(l.y - c.labels[k].y) < 1e-6); });
+    assert.deepEqual(g.pick && g.pick.sel, c.pick && c.pick.sel);
+    assert.ok(g.pick === null || Math.abs(g.pick.d - c.pick.d) < 1e-6);
+    assert.deepEqual(g.popGone.every((v) => v === 0 || v < 1), true);
+  }
+  assert.equal(compared, path.length);
+  // the LMC (disc radius about 4.7 kpc) lies wholly inside the 40-60 kpc band, so a camera by it can be in either frame
+  const lmcD = Math.hypot(...lmcPc); assert.ok(lmcD > 4e4 && lmcD < 6e4);
+});
+
+test('smbhVisible: in the cone, selected, a resolved parent (inside or 40 px), the Milky Way only from 40 kpc out', () => {
+  const m87 = smbh('bh:M87*', 'ongc:NGC4486'), e = { id: m87.id, kind: 'black_hole', o: m87 };
+  assert.equal(smbhVisible(e, []), false);
+  assert.equal(smbhVisible(e, [], { selectedId: 'bh:M87*' }), true); assert.equal(smbhVisible(e, [], { inCone: true }), true);
+  assert.equal(smbhVisible({ ...e, o: { ...m87, in_cone: true } }, []), true, 'in_cone on the record');
+  assert.equal(smbhVisible(e, [{ id: 'ongc:NGC4486', semiMajorPx: 39, inside: false }]), false);
+  assert.equal(smbhVisible(e, [{ id: 'ongc:NGC4486', semiMajorPx: 40, inside: false }]), true);
+  assert.equal(smbhVisible(e, [{ id: 'ongc:NGC4486', semiMajorPx: null, inside: true }]), true);
+  assert.equal(smbhVisible(e, [{ id: 'ongc:other', semiMajorPx: 900 }]), false, 'another galaxy does not count');
+  const sg = smbh('bh:Sgr A*', 'gal:milky_way'), se = { id: sg.id, kind: 'black_hole', o: sg };
+  assert.equal(smbhVisible(se, [{ id: 'gal:milky_way', billboard: 'milky_way', semiMajorPx: 900, galaxyFade: 1 }]), false, 'near the Sun: the Phase 2 cone rule');
+  assert.equal(smbhVisible(se, [{ id: 'gal:milky_way', billboard: 'milky_way', semiMajorPx: 900, galaxyFade: 0 }]), true);
+  assert.equal(smbhVisible(se, [], { inCone: true }), true);
+  assert.equal(smbhVisible({ id: 'x', kind: 'galaxy', o: LMC }, []), true); assert.equal(smbhVisible({ id: 'b', kind: 'black_hole', o: bh('b') }, []), true, 'stellar-mass ones are not governed by it');
+  const s = store([smbh('bh:M87*', 'ongc:NGC4486'), LMC]), vis = visibleObjects(s, cosmosCtx());
+  assert.deepEqual(withSmbh(vis, [], {}).map((x) => x.id), ['ongc:ESO056-115']);
+});
+
+test('childrenOf works for record ids: a galaxy lists its black holes; star keys still work', () => {
+  const m87 = galRec('ongc:NGC4486', 187.7, 12.39, 16858, 8, 7, 0), b1 = smbh('bh:M87*', 'ongc:NGC4486'), s = store([m87, b1, smbh('bh:other', 'ongc:NGC0224')]);
+  assert.deepEqual(s.childrenOf('ongc:NGC4486').map((o) => o.id), ['bh:M87*']); assert.deepEqual(s.childrenOf('nope'), []);
+  const s2 = new ObjectStore(); s2.ingest(payload([m87, b1])); s2.setHostResolver({ key: (id) => (id === 'ongc:NGC4486' ? 'weird-key' : null), pc: () => null });
+  assert.deepEqual(s2.childrenOf('ongc:NGC4486').map((o) => o.id), ['bh:M87*'], 'by the raw parent too');
+});
+
+test('lensing at Mpc: the same item whichever frame, enlarged, M87* from the Sun about 1e-7 px', () => {
+  const m87 = smbh('bh:M87*', 'ongc:NGC4486', { position: { ...sgr().position, ra: 187.7059167, dec: 12.3911111, dist: { v: 16.858, unit: 'Mpc', src: 't', tier: 'measured' } },
+    size: { radius: { v: 1.926e10, unit: 'km', src: 't', tier: 'inferred' }, angular: null } });
+  const s = store([m87]), g = camAtPc([0, 0, 0], 'galaxy'), c = camAtPc([0, 0, 0], 'cosmos');
+  const a = lensingItems(visibleObjects(s, gctx()), g, { pxPerRad: 1000 })[0], b = lensingItems(visibleObjects(s, cosmosCtx()), c, { pxPerRad: 1000 })[0];
+  assert.equal(b.enlarged, true); assert.ok(b.truePx < 1e-6 && b.truePx > 1e-8, `${b.truePx}`);
+  assert.ok(Math.abs(a.truePx / b.truePx - 1) < 1e-9); assert.ok(Math.abs(a.factor / b.factor - 1) < 1e-9); assert.ok(Math.abs(a.rShadow * 1e-6 / b.rShadow - 1) < 1e-12);
+  assert.equal(b.alpha, 1); assert.equal(markerPoints(visibleObjects(s, cosmosCtx()), {}, c).length, 8);
+  assert.equal(lensingItems(visibleObjects(s, cosmosCtx()), c, { evidence: true, pxPerRad: 1000 }).length, 0);
+});
+
+test('billboardItems dispatches by billboard kind (a function of the record too) in the cosmos frame', () => {
+  const s = store([LMC, mwG()]), cam = camAtPc([0, 7e4, 0], 'cosmos'), vis = visibleObjects(s, cosmosCtx({ cam }));
+  const items = billboardItems(vis, cam, { pxPerRad: 1000, project: lookAt(cam, [0, 0, 0]) });
+  assert.deepEqual(items.map((i) => [i.id, i.billboard]).sort(), [['gal:milky_way', 'milky_way'], ['ongc:ESO056-115', 'galaxy']]);
+  assert.deepEqual(billboardItems(vis, camAtPc([0, 0, 0]).frame === 'galaxy' ? { ...cam, frame: 'system', host: { pc: [0, 0, 0], key: 'x' } } : cam, { project: () => [0, 0] }), []);
+});
+
+test('planGo: a placed galaxy flies to 3 radii, a direction-only one turns, the Milky Way flies to a face-on point 60 kpc up', () => {
+  const m31 = galRec('ongc:NGC0224', 10.68, 41.27, 757.5, 177.8, 69.7, 35, { size: { radius: { v: 19597, unit: 'pc', src: 't', tier: 'inferred' }, angular: null } });
+  const dg = galRec('ongc:IC47', 10.7, -13.7, null, 5, 4, 10), s = store([m31, dg, mwG()]), get = (id) => s.get(id), opts = { camFrame: 'galaxy', camHostKey: null, placement: (id) => s.placement(id), get };
+  assert.deepEqual(planGo({ kind: 'galaxy', id: 'ongc:NGC0224', host: null }, opts), { type: 'fly-galaxy', arrivePc: 3 * 19597 });
+  const e = visibleObjects(s, gctx()).find((x) => x.id === 'ongc:NGC0224'); assert.deepEqual(planGo(e, opts), { type: 'fly-galaxy', arrivePc: 3 * 19597 });
+  assert.deepEqual(planGo({ kind: 'galaxy', id: 'ongc:IC47', host: null }, opts), { type: 'look', dir: M.radecToXyz(10.7, -13.7, 1) });
+  assert.deepEqual(planGo(dg, { camFrame: 'galaxy', camHostKey: null }), { type: 'look', dir: M.radecToXyz(10.7, -13.7, 1) }, 'a bare record');
+  const p = planGo({ kind: 'galaxy', id: 'gal:milky_way', host: null }, opts), c = M.radecToXyz(266.4168371, -29.0078106, 8277), ax = galacticAxes(192.85948, 27.12825, 32.93192);
+  assert.equal(p.type, 'fly-point'); assert.ok(near(p.lookAtPc, c, 1e-6));
+  assert.ok(Math.abs(Math.hypot(...p.pc.map((v, i) => v - c[i])) - 60000) < 1e-6); assert.ok(near(unit(p.pc.map((v, i) => v - c[i])), ax.n, 1e-12));
+  assert.ok(Math.hypot(...p.pc) > 6e4, 'ends in cosmos');
+  assert.deepEqual(planGo(sgr(), { camFrame: 'galaxy', camHostKey: null }), { type: 'fly-galaxy' }, 'Sgr A* is unchanged');
+  assert.deepEqual(planGo({ kind: 'cluster', id: pleiades.id, host: pleiades.host }, { camFrame: 'galaxy', camHostKey: null, resolveHost: (h) => h }), { type: 'fly-galaxy' });
+});
+
+test('credits: the Gaia star item goes on the line, once, only when the star payload holds Gaia rows', () => {
+  assert.equal(starCreditItem(false), null);
+  const it = starCreditItem(true); assert.equal(it.text, 'Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
+  const src = [{ id: 'static:nebulae', status: 'ok', count: 3, provenance: { dataset: 'nebulae', credit: 'Credits: OpenNGC', licence_name: 'CC BY-SA 4.0' } }];
+  assert.equal(creditsLine(src, { nebulae: 3 }, [starCreditItem(true)]), 'Credits: OpenNGC · CC BY-SA 4.0 | Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
+  assert.equal(creditsLine(src, { nebulae: 3 }, [starCreditItem(false)]), 'Credits: OpenNGC · CC BY-SA 4.0');
+  assert.equal(creditsLine([], {}, [starCreditItem(true), starCreditItem(true)]), 'Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
+  assert.equal(creditsLine(src, { nebulae: 3 }), 'Credits: OpenNGC · CC BY-SA 4.0'); assert.equal(creditItems(src, { nebulae: 3 }, starCreditItem(true)).length, 2);
 });

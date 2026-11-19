@@ -114,6 +114,24 @@
 //   pickObjects / labelCandidates take an extra option skyFade (the value of skyFade(cam), default 1): direction-only entries are skipped
 //       below SKY_PICK_MIN (0.25) and a direction-only label item carries alpha = skyFade.
 //
+// PHASE 3 (docs/object-framework.md section 18)
+//   galaxyFade(cam) -> 0..1          1 - smoothstep(2e4, 4e4, dSun_pc) (scene3d-galaxy.js); galaxyItem, milkyWayItem, projectAxes re-exported
+//   visibleObjects(store, ctx)       ctx.frame may be 'cosmos': only kinds with a cosmos renderer; a record with one is not held to the cone in the unhosted
+//       frames (an SMBH from a sky tile; filter with smbhVisible). ctx.galaxyFade (number) or ctx.cam: in the galaxy frame every entry whose kind has no
+//       cosmos renderer gets entry.galaxyFade, and the Milky Way billboard entry.mwFade = 1 - galaxyFade; presenceOf(entry) reads either (default 1)
+//   billboardItems     every unhosted frame; dispatches on billboardKind(spec, o) ('cluster' | 'nebula' | 'galaxy' | 'milky_way'; spec.billboard may be a
+//       function of the record); items of entries with galaxyFade have alpha, lineAlpha and markerAlpha multiplied by it (item.galaxyFade); direction-only
+//       items use the kind's spec.skyFadePc
+//   pickObjects / labelCandidates   skip entries with presenceOf < 0.25; label alpha = skyFade x presence; options skyFade (number, or a function
+//       (entry) -> number, see skyFadeOf(cam)) and galaxyFade (number, for the group markers)
+//   markerPoints       plain marker alpha = presenceOf(entry); group markers alpha = galaxyFade(cam).  lensingItems items carry alpha = presenceOf(entry)
+//   smbhVisible(entry, items, { selectedId, inCone }) -> bool; withSmbh(visible, items, opts) -> entry[]   section 18.8.3
+//   childrenOf(id)     also works for record ids: a galaxy lists its black holes (by parent)
+//   planGo(target, { ..., get })  get(id) -> record (store.get): a placed galaxy gives { type: 'fly-galaxy', arrivePc: 3 x radius }, a direction-only galaxy
+//       { type: 'look', dir }, the Milky Way { type: 'fly-point', pc, lookAtPc, normal, arrivePc: 0 } (pc: MW_GO_PC = 60 kpc from the centre along the
+//       north Galactic pole; the flight ends in cosmos). The target may be an entry, a record or a { kind, id } sel with get
+//   starCreditItem(hasGaia) -> item | null; creditItems / creditsLine(sources, counts, extra = [])   extra: client-side items appended after the datasets
+//
 // STAR CARDS (section 16.8)
 //   mergeStarSystem(system, rec) -> system'   the star model's `system` input for a star that has an archive star record (rec) and
 //       maybe a Gaia /api/system payload. Per row (teff_k, radius_rsun, lum_lsun, mass_msun, age_gyr, spectral_type) the value with
@@ -163,12 +181,13 @@
 //       curated distance: its direction and apparent G are kept, only the distance (and so the absolute magnitude) changes
 //   (the star card rows for such a star: preferredDistanceRows(rec, { bjPc }) in scene3d-registry.js)
 //   starSignature(stars) -> string   changes when the set of star ids (or their same_as) changes: when _rebuildStars must run again
-import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance, preferredFields } from './scene3d-registry.js';
+import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance, preferredFields, isSupermassive, isMilkyWay, GAIA_CREDIT } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
 import { radecToXyz, smoothstep, KM_PER_AU } from './scene3d-math.js';
 import { orbitPlacement, J2000_MJD } from './scene3d-orbits.js';
-import { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, relOfEntry, nebulaItem } from './scene3d-nebula.js';
-export { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, nebulaItem, preferredStarDistance };
+import { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, relOfEntry, nebulaItem, projectAxes } from './scene3d-nebula.js';
+import { galaxyItem, milkyWayItem, galaxyFade, galacticAxes } from './scene3d-galaxy.js';
+export { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, nebulaItem, projectAxes, galaxyItem, milkyWayItem, galaxyFade, preferredStarDistance };
 
 const { AU_PER_PC } = F;
 const SUN = 'ss:sun', EARTH = 'ss:earth';
@@ -205,12 +224,17 @@ export class ObjectStore {
   _index() {   // children by resolved parent and star records by resolved key, rebuilt after ingest and setHostResolver
     if (this._idx) return this._idx;
     const kids = new Map(), stars = new Map();
-    for (const rec of this.recs) if (rec.parent && rec.parent !== SUN) { if (!kids.has(rec.parent)) kids.set(rec.parent, []); kids.get(rec.parent).push(rec.o); }
+    const put = (k, o) => { if (!kids.has(k)) kids.set(k, []); kids.get(k).push(o); };
+    for (const rec of this.recs) {
+      if (rec.parent && rec.parent !== SUN) put(rec.parent, rec.o);
+      const raw = rec.o.parent;   // a record id (a galaxy's black holes) is a parent too, whatever the host resolver says about it
+      if (raw && raw !== SUN && raw !== rec.parent) put(raw, rec.o);
+    }
     for (const s of this.stars.values()) { const k = this.resolveHost(s.id); if (!stars.has(k)) stars.set(k, s); }
     for (const s of this.stars.values()) for (const a of Array.isArray(s.same_as) ? s.same_as : []) { const k = this.resolveHost(a); if (!stars.has(k)) stars.set(k, s); }
     return (this._idx = { kids, stars });
   }
-  childrenOf(starKey) { return (this._index().kids.get(starKey) || []).slice(); }
+  childrenOf(id) { return (this._index().kids.get(id) || []).slice(); }   // a star key or a record id (a galaxy lists its black holes by parent)
   starRecord(starKey) { return this._index().stars.get(starKey) || this.stars.get(starKey) || null; }
   hostName(starKey) {
     const s = this.starRecord(starKey), r = this.get(starKey);
@@ -292,26 +316,60 @@ export function kindsPhrase(ks) {
 }
 
 const AT_INFINITY_RENDERERS = ['billboard', 'marker'];
+/** The billboard item builder of a record: spec.billboard is a string or a function of the record ('cluster' | 'nebula' | 'galaxy' | 'milky_way'). */
+export const billboardKind = (spec, o) => (typeof spec.billboard === 'function' ? spec.billboard(o) : spec.billboard) || 'cluster';
+export const GALAXY_PICK_MIN = 0.25;   // below this a record that fades with galaxyFade is neither labelled nor picked
+/** How present an entry is, 0..1: galaxyFade for records without a cosmos renderer, 1 - galaxyFade for the Milky Way billboard, else 1. */
+export const presenceOf = (e) => (e.galaxyFade != null ? e.galaxyFade : e.mwFade != null ? e.mwFade : 1);
+
 export function visibleObjects(store, ctx) {
   const out = [], layers = ctx.layers || {}, ev = { evidence: !!ctx.evidence, layers };
+  const gf = ctx.galaxyFade != null ? ctx.galaxyFade : ctx.cam ? galaxyFade(ctx.cam) : null, hostedFrame = F.isHosted(ctx.frame);
   for (const r of store.recs) {
     const spec = r.spec, renderer = rendererOf(spec, ctx.frame, r.o);
     if (!renderer) continue;
     if (spec.layer && layers[spec.layer] === false) continue;
     if (!spec.visible(r.o, ev)) continue;
-    if (ctx.frame === 'system') {
+    const hasCosmos = !hostedFrame && !!rendererOf(spec, 'cosmos', r.o);
+    if (hostedFrame) {
       if (!r.sysAu || !ctx.inHost(r.host)) continue;
     } else {
       if (r.id === EARTH) continue;
       if (!r.galPc && !(r.dir && AT_INFINITY_RENDERERS.includes(renderer))) continue;   // a direction-only record is drawn at infinity (section 17.5)
-      if (spec.galaxyScope === 'cone' && r.o.in_cone !== true) continue;
+      if (spec.galaxyScope === 'cone' && r.o.in_cone !== true && !hasCosmos) continue;   // a record with a cosmos renderer (an SMBH) comes from a sky tile: smbhVisible decides
     }
     const entry = { o: r.o, spec, renderer, id: r.id, kind: r.kind, host: r.host, sysAu: r.sysAu, galPc: r.galPc, dir: r.dir };
-    if (!r.galPc && r.dir && ctx.frame !== 'system') entry.atInfinity = true;
+    if (!r.galPc && r.dir && !hostedFrame) entry.atInfinity = true;
+    if (ctx.frame === 'galaxy' && gf != null) {   // section 18.5.4
+      if (!hasCosmos) entry.galaxyFade = gf;
+      else if (renderer === 'billboard' && billboardKind(spec, r.o) === 'milky_way') entry.mwFade = 1 - gf;
+    }
     out.push(entry);
   }
   return out;
 }
+
+/**
+ * Supermassive black holes show only when resolved (section 18.8.3). entry: a visibleObjects entry; items: the billboardItems of the same frame;
+ * opts { selectedId, inCone } (inCone: boolean, default entry.o.in_cone === true). Any other entry is true. An SMBH is shown when it is in the cone, is
+ * selected, or its parent galaxy's item is `inside` or at least 40 px in semi-major axis; for the Milky Way the camera must also be 40 kpc or more
+ * from the Sun (the item's galaxyFade is 0), so Sgr A* near the Sun keeps its cone rule.
+ */
+export function smbhVisible(entry, items, { selectedId = null, inCone } = {}) {
+  if (!entry || entry.kind !== 'black_hole' || !isSupermassive(entry.o)) return true;
+  if (selectedId != null && selectedId === entry.id) return true;
+  if (inCone != null ? inCone : entry.o.in_cone === true) return true;
+  const it = (items || []).find((i) => i.id === entry.o.parent);
+  if (!it) return false;
+  if (it.billboard === 'milky_way' && !(it.galaxyFade === 0)) return false;
+  return !!(it.inside || (it.semiMajorPx != null && it.semiMajorPx >= 40));
+}
+/** visible.filter(smbhVisible) with the items built from the same list: the renderer's one-liner. */
+export const withSmbh = (visible, items, opts) => visible.filter((e) => smbhVisible(e, items, opts));
+
+/** The star-credit item for the credits line (section 18.12): null unless the star payload holds Gaia rows. */
+export const STAR_CREDIT_TEXT = `Stars: ${GAIA_CREDIT}`;
+export const starCreditItem = (hasGaia) => (hasGaia ? { dataset: 'gaia-dr3', text: STAR_CREDIT_TEXT, credit: 'Credit: ESA/Gaia/DPAC', licenceName: 'CC BY-NC 3.0 IGO', licence: 'https://creativecommons.org/licenses/by-nc/3.0/igo/' } : null);
 
 export function framePos(entry, cam) {
   if (entry.atInfinity) return relOfEntry(entry, cam);
@@ -376,16 +434,21 @@ export function choosePick(cands) {
   return best;
 }
 
-export function pickObjects(visible, groups, px, py, maxPx, { project, framePos: pos, reach = () => 0, skyFade: sky = 1 }) {
+/** skyFade option: a number for every direction-only entry, or a function (entry) -> number (per-kind scales: skyFadeOf(cam)). */
+const skyOf = (sky, e) => (typeof sky === 'function' ? sky(e) : sky);
+/** (entry) -> skyFade(cam, the kind's spec.skyFadePc): the per-kind fade of a direction-only entry (nebulae 800 pc, galaxies 1e5). */
+export const skyFadeOf = (cam) => (e) => skyFade(cam, (e && e.spec && e.spec.skyFadePc) || SKY_FADE_PC);
+
+export function pickObjects(visible, groups, px, py, maxPx, { project, framePos: pos, reach = () => 0, skyFade: sky = 1, galaxyFade: gfade = 1 }) {
   const cands = [];
   for (const e of visible) {
-    if (isGrouped(groups, e) || (e.atInfinity && !infinityPickable(sky))) continue;
+    if (isGrouped(groups, e) || (e.atInfinity && !infinityPickable(skyOf(sky, e))) || presenceOf(e) < GALAXY_PICK_MIN) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
     if (d <= Math.max(maxPx, reach(e) || 0)) cands.push({ sel: { kind: e.kind, id: e.id }, priority: pickPriority(e), d });
   }
   for (const [host, g] of Object.entries(groups)) {
-    if (!g.grouped) continue;
+    if (!g.grouped || gfade < GALAXY_PICK_MIN) continue;
     const rel = pos({ galPc: g.pcPos, host, group: true }), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
     if (d <= maxPx) cands.push({ sel: { kind: 'group', id: 'group:' + host }, priority: 10, d });
@@ -393,14 +456,15 @@ export function pickObjects(visible, groups, px, py, maxPx, { project, framePos:
   return choosePick(cands);
 }
 
-export function labelCandidates(visible, groups, { project, framePos: pos, discPx = () => 0, skyFade: sky = 1 }) {
+export function labelCandidates(visible, groups, { project, framePos: pos, discPx = () => 0, skyFade: sky = 1, galaxyFade: gfade = 1 }) {
   const out = [], pools = new Map();
   for (const e of visible) {
-    const L = e.spec.label; if (!L || isGrouped(groups, e) || (e.atInfinity && !infinityPickable(sky))) continue;
+    const L = e.spec.label; if (!L || isGrouped(groups, e) || (e.atInfinity && !infinityPickable(skyOf(sky, e))) || presenceOf(e) < GALAXY_PICK_MIN) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     if (L.hideOverDiscPx != null && discPx(e) > L.hideOverDiscPx) continue;
     const item = { x: q[0], y: q[1], key: L.key(e.o), text: e.o.name };
-    if (e.atInfinity) item.alpha = sky;
+    const alpha = (e.atInfinity ? skyOf(sky, e) : 1) * presenceOf(e);
+    if (e.atInfinity || alpha < 1) item.alpha = alpha;
     if (L.max == null) { out.push(item); continue; }
     const pool = L.group || e.kind;
     if (!pools.has(pool)) pools.set(pool, { max: L.max, items: [] });
@@ -408,19 +472,35 @@ export function labelCandidates(visible, groups, { project, framePos: pos, discP
   }
   for (const { max, items } of pools.values()) out.push(...items.sort((a, b) => a.key - b.key).slice(0, max));
   for (const [host, g] of Object.entries(groups)) {
-    if (!g.grouped) continue;
+    if (!g.grouped || gfade < GALAXY_PICK_MIN) continue;
     const rel = pos({ galPc: g.pcPos, host, group: true }), q = rel && project(rel); if (!q) continue;
-    out.push({ x: q[0], y: q[1], key: 5, text: g.label || `${g.name} · ${g.count}` });
+    const gl = { x: q[0], y: q[1], key: 5, text: g.label || `${g.name} · ${g.count}` };
+    if (gfade < 1) gl.alpha = gfade;
+    out.push(gl);
   }
   return out;
 }
 
-export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost, placement } = {}) {
+export const MW_GO_PC = 60000;   // "Go there" for the Milky Way: this far from its centre along the north Galactic pole
+export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost, placement, get } = {}) {
   if (!target || target.kind === 'star') return { type: 'star' };
+  const rec = target.o || (target.props || target.position ? target : get && target.id ? get(target.id) : null);   // the record, when the caller gave one
   if (target.kind !== 'group') {   // a direction-only target: turn to it (section 17.5)
     if (target.atInfinity && target.dir) return { type: 'look', dir: target.dir.slice() };
     const pl = placement && target.id ? placement(target.id) : null;
     if (pl && !pl.galPc && !pl.sysAu && pl.dir) return { type: 'look', dir: pl.dir.slice() };
+    const rp = rec && rec.position;
+    if (rec && rec.kind === 'galaxy' && rp && rp.model === 'fixed' && !rp.dist && Number.isFinite(rp.ra) && Number.isFinite(rp.dec)) return { type: 'look', dir: radecToXyz(rp.ra, rp.dec, 1) };
+    if (rec && rec.kind === 'galaxy') {   // section 18.7 / 18.6.2: the Milky Way flies to a face-on point; any other galaxy stops 3 radii out
+      const spec = kindSpec('galaxy');
+      if (isMilkyWay(rec)) {
+        const ax = galacticAxes(rec.props && rec.props.ngp_ra ? rec.props.ngp_ra.v : 192.85948, rec.props && rec.props.ngp_dec ? rec.props.ngp_dec.v : 27.12825,
+          rec.props && rec.props.l_node ? rec.props.l_node.v : 32.93192);
+        const d = toPc(rec.position.dist), c = radecToXyz(rec.position.ra, rec.position.dec, d);
+        return { type: 'fly-point', pc: c.map((v, i) => v + MW_GO_PC * ax.n[i]), lookAtPc: c, normal: ax.n, arrivePc: 0 };
+      }
+      return { type: 'fly-galaxy', arrivePc: spec.arrivePc(rec) };
+    }
   }
   const isGroup = target.kind === 'group', raw = isGroup ? (target.host || String(target.id).replace(/^group:/, '')) : target.host;
   const hostId = raw && resolveHost ? resolveHost(raw) || raw : raw;
@@ -434,13 +514,24 @@ export function planGo(target, { camFrame, camHostKey, sunId = SUN, resolveHost,
 const GLOW_MIN_PX = 2;
 export const GLOW_K = 0.002, GLOW_UNKNOWN = 0.1, GLOW_NEAR = [1.5, 4];   // alpha = clamp(GLOW_K N / r50_pc^2); the glow fades out between 1.5 and 4 r50 from the centre
 export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null, nearPc = Infinity } = {}) {
-  if (cam.frame !== 'galaxy') return [];
-  const out = [], upc = F.unitsPerPc(cam), nearFade = smoothstep(F.ENTER_PC, 4 * F.ENTER_PC, nearPc);
+  if (F.isHosted(cam.frame)) return [];
+  const out = [], upc = F.unitsPerPc(cam), nearFade = smoothstep(F.ENTER_PC, 4 * F.ENTER_PC, nearPc), gf = galaxyFade(cam);
+  const faded = (it, e) => {   // records without a cosmos renderer fade with galaxyFade in the galaxy frame (section 18.5.4)
+    if (e.galaxyFade == null || !it) return it;
+    const m = it.markerAlpha != null ? it.markerAlpha : (it.candidate ? 0.5 : 1) * (it.nearFade != null ? it.nearFade : 1);
+    return { ...it, alpha: it.alpha * e.galaxyFade, lineAlpha: it.lineAlpha * e.galaxyFade, markerAlpha: m * e.galaxyFade, galaxyFade: e.galaxyFade };
+  };
   for (const e of visible) {
     if (e.renderer !== 'billboard') continue;
-    if (e.spec.billboard === 'nebula') {
-      const it = nebulaItem(e, cam, { project, evidence, nearFade, pxPerRad });
-      if (it) out.push(it);
+    const bk = billboardKind(e.spec, e.o);
+    if (bk === 'nebula') {
+      const it = nebulaItem(e, cam, { project, evidence, nearFade, pxPerRad, skyFade: skyFade(cam, e.spec.skyFadePc || SKY_FADE_PC) });
+      if (it) out.push(faded(it, e));
+      continue;
+    }
+    if (bk === 'galaxy' || bk === 'milky_way') {
+      const it = bk === 'galaxy' ? galaxyItem(e, cam, { project, evidence, skyFade: skyFade(cam, e.spec.skyFadePc || 1e5) }) : milkyWayItem(e, cam, { project, evidence, galaxyFade: gf });
+      if (it) out.push(faded(it, e));
       continue;
     }
     const rel = framePos(e, cam), r50 = toPc(e.o.size && e.o.size.radius);
@@ -458,7 +549,7 @@ export function billboardItems(visible, cam, { evidence = false, pxPerRad = 1000
       lineAlpha: (candidate ? 0.5 : 1) * nearFade, mode, pxRadius,
       markerOnly: pxRadius < GLOW_MIN_PX, hollow, dashed: hollow && mode === 'outline', candidate };
     if (project) item.screen = project(rel);
-    out.push(item);
+    out.push(faded(item, e));
   }
   return out;
 }
@@ -473,7 +564,8 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
   for (const e of visible) {
     if ((e.renderer !== 'marker' && e.renderer !== 'lensing') || (e.host && groups[e.host] && groups[e.host].grouped)) continue;   // a lensing look keeps its marker (the Evidence view shows only that)
     const rel = framePos(e, cam);
-    if (rel) { const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o); put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), 1, e.spec.color(e.o)); }
+    const pres = presenceOf(e);
+    if (rel && pres > 0) { const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o); put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), pres, e.spec.color(e.o)); }
   }
   if (items.length) {
     const by = new Map(visible.map((e) => [e.id, e]));
@@ -485,8 +577,8 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
   }
   for (const [host, g] of Object.entries(groups)) {
     if (!g.grouped) continue;
-    const rel = framePos({ galPc: g.pcPos, host, group: true }, cam);
-    if (rel) put(rel, groupPx, 1, groupRgb);
+    const rel = framePos({ galPc: g.pcPos, host, group: true }, cam), gfa = galaxyFade(cam);
+    if (rel && gfa > 0) put(rel, groupPx, gfa, groupRgb);
   }
   return new Float32Array(out);
 }
@@ -674,7 +766,7 @@ export function lensingItems(visible, cam, { evidence = false, pxPerRad = 1000, 
     const truePx = dist > 0 ? Math.atan(rShadow / dist) * pxPerRad : Infinity, enlarged = truePx < LENS_MIN_PX;
     const iq = e.o.position && e.o.position.elements && e.o.position.elements.i_deg, known = !!iq && Number.isFinite(iq.v);
     const item = { id: e.id, kind: e.kind, rel, dist, rShadow, truePx, px: Math.max(truePx, LENS_MIN_PX), enlarged, factor: enlarged ? LENS_MIN_PX / truePx : 1,
-      disc: isAccreting(e.o), incl: known ? iq.v : 60, inclAssumed: !known };
+      disc: isAccreting(e.o), incl: known ? iq.v : 60, inclAssumed: !known, alpha: presenceOf(e) };
     if (project) item.screen = project(rel);
     out.push(item);
   }
@@ -688,7 +780,7 @@ export function lensingItems(visible, cam, { evidence = false, pxPerRad = 1000, 
  * the records that fell in the cone (datasetCounts), or omitted to use each row's own `count`. A row without a credit, with an error, or with no
  * records adds nothing. Equal credit lines are listed once.
  */
-export function creditItems(sources, counts = null) {
+export function creditItems(sources, counts = null, extra = []) {
   const out = [], seen = new Set();
   for (const row of Array.isArray(sources) ? sources : []) {
     const pv = row && row.provenance;
@@ -700,10 +792,12 @@ export function creditItems(sources, counts = null) {
     if (seen.has(text)) continue;
     seen.add(text); out.push({ dataset: ds, text, credit, licenceName: name || null, licence: pv.licence || null });
   }
+  // client-side items (the Gaia star layer, starCreditItem): appended after the datasets, null ones dropped, equal text once
+  for (const it of Array.isArray(extra) ? extra : [extra]) if (it && it.text && !seen.has(it.text)) { seen.add(it.text); out.push(it); }
   return out;
 }
-/** The credits line of the 3D view: the items of creditItems joined with ' | ', '' when there are none. */
-export const creditsLine = (sources, counts = null) => creditItems(sources, counts).map((i) => i.text).join(' | ');
+/** The credits line of the 3D view: the items of creditItems joined with ' | ', '' when there are none. extra: client-side items, e.g. [starCreditItem(hasGaia)]. */
+export const creditsLine = (sources, counts = null, extra = []) => creditItems(sources, counts, extra).map((i) => i.text).join(' | ');
 /** { dataset: n } of the store's records that are in the cone, by record provenance.dataset (the counts creditsLine wants). */
 export function datasetCounts(store) {
   const out = {};

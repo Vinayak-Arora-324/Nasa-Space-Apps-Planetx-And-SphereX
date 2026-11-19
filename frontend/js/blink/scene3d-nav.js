@@ -80,10 +80,11 @@ export class Autopilot {
 /**
  * Comfortable free-flight speed (frame units per second): about a third of the distance to the nearest surface per
  * second (so you close that gap in ~3 s of coasting, and slow down smoothly as you near it), clamped to
- * [1e-9, 100] parsecs per second expressed in frame units via unitsPerPc.
+ * [1e-9, hiPc] parsecs per second expressed in frame units via unitsPerPc. hiPc is the level's cap (its autoPc.max, section 18.5.1):
+ * the default 100 keeps the Phase 2 behaviour; the galaxy and cosmos levels pass 1e8.
  */
-export function suggestSpeed(distToNearestSurface, unitsPerPc) {
-  const lo = 1e-9 * unitsPerPc, hi = 100 * unitsPerPc;
+export function suggestSpeed(distToNearestSurface, unitsPerPc, hiPc = 100) {
+  const lo = 1e-9 * unitsPerPc, hi = hiPc * unitsPerPc;
   if (!Number.isFinite(distToNearestSurface) || distToNearestSurface <= 0) return lo;
   return clamp(distToNearestSurface / 3, lo, hi);
 }

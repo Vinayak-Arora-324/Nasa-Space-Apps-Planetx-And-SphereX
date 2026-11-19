@@ -22,8 +22,8 @@ const ctx = (o = {}) => ({ fromYou: '1.5 pc · 4.9 ly', evidence: false, fmtNum:
 
 test('the Phase 0 kinds and layers are registered and every kind points at a real layer', () => {
   for (const k of ['sun', 'planet', 'moon', 'dwarf_planet', 'asteroid', 'comet', 'star']) assert.ok(R.kindSpec(k), k);
-  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets', 'exoplanets', 'clusters', 'clusterCandidates', 'nebulae', 'blackHoles']);
-  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar', 'beyond', 'beyond', 'beyond', 'beyond', 'beyond']);
+  assert.deepEqual(R.layers().map((l) => l.id), ['mw', 'cone', 'starNames', 'planets', 'orbits', 'dwarfPlanets', 'asteroids', 'comets', 'exoplanets', 'clusters', 'clusterCandidates', 'nebulae', 'blackHoles', 'galaxies']);
+  assert.deepEqual(R.layers().map((l) => l.group), ['sky', 'sky', 'sky', 'solar', 'solar', 'solar', 'solar', 'solar', 'beyond', 'beyond', 'beyond', 'beyond', 'beyond', 'beyond']);
   const ids = new Set(R.layers().map((l) => l.id));
   for (const s of R.kinds()) assert.ok(s.layer === null || ids.has(s.layer), `${s.kind} layer`);
   assert.equal(R.kindSpec('star').builtin, true); assert.equal(R.kindSpec('star').layer, null); assert.equal(R.kindSpec('star').pick.priority, 20);
@@ -383,7 +383,7 @@ test('Phase 2 layers: nebulae and blackHoles in group beyond, on by default, per
   const st = stub(); const m = R.loadLayers(st); assert.equal(m.nebulae, true); assert.equal(m.blackHoles, true);
   R.saveLayers({ ...m, nebulae: false, blackHoles: false }, st);
   const back = R.loadLayers(st); assert.deepEqual([back.nebulae, back.blackHoles, back.clusters], [false, false, true]);
-  assert.deepEqual(R.beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole']);
+  assert.deepEqual(R.beyondKinds(), ['exoplanet', 'cluster', 'nebula', 'black_hole', 'galaxy']);
 });
 
 test('nebula and black hole specs: frames, scope, picks, labels, arrival, colours', () => {
@@ -526,4 +526,130 @@ test('a fixed black hole is reached by a galaxy-frame trip (go fly-galaxy, stop 
   const wide = sgrRec(); wide.position.dist = { v: 787.7, lo: 761.4, hi: 815.8, unit: 'pc', src: 'x', tier: 'measured' };
   assert.equal(row(spec.card(wide, ctx()), 'Distance (orbit-fit)')[1], '788 +28/−26 pc');
   assert.equal(row(spec.card(sgrRec(), ctx()), 'Distance (orbit-fit)')[1], '8,277 ± 9 pc');   // R0 = 8,277 ± 9 pc, not 8,280
+});
+
+// ====================================================================== Phase 3
+const pcq = (v, unit, tier = 'catalogue', src = 'OpenNGC v20260501') => ({ v, unit, tier, src });
+const m31 = (o = {}) => ({
+  id: 'ongc:NGC0224', kind: 'galaxy', name: 'Andromeda Galaxy', designations: ['M 31'], host: null, parent: null,
+  position: { model: 'fixed', ra: 10.6847917, dec: 41.2690556, epoch: 2000, method: 'cepheid', tier: 'catalogue',
+    dist: { v: 0.75753, lo: 0.73485, hi: 0.78091, unit: 'Mpc', src: 'Cosmicflows-4 (Tully et al. 2023, ApJ 944, 94), table2 PGC 2557: DMceph 24.397 ± 0.066, converted by Space Maps', tier: 'measured' } },
+  alt_distances: [
+    { method: 'trgb', dist: { v: 0.80538, lo: 0.76913, hi: 0.84333, unit: 'Mpc', src: 'Cosmicflows-4 table2: DMtrgb 24.53 ± 0.10', tier: 'measured' }, reason: 'not used: larger uncertainty than the Cepheid distance' },
+    { method: 'sbf', dist: { v: 0.69631, lo: 0.67112, hi: 0.72244, unit: 'Mpc', src: 'Cosmicflows-4 table2: DMsbf 24.214 ± 0.080', tier: 'measured' }, reason: 'not used: larger uncertainty than the Cepheid distance' }],
+  size: { radius: { v: 19597, unit: 'pc', src: 'half the catalogue major axis at the adopted distance', tier: 'inferred' },
+    angular: { major: pcq(177.83, 'arcmin'), minor: pcq(69.66, 'arcmin'), pa: pcq(35, 'deg') } },
+  props: { type: pcq('Galaxy', ''), hubble: pcq('Sb', ''), mag_b: pcq(4.29, 'mag'), mag_v: pcq(3.44, 'mag'), surface_brightness: pcq(23.63, 'mag/arcsec2'), v_helio: pcq(-300, 'km/s'), redshift: pcq(-0.001, '') },
+  provenance: { source: 'static:galaxies', dataset: 'galaxies' }, evidence: 'measured', render: { mag: 4.29 }, ...o,
+});
+const gctxr = (o = {}) => ({ fromYou: '757 kpc · 2.47 million ly', evidence: false, fmtNum: R.fmtNum, ...o });
+const dirOnlyGal = () => m31({ id: 'ongc:IC0047', name: 'IC 47', alt_distances: undefined, position: { model: 'fixed', ra: 10.7292083, dec: -13.7407222, epoch: 2000, tier: 'catalogue', dist: null },
+  size: { radius: null, angular: { major: pcq(1.5, 'arcmin'), minor: pcq(1.2, 'arcmin'), pa: null } }, props: { type: pcq('Galaxy', ''), mag_b: pcq(14, 'mag') } });
+
+test('the galaxies layer and the galaxy kind (section 18.6.2)', () => {
+  const by = Object.fromEntries(R.layers().map((l) => [l.id, l]));
+  assert.deepEqual(by.galaxies, { id: 'galaxies', label: 'Galaxies', group: 'beyond', on: true, parent: null }); assert.equal(R.layerOf('galaxy'), 'galaxies');
+  const s = R.kindSpec('galaxy');
+  assert.deepEqual(s.noun, ['galaxy', 'galaxies']); assert.deepEqual(s.frames, { galaxy: 'billboard', cosmos: 'billboard' }); assert.equal(s.galaxyScope, 'sky'); assert.equal(s.skyFadePc, 1e5);
+  assert.deepEqual(s.pick, { priority: 27, marker: 18 }); assert.equal(s.go, 'fly-galaxy'); assert.equal(s.label.max, 12);
+  assert.equal(R.rendererOf(s, 'cosmos', m31()), 'billboard'); assert.equal(s.billboard(m31()), 'galaxy'); assert.equal(s.billboard({ render: { style: 'milky_way' } }), 'milky_way');
+  assert.equal(R.kindSpec('nebula').skyFadePc, 800);
+  assert.equal(s.arrivePc(m31()), 3 * 19597); assert.equal(s.arrivePc(dirOnlyGal()), 0);
+  assert.ok(s.label.key(m31({ name: 'Andromeda Galaxy' })) < s.label.key(m31({ name: 'NGC 224' }))); assert.ok(s.label.key({ name: 'NGC 1', render: { mag: 5 } }) === 1005);
+  assert.equal(s.label.key({ name: 'x', render: {}, id: 'gal:milky_way' }), 30); assert.equal(s.label.key({ name: 'Milky Way', render: { style: 'milky_way' } }), -1);
+  assert.equal(R.beyondKinds().at(-1), 'galaxy');
+  assert.equal(R.rendererOf(R.kindSpec('black_hole'), 'cosmos', { props: { type: { v: 'supermassive' } } }), 'lensing'); assert.equal(R.rendererOf(R.kindSpec('black_hole'), 'cosmos', { props: { type: { v: 'stellar-mass' } } }), null);
+  for (const k of ['cluster', 'nebula', 'exoplanet', 'planet']) assert.equal(R.rendererOf(R.kindSpec(k), 'cosmos', {}), null, k);
+});
+
+test('galaxy card, measured distance: rows, tiers, "not used" distances, data credits', () => {
+  const c = R.kindSpec('galaxy').card(m31(), gctxr()), row = (l) => c.rows.find((r) => r[0] === l);
+  assert.equal(c.title, 'Andromeda Galaxy'); assert.equal(c.subtitle, 'Galaxy');
+  assert.equal(row('Type')[1], 'Galaxy'); assert.equal(row('Morphology')[1], 'Sb');
+  const d = c.rows.find((r) => r[0].startsWith('Distance ('));
+  assert.equal(d[0], 'Distance (Cepheid variables, Cosmicflows-4)'); assert.equal(d[1], '758 ± 23 kpc'); assert.equal(d[2], 'measured');
+  const alt = c.rows.filter((r) => r[0] === 'Other distances · not used');
+  assert.equal(alt.length, 2); assert.match(alt[0][1], /^tip of the red-giant branch: 810 ± 40 kpc · not used: larger uncertainty than the Cepheid distance$/); assert.match(alt[1][1], /^surface-brightness fluctuations: /);
+  assert.match(row('Velocity')[1], /km\/s \(heliocentric\) · z/);
+  assert.equal(row('Angular size')[1], '178′ × 69.7′, PA 35°'); assert.equal(row('Diameter (from angular size and distance)')[2], 'inferred'); assert.match(row('Diameter (from angular size and distance)')[1], /^39\.2 kpc$/);
+  assert.equal(row('B magnitude')[1], '4.29 mag'); assert.match(row('Surface brightness')[1], /^23\.6 mag\/arcsec²$/);
+  assert.equal(row('From you')[1], '757 kpc · 2.47 million ly'); assert.equal(row('Look')[2], 'illustrative');
+  assert.equal(row('Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Cosmicflows-4 (Tully et al. 2023)');
+  assert.equal(c.notes, null); assert.equal(row('Black holes · 1'), undefined);
+  const ev = R.kindSpec('galaxy').card(m31(), gctxr({ evidence: true })); assert.equal(ev.rows.find((r) => r[0] === 'Look'), undefined); assert.ok(ev.rows.find((r) => r[0] === 'Data'), 'the Data row stays');
+});
+
+test('galaxy card: derived catalogue distance, Hubble flow, cluster member, UNGC without an uncertainty, direction-only', () => {
+  const spec = R.kindSpec('galaxy'), withDist = (method, dist, extra = {}) => m31({ position: { ...m31().position, method, dist }, alt_distances: undefined, ...extra });
+  const tf = spec.card(withDist('tully-fisher', { v: 24.1, lo: 20, hi: 28, unit: 'Mpc', src: 'Cosmicflows-4 table2: DMtf', tier: 'inferred' }), gctxr());
+  assert.equal(tf.rows.find((r) => r[0].startsWith('Distance ('))[0], 'Distance (Tully–Fisher relation, Cosmicflows-4)');
+  assert.match(tf.notes[0], /^A derived distance \(Tully–Fisher relation\)/);
+  const hf = spec.card(withDist('redshift', { v: 47.18, lo: 42.71, hi: 51.64, unit: 'Mpc', src: 'Hubble flow: v_helio 3886 km/s (OpenNGC) → H0 = 74.6 (Cosmicflows-4)', tier: 'inferred' }, { props: { ...m31().props, v_cmb: pcq(3527.7, 'km/s', 'inferred', 'dipole') } }), gctxr());
+  assert.equal(hf.notes.length, 1); assert.match(hf.notes[0], /H0 = 74\.6 km\/s\/Mpc \(Cosmicflows-4 scale\)/); assert.match(hf.notes[0], /300 km\/s/); assert.match(hf.notes[0], /Planck's 67\.4 would place it about 11 % farther\.$/);
+  assert.equal(hf.rows.find((r) => r[0] === 'Velocity (CMB frame)')[2], 'inferred'); assert.match(hf.rows.find((r) => r[0].startsWith('Distance ('))[1], /^47 ± 4 Mpc$/);
+  const gm = spec.card(withDist('group-member', { v: 16.2, unit: 'Mpc', src: 'the Virgo cluster, Cosmicflows-4 group 41220 (31.048 ± 0.008)', tier: 'inferred' }), gctxr());
+  assert.equal(gm.notes[0], 'Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220), because its velocity mostly reflects its motion inside the cluster.');
+  const ung = spec.card(m31({ id: 'ungc:And XVIII', name: 'And XVIII', position: { ...m31().position, method: 'trgb', dist: { v: 1.36, unit: 'Mpc', src: 'UNGC (Karachentsev et al. 2013, J/AJ/145/101): Dist 1.36 Mpc, TRGB; no per-galaxy error given', tier: 'measured' } }, alt_distances: undefined,
+    size: { radius: null, angular: { major: pcq(1.4, 'arcmin'), minor: pcq(1.39, 'arcmin'), pa: null } } }), gctxr());
+  assert.equal(ung.rows.find((r) => r[0].startsWith('Distance ('))[1], '1.36 Mpc'); assert.equal(ung.rows.find((r) => r[0].startsWith('Distance ('))[2], 'measured');
+  assert.ok(ung.notes.some((n) => /no uncertainty/.test(n) && /0\.01 Mpc/.test(n))); assert.ok(ung.notes.some((n) => /no orientation/.test(n)));
+  assert.equal(ung.rows.find((r) => r[0] === 'Data')[1], 'UNGC (Karachentsev et al. 2013)');
+  const dn = spec.card(dirOnlyGal(), gctxr({ fromYou: null }));
+  assert.equal(dn.rows.find((r) => r[0] === 'Distance')[1], 'unknown · drawn on the sky as seen from the Sun'); assert.equal(dn.rows.find((r) => r[0] === 'From you'), undefined);
+  assert.equal(dn.rows.find((r) => r[0] === 'Diameter (from angular size and distance)'), undefined); assert.match(dn.notes[0], /^No distance is known/);
+  const mc = spec.card(withDist('resolved-stars', { v: 26, lo: 24, hi: 28, unit: 'kpc', src: 'McConnachie 2012 (AJ 144, 4) Table 3', tier: 'measured' }), gctxr());
+  assert.equal(mc.rows.find((r) => r[0].startsWith('Distance ('))[0], 'Distance (resolved stars, McConnachie 2012)'); assert.match(mc.rows.find((r) => r[0] === 'Data')[1], /McConnachie 2012$/);
+  assert.equal(R.methodWord('eclipsing-binary'), 'eclipsing binaries'); assert.equal(R.methodWord('orbit-fit'), 'orbit-fit');
+  for (const m of ['maser', 'sn-ia', 'sn-ii', 'supernova', 'fundamental-plane', 'horizontal-branch', 'rr-lyrae', 'cmd', 'brightest-stars', 'pnlf', 'group-member', 'eclipsing-binary', 'resolved-stars']) assert.notEqual(R.methodWord(m), m, m);
+});
+
+test('galaxy card lists its black holes from ctx.children', () => {
+  const bhRec = { id: 'bh:M87*', kind: 'black_hole', name: 'M87*', props: { mass: { v: 6.52e9, lo: 5.79e9, hi: 7.25e9, unit: 'Msun', tier: 'measured', src: 't' } } };
+  const c = R.kindSpec('galaxy').card(m31(), gctxr({ children: [bhRec] })), r = c.rows.find((x) => x[0] === 'Black holes · 1');
+  assert.equal(r[1], 'M87* · 6.5 ± 0.7 × 10⁹ M☉'); assert.equal(r[2], 'measured');
+});
+
+test('the Milky Way card: measured rows, then the illustrative look row (dropped in the Evidence view)', () => {
+  const mw = { id: 'gal:milky_way', kind: 'galaxy', name: 'Milky Way', designations: [], host: null, parent: null, size: { radius: null, angular: null }, render: { style: 'milky_way' }, evidence: 'measured',
+    position: { model: 'fixed', ra: 266.4168371, dec: -29.0078106, epoch: 2000, method: 'orbit-fit', tier: 'measured', dist: { v: 8277, lo: 8268, hi: 8286, unit: 'pc', src: 'GRAVITY 2022', tier: 'measured' } },
+    props: { ngp_ra: pcq(192.85948, 'deg'), ngp_dec: pcq(27.12825, 'deg'), l_node: pcq(32.93192, 'deg'), thin_disc_scale_length: { v: 2600, lo: 2100, hi: 3100, unit: 'pc', tier: 'measured', src: 't' }, thin_disc_scale_height: pcq(300, 'pc', 'measured'),
+      bar_half_length: { v: 5000, lo: 4800, hi: 5200, unit: 'pc', tier: 'measured', src: 't' }, bar_angle: pcq(27, 'deg', 'measured'), sun_height: pcq(25, 'pc', 'measured'), stellar_mass: { v: 5e10, lo: 4e10, hi: 6e10, unit: 'Msun', tier: 'measured', src: 't' } } };
+  const spec = R.kindSpec('galaxy'), c = spec.card(mw, gctxr()), row = (l) => c.rows.find((r) => r[0] === l);
+  assert.equal(c.title, 'Milky Way'); assert.equal(c.subtitle, 'our Galaxy');
+  assert.equal(row('Distance to the centre (R0)')[1], '8.277 ± 0.009 kpc'); assert.equal(row('Distance to the centre (R0)')[2], 'measured');
+  assert.match(row('Plane (IAU convention)')[1], /192\.85948°, Dec \+27\.12825°; node at l = 32\.93192°/); assert.equal(row('Plane (IAU convention)')[2], 'catalogue');
+  assert.equal(row('Thin disc scale length')[1], '2.6 ± 0.5 kpc'); assert.equal(row('Bar half-length')[1], '5.00 ± 0.20 kpc'); assert.equal(row('Bar angle (from the Sun–centre line)')[1], '27°');
+  assert.equal(row('Sun\'s height above the midplane')[1], '25 pc');
+  const measured = c.rows.filter((r) => r[2] === 'measured').length, lookAt = c.rows.findIndex((r) => r[0] === 'Look');
+  assert.ok(measured >= 7); assert.ok(c.rows.slice(0, lookAt).every((r) => r[2] !== 'illustrative' || r[0] === 'From you'), 'nothing illustrative before the look row');
+  assert.equal(c.rows[lookAt][2], 'illustrative'); assert.match(c.rows[lookAt][1], /generic barred spiral/);
+  assert.ok(c.notes.some((n) => /same value Sgr A\*'s card shows/.test(n)));
+  const ev = spec.card(mw, gctxr({ evidence: true })); assert.equal(ev.rows.find((r) => r[0] === 'Look'), undefined); assert.ok(ev.rows.find((r) => r[0] === 'Thin disc scale length'));
+  assert.equal(spec.arrivePc(mw), 0);
+});
+
+test('supermassive black hole card: rescaled mass, published mass and distance not used, ring diameter, enlargement note, M31* not rescaled', () => {
+  const m87 = { id: 'bh:M87*', kind: 'black_hole', name: 'M87*', host: null, parent: 'ongc:NGC4486', evidence: 'measured', render: { style: 'lensing' },
+    position: { model: 'fixed', ra: 187.7059167, dec: 12.3911111, method: 'sbf', tier: 'catalogue', dist: { v: 16.858, lo: 16.55, hi: 17.171, unit: 'Mpc', src: 'the distance of its host galaxy', tier: 'measured' } },
+    size: { radius: { v: 1.926e10, unit: 'km', src: 't', tier: 'inferred' }, angular: null },
+    props: { type: pcq('supermassive', ''), mass: { v: 6.52e9, lo: 5.79e9, hi: 7.25e9, unit: 'Msun', src: 'EHT rescaled', tier: 'measured' },
+      mass_published: { v: 6.5e9, lo: 5.77e9, hi: 7.23e9, unit: 'Msun', src: 'EHT 2019', tier: 'measured' }, dist_published: { v: 16.8, lo: 16.1, hi: 17.6, unit: 'Mpc', src: 'EHT 2019: not used', tier: 'measured' },
+      ring_diameter: { v: 4.2e-5, lo: 3.9e-5, hi: 4.5e-5, unit: 'arcsec', src: 'EHT 2019 Paper I', tier: 'measured' } } };
+  const spec = R.kindSpec('black_hole'), c = spec.card(m87, { fromYou: null, evidence: false, lensing: { enlarged: true, factor: 9e7, truePx: 1e-7 } }), row = (l) => c.rows.find((r) => r[0] === l);
+  assert.ok(c.rows.find((r) => /^Mass \(rescaled ×1\.0035\)$/.test(r[0])), c.rows.map((r) => r[0]).join('|'));
+  assert.equal(row('Published mass · not used')[1], '6.5 ± 0.7 × 10⁹ M☉'); assert.equal(row('Published distance · not used')[1], '16.8 +0.8/−0.7 Mpc');
+  assert.equal(row('Ring diameter')[1], '42.0 ± 3.0 μas'); assert.equal(row('Distance (surface-brightness fluctuations)')[2], 'measured');
+  assert.ok(c.notes.some((n) => /^Drawn enlarged ×9e\+?7/.test(n) || /Drawn enlarged/.test(n))); assert.ok(c.notes.some((n) => /rescaled by ×1\.0035/.test(n) && /16\.8 \+0\.8/.test(n)));
+  const m31bh = { ...m87, id: 'bh:M31*', name: 'M31*', props: { type: pcq('supermassive', ''), mass: { v: 1.4e8, lo: 1.1e8, hi: 2.3e8, unit: 'Msun', src: 'Bender', tier: 'measured' }, mass_note: { v: 'Bender et al. 2005 do not state the distance they assumed, so the mass is shown as published and not rescaled.', src: 't', tier: 'catalogue' } } };
+  const c2 = spec.card(m31bh, { fromYou: null, evidence: false });
+  assert.equal(c2.rows.find((r) => r[0] === 'Mass')[1], '1.4 +0.9/−0.3 × 10⁸ M☉'); assert.ok(!c2.rows.some((r) => /not used|Ring/.test(r[0])));
+  assert.ok(c2.notes.some((n) => /not rescaled/.test(n)));
+  // a Phase 2 card is unchanged
+  const plain = spec.card({ ...m87, props: { type: pcq('stellar-mass', ''), mass: m87.props.mass } }, { fromYou: null, evidence: false });
+  assert.ok(plain.rows.find((r) => r[0] === 'Mass') && !plain.rows.some((r) => /not used|Ring/.test(r[0])));
+});
+
+test('the Gaia Data row for star cards', () => {
+  assert.deepEqual(R.gaiaDataRow().slice(0, 3), ['Data', 'Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO', 'catalogue']); assert.equal(R.GAIA_CREDIT, R.gaiaDataRow()[1]);
+  assert.equal(R.evidenceRows([R.gaiaDataRow()], true).length, 1, 'never dropped in the Evidence view');
 });

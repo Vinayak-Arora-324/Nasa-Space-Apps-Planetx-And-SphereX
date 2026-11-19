@@ -83,6 +83,34 @@
 //   preferredStarDistance(rec) -> { pc, lo, hi, src, tier, notUsed: { plxMas, plxLo, plxHi, pc, pcLo, pcHi, reason } } | null   (section 17.8)
 //   preferredDistanceRows(rec, { bjPc, fmt }) -> { rows, notes } | null   the star card's 'Distance' row (curated value, own tier and src)
 //                                         and 'Gaia single-star distance · not used' row; the reason is in notes
+//
+// PHASE 3 (docs/object-framework.md section 18)
+//   layer 'galaxies' ('Galaxies', group beyond; registered after blackHoles), kind 'galaxy' (registered after black_hole, so beyondKinds() ends with it)
+//   kind spec fields  skyFadePc: the fade scale (pc) of a direction-only record of the kind (nebulae 800, galaxies 1e5; default 800, see skyFade in
+//                     scene3d-nebula.js);  billboard: a string OR a function (o) -> 'cluster' | 'nebula' | 'galaxy' | 'milky_way';  frames may now name 'cosmos'
+//                     (the Mpc level): a kind without a cosmos renderer is not drawn there and fades with galaxyFade in the galaxy frame (scene3d-objects.js)
+//   kind 'galaxy'    frames { galaxy: 'billboard', cosmos: 'billboard' }, billboard 'milky_way' for render.style 'milky_way' else 'galaxy', sky scope, skyFadePc 1e5,
+//                    pick { 27, marker 18 }, label key (curated or common name ? 0 : 1000) + (render.mag ?? 30) (the Milky Way -1), max 12, go 'fly-galaxy'
+//                    with arrivePc = 3 x size.radius (0 for the Milky Way and for direction-only records, which 'look'; planGo handles the Milky Way).
+//                    card ctx may also carry children (store.childrenOf(o.id): the black holes, for the 'Black holes · N' row). Rows: Type, Morphology,
+//                    Distance (method in words, catalogue) or "unknown · drawn on the sky as seen from the Sun", one 'Other distances · not used' row per
+//                    alt_distances entry, Velocity, Velocity (CMB frame), Angular size, Diameter, B magnitude, Surface brightness, Black holes · N, From you
+//                    (placed only), Look (illustrative; dropped in the Evidence view), Data. Notes: Hubble flow (H0 = 74.6 ...), cluster member, direction
+//                    only, derived distance, PA unknown, UNGC without an uncertainty. The Milky Way (render.style 'milky_way') has its own card (measured rows,
+//                    then the illustrative Look row).
+//   galaxyLook(o) -> { look, hubble, bulge, disc, arms, pitchDeg, bar, blobs, colour }   the illustrative look from props.hubble / props.type:
+//                    look 'elliptical' | 'lenticular' | 'spiral' | 'barred_spiral' | 'irregular' | 'group' | 'milky_way'; bulge 0..1 share; disc 'none' |
+//                    'smooth' | 'exponential' | 'clumpy'; arms 0 | 2; pitchDeg 10 (Sa) .. 25 (Sd); bar bool (SB* types, the Milky Way); blobs 0 | 2 | 3
+//                    (pairs, triplets and groups); colour 'warm' | 'warm_blue' | 'blue' | 'white'. A 'T = n' type (UNGC) maps through de Vaucouleurs' T
+//   galaxySemiMajorPc(o) -> pc | null     size.radius, else distance x tan(major / 2); null when direction-only
+//   isMilkyWay(o) -> bool                 render.style === 'milky_way'
+//   isSupermassive(o) -> bool             props.type.v === 'supermassive' (black_hole gains cosmos: (o) => supermassive ? 'lensing' : null)
+//   METHOD_WORDS, methodWord(m) -> 'Cepheid variables' ...   words for every Phase 3 method (and cepheid, trgb, sbf, redshift); an unknown method comes back as is
+//   GAIA_CREDIT = 'Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO';  gaiaDataRow() -> ['Data', GAIA_CREDIT, 'catalogue', url]   the star cards' Gaia row
+//   CF4_CREDIT, UNGC_CREDIT, MCCONNACHIE_CREDIT, NEBULA_CREDIT   the galaxy Data row's pieces (OpenNGC's is NEBULA_CREDIT)
+//   black_hole card  a supermassive one (props.type 'supermassive') with props.mass_published shows 'Mass (rescaled ×1.0035)' and 'Published mass · not used',
+//                    with props.dist_published a 'Published distance · not used' row, props.ring_diameter a 'Ring diameter' row, and the note the record
+//                    carries when it is not rescaled (props.mass_note, a string Quantity) in notes; Phase 2 black-hole cards are unchanged
 import { KM_PER_AU } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
 import { fmtNum, fmtQuantity } from './scene3d-format.js';
@@ -402,6 +430,150 @@ function nebulaCard(o, ctx) {
   return finish(ctx, { title: o.name, subtitle: (ty && ty.v) || 'Nebula', rows, notes: notes.length ? notes : null });
 }
 
+// ------------------------------------------------------------------ Phase 3: galaxies, the Milky Way and supermassive black holes (section 18)
+export const isMilkyWay = (o) => !!(o.render && o.render.style === 'milky_way');
+export const isSupermassive = (o) => !!(o.props && o.props.type && o.props.type.v === 'supermassive');
+export const CF4_CREDIT = 'Cosmicflows-4 (Tully et al. 2023)', UNGC_CREDIT = 'UNGC (Karachentsev et al. 2013)', MCCONNACHIE_CREDIT = 'McConnachie 2012';
+export const GAIA_CREDIT = 'Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO';
+const GAIA_URL = 'https://www.cosmos.esa.int/web/gaia/dr3';
+/** The Data row of a Gaia star card (section 18.12): never dropped in the Evidence view. */
+export const gaiaDataRow = () => ['Data', GAIA_CREDIT, 'catalogue', GAIA_URL];
+
+/** Words for the distance methods (the Phase 3 ones and the three older ones galaxies use); an unlisted method is returned as is. */
+export const METHOD_WORDS = {
+  maser: 'water-maser disc', cepheid: 'Cepheid variables', trgb: 'tip of the red-giant branch', sbf: 'surface-brightness fluctuations',
+  'horizontal-branch': 'horizontal-branch stars', 'rr-lyrae': 'RR Lyrae stars', cmd: 'colour–magnitude fitting', 'eclipsing-binary': 'eclipsing binaries',
+  'resolved-stars': 'resolved stars', 'sn-ia': 'type Ia supernova', 'sn-ii': 'type II supernova', supernova: 'supernova (type not given)', 'tully-fisher': 'Tully–Fisher relation',
+  'fundamental-plane': 'fundamental plane', 'brightest-stars': 'brightest stars', pnlf: 'planetary-nebula luminosity function', 'group-member': 'group membership',
+  redshift: 'Hubble flow',
+};
+export const methodWord = (m) => METHOD_WORDS[m] || m;
+const DERIVED_METHODS = ['redshift', 'tully-fisher', 'fundamental-plane', 'sn-ia', 'sn-ii', 'supernova', 'brightest-stars', 'pnlf', 'group-member'];
+
+/**
+ * The look of a galaxy (illustrative) from its Hubble type or UNGC T-type and its catalogue type (section 18.6.1). See the header.
+ * 'Sab'-style types average the two letters; 'SB*' types (not SB0) have a bar; unknown types are irregular.
+ */
+export function galaxyLook(o) {
+  const ty = String((prop(o, 'type') || {}).v || ''), hub0 = String((prop(o, 'hubble') || {}).v || '').trim();
+  const none = { hubble: hub0 || null, bulge: 0, disc: 'none', arms: 0, pitchDeg: 0, bar: false, blobs: 0 };
+  if (isMilkyWay(o)) return { ...none, look: 'milky_way', hubble: null, bulge: 0.3, disc: 'exponential', arms: 2, pitchDeg: 15, bar: true, colour: 'warm_blue' };
+  if (/pair/i.test(ty)) return { ...none, look: 'group', blobs: 2, colour: 'white' };
+  if (/triplet|group/i.test(ty)) return { ...none, look: 'group', blobs: 3, colour: 'white' };
+  let t = hub0;
+  const tt = /^T\s*=\s*(-?\d+)/.exec(t);
+  if (tt) { const n = Number(tt[1]); t = n <= -4 ? 'E' : n <= 0 ? 'S0' : n >= 9 ? 'Im' : ['', 'Sa', 'Sab', 'Sb', 'Sbc', 'Sc', 'Scd', 'Sd', 'Sd'][n]; }
+  if (/^E/.test(t)) return { ...none, look: 'elliptical', bulge: 1, colour: 'warm' };
+  if (/^(SA0|SB0|S0)/.test(t)) return { ...none, look: 'lenticular', bulge: 0.6, disc: 'smooth', colour: 'warm' };
+  const irr = { ...none, look: 'irregular', disc: 'clumpy', colour: 'blue' };
+  if (!t || /^(I|Irr)/.test(t) || /^Sm/.test(t)) return irr;
+  const m = /^S(AB|A|B)?([abcdm]{0,2})/.exec(t);
+  if (!m) return irr;
+  const LET = { a: [0.45, 10], b: [0.3, 15], c: [0.15, 20], d: [0.05, 25], m: [0, 25] }, ls = m[2] ? m[2].split('') : ['b'];
+  if (ls.length === 1 && ls[0] === 'm') return irr;
+  const bulge = ls.reduce((s, c) => s + LET[c][0], 0) / ls.length, pitchDeg = ls.reduce((s, c) => s + LET[c][1], 0) / ls.length, bar = m[1] === 'B';
+  return { ...none, look: bar ? 'barred_spiral' : 'spiral', bulge, disc: 'exponential', arms: 2, pitchDeg, bar, colour: 'warm_blue' };
+}
+const GALAXY_RGB = { elliptical: [1.0, 0.85, 0.65], lenticular: [1.0, 0.88, 0.7], spiral: [0.8, 0.86, 1.0], barred_spiral: [0.8, 0.86, 1.0], irregular: [0.7, 0.82, 1.0],
+  group: [1, 1, 1], milky_way: [0.9, 0.92, 1.0] };
+const galaxyRgb = (o) => GALAXY_RGB[galaxyLook(o).look].slice();
+/** Physical semi-major axis (pc) of a placed galaxy: size.radius, else distance x tan(major / 2); null for a direction-only one. */
+export function galaxySemiMajorPc(o) {
+  const r = o.size && o.size.radius ? pcExact(o.size.radius) : null;
+  return r > 0 ? r : nebulaSemiMajorPc(o);
+}
+const GALAXY_CATALOGUE_NAME = /^(M|NGC|IC|UGC|UGCA|PGC|ESO|MCG|CGCG|Mrk|IRAS|2MASX?|ungc)\s*-?\s*\d/i;
+const galaxyLabelKey = (o) => (isMilkyWay(o) ? -1 : (GALAXY_CATALOGUE_NAME.test(o.name || '') ? 1000 : 0) + (o.render && Number.isFinite(o.render.mag) ? o.render.mag : 30));
+
+/** D_adopted / D_published when the paper's distance is known (the exact factor), else the mass ratio; null when neither is usable. */
+function rescaleFactor(dist, mass, mpub, dpub) {
+  const d = pcExact(dist), dp = dpub && Number.isFinite(dpub.v) ? pcExact(unitScaled(dpub, 'pc') || dpub) : null;
+  if (d > 0 && dp > 0) return d / dp;
+  return hasV(mass) && hasV(mpub) && mpub.v > 0 ? mass.v / mpub.v : null;
+}
+const kpcOrMpc = (q) => {   // a distance Quantity in kpc below 1 Mpc, else in Mpc
+  const pq = unitScaled(q, 'pc');
+  if (!pq) return 'n/a';
+  return pq.v < 1e6 ? fq(pq, 'kpc', { scale: 1e-3 }) : fq(pq, 'Mpc', { scale: 1e-6 });
+};
+/** Which catalogue a distance came from, by its src: 'Cosmicflows-4' | 'UNGC' | 'McConnachie 2012' | 'curated' | null. */
+const distCatalogue = (src) => (/Cosmicflows-4|CF4/i.test(src || '') ? 'Cosmicflows-4' : /UNGC/.test(src || '') ? 'UNGC' : /McConnachie/i.test(src || '') ? 'McConnachie 2012'
+  : /Pietrzy|Graczyk/.test(src || '') ? 'curated' : null);
+
+function galaxyCard(o, ctx) {
+  if (isMilkyWay(o)) return milkyWayCard(o, ctx);
+  const f = num(ctx), p = o.position || {}, d = p.dist, dirOnly = !d, ang = (o.size && o.size.angular) || {}, rows = [], notes = [];
+  const ty = prop(o, 'type'), hub = prop(o, 'hubble');
+  rows.push(['Type', (ty && ty.v) || 'Galaxy', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
+  if (hub && hub.v) rows.push(['Morphology', String(hub.v), hub.tier || 'catalogue', srcOf(hub)]);
+  const dc = d ? distCatalogue(d.src) : null;
+  if (dirOnly) rows.push(['Distance', 'unknown · drawn on the sky as seen from the Sun', 'catalogue', 'no distance in the adopted catalogues']);
+  else rows.push(qtyRow(`Distance (${[p.method ? methodWord(p.method) : null, dc].filter(Boolean).join(', ') || 'catalogue'})`, d, (q) => kpcOrMpc(q), 'measured'));
+  for (const a of Array.isArray(o.alt_distances) ? o.alt_distances : []) {
+    if (!a || !hasV(a.dist)) continue;
+    rows.push(['Other distances · not used', `${methodWord(a.method)}: ${kpcOrMpc(a.dist)} · ${a.reason || 'not used'}`, a.dist.tier || 'measured', srcOf(a.dist)]);
+  }
+  const vh = prop(o, 'v_helio'), z = prop(o, 'redshift'), vc = prop(o, 'v_cmb');
+  if (hasV(vh)) rows.push(['Velocity', `${fq(vh, 'km/s')} (heliocentric)${hasV(z) ? ` · z ${fmtNum(z.v, 3)}` : ''}`, vh.tier || 'catalogue', srcOf(vh)]);
+  if (hasV(vc)) rows.push(['Velocity (CMB frame)', fq(vc, 'km/s'), vc.tier || 'inferred', srcOf(vc)]);
+  if (hasV(ang.major)) {
+    const sz = hasV(ang.minor) ? `${arcminText(ang.major, f)} × ${arcminText(ang.minor, f)}` : `${arcminText(ang.major, f)} across`;
+    rows.push(['Angular size', `${sz}, ${hasV(ang.pa) ? `PA ${f(ang.pa.v)}°` : 'PA unknown'}`, ang.major.tier || 'catalogue', srcOf(ang.major)]);
+  } else rows.push(['Angular size', 'n/a', 'catalogue', null]);
+  const rad = !dirOnly && o.size && unitScaled(o.size.radius, 'pc');
+  if (rad) rows.push(['Diameter (from angular size and distance)', fq(rad, 'kpc', { scale: 2e-3 }), rad.tier || 'inferred', srcOf(rad)]);
+  const mb = prop(o, 'mag_b'); if (hasV(mb)) rows.push(['B magnitude', fq(mb, 'mag'), mb.tier || 'catalogue', srcOf(mb)]);
+  const sb = prop(o, 'surface_brightness'); if (hasV(sb)) rows.push(['Surface brightness', fq(sb, 'mag/arcsec²'), sb.tier || 'catalogue', srcOf(sb)]);
+  rows.push(...childRows(ctx));
+  if (!dirOnly) rows.push(...fromYouRow(ctx));
+  rows.push(['Look', 'illustrative, generated from its type and brightness', 'illustrative', 'colour, arms, bar and the tilt towards you are drawn by the renderer, not catalogued']);
+  const ungcOnly = /^ungc:/.test(o.id || ''), credits = ungcOnly ? [UNGC_CREDIT] : [NEBULA_CREDIT];
+  if (dc === 'Cosmicflows-4') credits.push(CF4_CREDIT);
+  else if (dc === 'UNGC' && !credits.includes(UNGC_CREDIT)) credits.push(UNGC_CREDIT);
+  else if (dc === 'McConnachie 2012') credits.push(MCCONNACHIE_CREDIT);
+  else if (dc === 'curated') credits.push('curated (Pietrzyński et al. 2019; Graczyk et al. 2020)');
+  rows.push(['Data', credits.join('; '), 'catalogue', ungcOnly ? 'https://cdsarc.cds.unistra.fr/viz-bin/cat/J/AJ/145/101' : 'https://creativecommons.org/licenses/by-sa/4.0/']);
+  const m = p.method;
+  if (dirOnly) notes.push('No distance is known, so it is drawn at infinity in its catalogue direction. It fades when you fly far from the Sun.');
+  else if (m === 'redshift') notes.push('From its velocity with H0 = 74.6 km/s/Mpc (Cosmicflows-4 scale) and a 300 km/s allowance for its own motion; Planck\'s 67.4 would place it about 11 % farther.');
+  else if (m === 'group-member') {
+    const cl = /([A-Z][a-z]+) cluster/.exec(d.src || ''), gr = /group\s+(\d+)/i.exec(d.src || '');
+    notes.push(`Placed at the distance of ${cl ? `the ${cl[1]} cluster` : 'its galaxy cluster'}${gr ? ` (Cosmicflows-4 group ${gr[1]})` : ''}, because its velocity mostly reflects its motion inside the cluster.`);
+  } else if (DERIVED_METHODS.includes(m)) notes.push(`A derived distance (${methodWord(m)}), so its marker is hollow and its outline dashed.`);
+  if (d && dc === 'UNGC' && !Number.isFinite(d.lo)) notes.push('UNGC gives no uncertainty for this distance and rounds it to 0.01 Mpc, so none is shown.');
+  if (hasV(ang.major) && !hasV(ang.pa)) notes.push('The catalogue gives no orientation, so the glow is drawn at an arbitrary angle and the Evidence outline is a dashed circle.');
+  return finish(ctx, { title: o.name, subtitle: (ty && ty.v) || 'Galaxy', rows, notes: notes.length ? notes : null });
+}
+/** The 'Black holes · N' row of a galaxy card, from ctx.children (the records whose parent is the galaxy); none without a black hole. */
+function childRows(ctx) {
+  const kids = Array.isArray(ctx.children) ? ctx.children.filter((k) => k && k.kind === 'black_hole') : [];
+  if (!kids.length) return [];
+  const tiers = [];
+  const lines = kids.map((k) => { const m = prop(k, 'mass'); if (m) tiers.push(m.tier); return [k.name, hasV(m) ? fq(m, 'M☉') : ''].filter(Boolean).join(' · '); });
+  return [[`Black holes · ${kids.length}`, lines.join('; '), worstTier(tiers), null]];
+}
+
+function milkyWayCard(o, ctx) {
+  const d = o.position && o.position.dist, rows = [], P = (k) => prop(o, k);
+  rows.push(qtyRow('Distance to the centre (R0)', d, (q) => kpcOrMpc(q), 'measured'));
+  const ra = P('ngp_ra'), dec = P('ngp_dec'), node = P('l_node');
+  if (hasV(ra) && hasV(dec)) rows.push(['Plane (IAU convention)', `north pole at RA ${fmtNum(ra.v, 8)}°, Dec ${dec.v >= 0 ? '+' : '−'}${fmtNum(Math.abs(dec.v), 8)}°${hasV(node) ? `; node at l = ${fmtNum(node.v, 7)}°` : ''}`, ra.tier || 'catalogue', srcOf(ra)]);
+  const kpc = (q) => fq(q, 'kpc', { scale: 1e-3 }), pcs = (q) => fq(q, 'pc');
+  for (const [label, key, fmt] of [['Sun\'s height above the midplane', 'sun_height', pcs], ['Thin disc scale length', 'thin_disc_scale_length', kpc], ['Thin disc scale height', 'thin_disc_scale_height', pcs],
+    ['Thick disc scale length', 'thick_disc_scale_length', kpc], ['Thick disc scale height', 'thick_disc_scale_height', pcs], ['Bar half-length', 'bar_half_length', kpc],
+    ['Bar angle (from the Sun–centre line)', 'bar_angle', (q) => fq(q, '°')], ['Stellar mass', 'stellar_mass', (q) => fq(q, 'M☉')]]) {
+    const q = P(key); if (hasV(q)) rows.push(qtyRow(label, q, fmt, 'measured'));
+  }
+  rows.push(...childRows(ctx));
+  rows.push(...fromYouRow(ctx));
+  rows.push(['Look', 'illustrative: a generic barred spiral drawn to the measured sizes', 'illustrative', 'the arms, the colours and the brightness are drawn by the renderer, not catalogued']);
+  rows.push(['Data', 'GRAVITY Collaboration 2022 (centre); Bland-Hawthorn & Gerhard 2016 (sizes); ESA 1997, Hipparcos (plane)', 'catalogue', srcOf(d)]);
+  const notes = ['The distance to the centre is the same value Sgr A*\'s card shows.',
+    'The drawn plane is the IAU definition of Galactic coordinates; it passes about 7 pc below the Sun, beside the measured height above.',
+    'The disc is drawn out to 6 scale lengths; there is no evidence for an edge.'];
+  return finish(ctx, { title: o.name, subtitle: 'our Galaxy', rows, notes });
+}
+
 const ACCRETING = /accret/i, NOT_ACCRETING = /dormant|no accretion/i;
 /** True for an accreting black hole (an accretion disc is drawn): state 'X-ray binary (accreting)', 'low-luminosity accretion'; not 'dormant: no accretion detected'. */
 export function isAccreting(o) { const s = String((prop(o, 'state') || {}).v || ''); return ACCRETING.test(s) && !NOT_ACCRETING.test(s); }
@@ -415,8 +587,12 @@ function blackHoleCard(o, ctx) {
   const ty = prop(o, 'type'), st = prop(o, 'state'), mass = prop(o, 'mass'), r = o.size && o.size.radius;
   rows.push(['Type', (ty && ty.v) || 'black hole', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (st) rows.push(['State', String(st.v), st.tier || 'catalogue', srcOf(st)]);
-  rows.push(qtyRow('Mass', mass, (q) => fq(q, 'M☉'), 'measured'));
-  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
+  const smbh = isSupermassive(o), mpub = prop(o, 'mass_published'), dpub = prop(o, 'dist_published'), ring = prop(o, 'ring_diameter');
+  const factor = smbh && hasV(mpub) && hasV(mass) ? rescaleFactor(p.dist, mass, mpub, dpub) : null, rescaled = factor != null && Math.abs(factor - 1) > 1e-9;
+  rows.push(qtyRow(rescaled ? `Mass (rescaled ×${Number(factor.toPrecision(5))})` : 'Mass', mass, (q) => fq(q, 'M☉'), 'measured'));
+  if (smbh && hasV(mpub)) rows.push(qtyRow('Published mass · not used', mpub, (q) => fq(q, 'M☉'), 'measured'));
+  if (smbh && hasV(dpub)) rows.push(qtyRow('Published distance · not used', dpub, (q) => fq(q, dpub.unit || 'pc'), 'measured'));
+  if (!hosted) { const dq = unitScaled(p.dist, 'pc') || p.dist; rows.push(qtyRow(p.method ? `Distance (${smbh ? methodWord(p.method) : p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
   else {
     const h = ctx.hostRecord && ctx.hostRecord.position && ctx.hostRecord.position.dist, hq = unitScaled(h, 'pc');
     const pcs = place && place.galPc ? Math.hypot(...place.galPc) : null;
@@ -424,6 +600,7 @@ function blackHoleCard(o, ctx) {
     else rows.push(['Distance (its companion\'s)', Number.isFinite(pcs) ? `${f(pcs)} pc` : 'n/a', 'inferred', 'the distance of its companion star']);
   }
   rows.push(['Event horizon (r_s)', kmText(r), (r && r.tier) || 'inferred', (r && r.src) || 'Schwarzschild radius from the mass (non-rotating)']);
+  if (smbh && hasV(ring)) rows.push(['Ring diameter', fq(ring, 'μas', { scale: 1e6 }), ring.tier || 'measured', srcOf(ring)]);
   if (hosted) {
     rows.push(qtyRow('Orbital period', el.period_d, (q) => fq(q, 'd'), 'measured'));
     const e = el.e, assumedE = !hasV(e) || e.tier === 'illustrative';
@@ -440,6 +617,10 @@ function blackHoleCard(o, ctx) {
   const notes = [];
   if (ctx.lensing && ctx.lensing.enlarged) notes.push(enlargementNote(ctx.lensing));
   notes.push('The disc and ring are illustrative.');
+  if (smbh) {
+    if (rescaled) notes.push(`The mass paper assumed ${hasV(dpub) ? fq(dpub, dpub.unit || 'Mpc') : 'another distance'}; the galaxy's catalogue distance is used so the black hole sits at its galaxy's centre, and a dynamical mass scales with the distance, so it is rescaled by ×${Number(factor.toPrecision(5))}.`);
+    const mn = prop(o, 'mass_note'); if (mn && typeof mn.v === 'string' && mn.v) notes.push(mn.v);
+  }
   if (hosted) {
     if ((p.tier || 'illustrative') === 'illustrative') notes.push('Where it is drawn on its orbit is illustrative: the orbit\'s orientation on the sky is not known.');
     else if (p.src) notes.push(`Orbit: ${p.src}.`);
@@ -536,6 +717,7 @@ registerLayer({ id: 'clusters', label: 'Star clusters', group: 'beyond' });
 registerLayer({ id: 'clusterCandidates', label: 'Include candidates', group: 'beyond', on: false, parent: 'clusters' });
 registerLayer({ id: 'nebulae', label: 'Nebulae', group: 'beyond' });
 registerLayer({ id: 'blackHoles', label: 'Black holes', group: 'beyond' });
+registerLayer({ id: 'galaxies', label: 'Galaxies', group: 'beyond' });   // Phase 3; the Milky Way billboard follows this layer, the supermassive black holes follow blackHoles
 
 registerKind({ kind: 'sun', layer: 'planets', noun: ['sun', 'suns'], frames: { galaxy: 'marker' }, galaxyScope: 'sky', pick: { priority: 10 },
   label: { key: () => 0, max: null, hideOverDiscPx: null }, card: sunCard, arriveAu: radiusAu, color: () => [1.0, 0.95, 0.8], pointSize: () => 6.5, markerPx: () => 6 });
@@ -557,12 +739,16 @@ registerKind({ kind: 'cluster', layer: 'clusters', noun: ['star cluster', 'star 
   arrivePc: (o) => 2 * (toPc(o.size && o.size.radius) || 0), color: clusterRgb, markerPx: () => 4,
   visible: (o, { evidence, layers } = {}) => !(evidence && o.evidence === 'illustrative')
     && !(prop(o, 'quality') && prop(o, 'quality').v === 'candidate' && !(layers && layers.clusterCandidates === true)) });
-registerKind({ kind: 'nebula', layer: 'nebulae', noun: ['nebula', 'nebulae'], frames: { galaxy: 'billboard' }, billboard: 'nebula', galaxyScope: 'cone',
+registerKind({ kind: 'nebula', layer: 'nebulae', noun: ['nebula', 'nebulae'], frames: { galaxy: 'billboard' }, billboard: 'nebula', galaxyScope: 'cone', skyFadePc: 800,
   pick: { priority: 26, marker: 17 }, label: { key: nebulaLabelKey, max: 12, hideOverDiscPx: null }, card: nebulaCard, go: 'fly-galaxy',
   arrivePc: (o) => 3 * (nebulaSemiMajorPc(o) || 0), color: (o) => NEBULA_RGB[nebulaLook(o)].slice(), markerPx: () => 4 });
 registerKind({ kind: 'black_hole', layer: 'blackHoles', noun: ['black hole', 'black holes'], hosted: true,
-  frames: { system: (o) => (isHostedBh(o) ? 'lensing' : null), galaxy: (o) => (isHostedBh(o) ? 'marker' : 'lensing') }, galaxyScope: 'cone',
+  frames: { system: (o) => (isHostedBh(o) ? 'lensing' : null), galaxy: (o) => (isHostedBh(o) ? 'marker' : 'lensing'), cosmos: (o) => (isSupermassive(o) ? 'lensing' : null) }, galaxyScope: 'cone',
   pick: { priority: 12, marker: 15 }, label: { key: () => 15, max: 12, hideOverDiscPx: null }, card: blackHoleCard, arriveAu: () => 0, arrivePc: () => 2, go: 'fly-galaxy',
   color: () => [0.78, 0.72, 1.0], pointSize: () => 5, markerPx: () => 5 });
+registerKind({ kind: 'galaxy', layer: 'galaxies', noun: ['galaxy', 'galaxies'], frames: { galaxy: 'billboard', cosmos: 'billboard' },
+  billboard: (o) => (isMilkyWay(o) ? 'milky_way' : 'galaxy'), galaxyScope: 'sky', skyFadePc: 1e5,
+  pick: { priority: 27, marker: 18 }, label: { key: galaxyLabelKey, max: 12, hideOverDiscPx: null }, card: galaxyCard, go: 'fly-galaxy',
+  arrivePc: (o) => (isMilkyWay(o) ? 0 : 3 * (galaxySemiMajorPc(o) || 0)), color: galaxyRgb, markerPx: () => 4 });
 // Stars stay columnar and are handled by scene3d.js; this entry gives them an id for dispatch, a priority and a noun.
 registerKind({ kind: 'star', layer: null, builtin: true, noun: ['star', 'stars'], frames: { system: 'point', galaxy: 'point' }, pick: { priority: 20 } });

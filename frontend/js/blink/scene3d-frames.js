@@ -6,7 +6,7 @@
 // The camera holds { frame, host, pos, vel, ... } as JS doubles, in the units of its level:
 //   system - AU, origin at a host star; host = { idx, key, name, pc: [x, y, z] } (its position in the galaxy frame, pc).
 //   galaxy - parsecs, origin at the Sun (the star data's own frame); host is null.
-//   (cosmos - Mpc, origin at the Sun; a Phase 3 level, only driven by tests for now.)
+//   cosmos - Mpc, origin at the Sun (Phase 3, docs/object-framework.md section 18.5). Entered beyond 60 kpc from the Sun, left below 40 kpc.
 // All conversions walk through parsecs in doubles: worldPc(cam) is the camera's place in pc (Sun at the origin), and
 // toFrame(pc, level, host) maps it back into a level. So the camera never moves in the world when its frame changes.
 // Rendering is camera-relative: relFromCam() subtracts in doubles, and only that small vector reaches the GPU.
@@ -20,12 +20,17 @@
 
 export const AU_PER_PC = 206264.80624709636;
 
-/** The levels, innermost first. Phase 3 adds a 'cosmos' row (see docs/object-framework.md section 8). */
+/**
+ * The levels, innermost first: system (AU, hosted), galaxy (pc), cosmos (Mpc). Phase 3 (section 18.5.1): the galaxy row's speed caps
+ * (range.max, autoPc.max) are 1e8 pc/s, the same as cosmos, so the speed is one function of the scene on both sides of the switch.
+ */
 export const LEVELS = [
   { name: 'system', unit: 'AU', perPc: AU_PER_PC, enterPc: 0.02, leavePc: 0.03, hosted: true,   // enter a star's system closer than 0.02 pc (about 4,100 AU), leave beyond 0.03
     range: { min: 1e-6, max: 1e3, speed: 0.2 }, autoPc: { min: 1e-12, max: 100 }, fov: 60, near: 1e-9, far: 1e12 },
   { name: 'galaxy', unit: 'pc', perPc: 1, enterPc: 0, leavePc: 0, hosted: false,
-    range: { min: 0.01, max: 1e4, speed: 2 }, autoPc: { min: 1e-12, max: 100 }, fov: null, near: 1e-9, far: 1e9 },
+    range: { min: 0.01, max: 1e8, speed: 2 }, autoPc: { min: 1e-12, max: 1e8 }, fov: null, near: 1e-9, far: 1e9 },
+  { name: 'cosmos', unit: 'Mpc', perPc: 1e-6, enterPc: 6e4, leavePc: 4e4, hosted: false,   // out beyond 60 kpc from the Sun, back in below 40 kpc
+    range: { min: 1e-6, max: 100, speed: 0.01 }, autoPc: { min: 1e-12, max: 1e8 }, fov: null, near: 1e-9, far: 1e5 },
 ];
 
 export const toSystemPos = (pc, hostPc) => [(pc[0] - hostPc[0]) * AU_PER_PC, (pc[1] - hostPc[1]) * AU_PER_PC, (pc[2] - hostPc[2]) * AU_PER_PC];
@@ -108,7 +113,9 @@ export function makeFrames(levels) {
     enterLevel(cam, inner.name, { idx: best.idx, key: best.key, name: best.name, pc: best.pc });
     return 'enter';
   }
-  return { levels, level, unitsPerPc, worldPc, toPc, toFrame, relFromCam, hostDistPc, enterLevel, leaveLevel, stepFrame, rangeOf: (name) => level(name).range };
+  /** True when the named level is a hosted one (its origin is a host star): only 'system' in the default table. Unhosted levels draw objects the same way. */
+  const isHosted = (name) => level(name).hosted;
+  return { levels, level, isHosted, unitsPerPc, worldPc, toPc, toFrame, relFromCam, hostDistPc, enterLevel, leaveLevel, stepFrame, rangeOf: (name) => level(name).range };
 }
 
 // The default two-level instance, under the names the renderer and the tests already use.
@@ -118,6 +125,8 @@ export const LEAVE_PC = LEVELS[0].leavePc;    // and leave it beyond this (hyste
 export const { unitsPerPc, worldPc, relFromCam, hostDistPc, stepFrame } = DEFAULT;
 export const enterSystem = (cam, host) => DEFAULT.enterLevel(cam, 'system', host);
 export const leaveSystem = (cam) => DEFAULT.leaveLevel(cam);
-/** The level with this frame name ('system' or 'galaxy'), and its speed range { min, max, speed }. */
+/** isHosted('system') -> true; isHosted('galaxy') and isHosted('cosmos') -> false (section 18.5.3: objects are drawn in every unhosted level). */
+export const isHosted = (frameName) => DEFAULT.isHosted(frameName);
+/** The level with this frame name ('system', 'galaxy' or 'cosmos'), and its speed range { min, max, speed }. */
 export const levelOf = (frameName) => DEFAULT.level(frameName);
 export const rangeOf = (frameName) => DEFAULT.rangeOf(frameName);

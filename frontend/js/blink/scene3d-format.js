@@ -21,8 +21,18 @@
 //                                               Gyr -> Myr); unit is appended with a space, except '°' which is appended directly
 //   roundUncertainty(e) -> { place, e }         place: the power of ten of the last kept digit; e: e rounded there
 //   superscript(n) -> '⁶', '⁻¹²'
+//
+// PHASE 3 (docs/object-framework.md section 18.5.2): HUD distances and speeds, chosen by VALUE, not by frame, so nothing jumps when the camera
+// switches level. Both take parsecs (and pc per second) whatever the camera's frame units are.
+//   fmtDistPc(pc) -> '3.2 AU' (below 0.02 pc) | '350 pc · 1,140 ly' | '49.4 kpc · 161,000 ly' | '16.9 Mpc · 55.0 million ly' ('… billion ly' from
+//                    1,000 million); 3 significant figures; 'n/a' when not finite or negative
+//   fmtSpeedPc(pcPerS) -> '0' | '206 AU/s · ≈ 0.4× c' | '2 pc/s · ≈ 6.5 hundred million× c'-style: AU/s (below 0.02 pc/s), pc/s, kpc/s or Mpc/s, then ' · ≈ ' and fmtTimesC
+//   LY_PER_PC, AU_PER_PC re-stated here are the same constants as scene3d-math.js and scene3d-frames.js
+
+import { fmtTimesC, C_PC_PER_S } from './scene3d-nav.js';
 
 export const SCI_HI = 1e5, SCI_LO = 1e-3;
+const AU_PER_PC = 206264.80624709636, LY_PER_PC = 3.2615638;
 const fin = (x) => typeof x === 'number' && Number.isFinite(x);
 
 export const fmtNum = (v, sig = 3) => (fin(v) ? v.toLocaleString('en-US', { maximumSignificantDigits: sig }) : 'n/a');
@@ -74,3 +84,30 @@ export function fmtQuantity(q, unit = '', { sig = 3, scale = 1 } = {}) {
 }
 // An error rounds to the kept place, but never to zero: a nonzero error that small shows as one unit of the last digit.
 const errAt = (e, place) => (e > 0 ? Math.max(roundTo(e, place), 10 ** place) : 0);
+
+// ------------------------------------------------------------------ Phase 3: HUD distances and speeds (section 18.5.2)
+const sig3 = (v) => Number(v).toPrecision(3);
+const lyText = (pc) => {   // light-years of a distance in pc: '1,140 ly', '161,000 ly', '55.0 million ly', '1.23 billion ly'
+  const ly = pc * LY_PER_PC;
+  if (ly < 9.995e5) return `${fmtNum(ly)} ly`;
+  if (ly < 9.995e8) return `${sig3(ly / 1e6)} million ly`;
+  return `${sig3(ly / 1e9)} billion ly`;
+};
+/** A length in pc as HUD text, by value: AU, pc, kpc or Mpc, with light-years beside it (none beside AU). */
+export function fmtDistPc(pc) {
+  if (!fin(pc) || pc < 0) return 'n/a';
+  if (pc < 0.02) return `${fmtNum(pc * AU_PER_PC)} AU`;
+  if (pc < 999.5) return `${fmtNum(pc)} pc · ${lyText(pc)}`;
+  if (pc < 999.5e3) return `${fmtNum(pc / 1e3)} kpc · ${lyText(pc)}`;
+  return `${fmtNum(pc / 1e6)} Mpc · ${lyText(pc)}`;
+}
+/** A speed in pc per second as HUD text, by value: AU/s, pc/s, kpc/s or Mpc/s, then the multiple of light speed. '0' for no motion. */
+export function fmtSpeedPc(pcPerS) {
+  if (!fin(pcPerS) || pcPerS < 0) return 'n/a';
+  if (pcPerS === 0) return '0';
+  const c = fmtTimesC(pcPerS / C_PC_PER_S), tail = c ? ` · ≈ ${c}` : '';
+  if (pcPerS < 0.02) return `${fmtNum(pcPerS * AU_PER_PC)} AU/s${tail}`;
+  if (pcPerS < 999.5) return `${fmtNum(pcPerS)} pc/s${tail}`;
+  if (pcPerS < 999.5e3) return `${fmtNum(pcPerS / 1e3)} kpc/s${tail}`;
+  return `${fmtNum(pcPerS / 1e6)} Mpc/s${tail}`;
+}

@@ -104,21 +104,23 @@ test('level of detail and exposure', () => {
 });
 
 // ---------------------------------------------------------------- table-driven levels (three-level table)
-const COSMOS = { name: 'cosmos', unit: 'Mpc', perPc: 1e-6, enterPc: 6e4, leavePc: 4e4, hosted: false,
-  range: { min: 1e-6, max: 100, speed: 0.01 }, autoPc: { min: 1, max: 1e8 }, fov: null, near: 1e-9, far: 1e9 };
-const F3 = F.makeFrames([...F.LEVELS, COSMOS]);
+const F3 = F.makeFrames(F.LEVELS);   // the real three-level table (section 18.5.6)
 const sunStar = (d, key = 'sun') => ({ idx: 0, key, name: key, pc: [0, 0, 0], distPc: d });
 
 test('LEVELS holds today\'s values and the old exports are the two-level instance', () => {
-  assert.deepEqual(F.LEVELS.map((l) => l.name), ['system', 'galaxy']);
+  assert.deepEqual(F.LEVELS.map((l) => l.name), ['system', 'galaxy', 'cosmos']);
   assert.deepEqual(F.rangeOf('system'), { min: 1e-6, max: 1e3, speed: 0.2 });
-  assert.deepEqual(F.rangeOf('galaxy'), { min: 0.01, max: 1e4, speed: 2 });
+  assert.deepEqual(F.rangeOf('galaxy'), { min: 0.01, max: 1e8, speed: 2 });
+  assert.deepEqual(F.rangeOf('cosmos'), { min: 1e-6, max: 100, speed: 0.01 });
   assert.equal(F.levelOf('system').fov, 60);
   assert.equal(F.levelOf('system').far, 1e12); assert.equal(F.levelOf('galaxy').far, 1e9);
-  assert.deepEqual(F.levelOf('galaxy').autoPc, { min: 1e-12, max: 100 });
+  assert.deepEqual(F.levelOf('galaxy').autoPc, { min: 1e-12, max: 1e8 });
+  assert.deepEqual(F.levelOf('cosmos').autoPc, { min: 1e-12, max: 1e8 });
+  assert.deepEqual([F.levelOf('cosmos').unit, F.levelOf('cosmos').perPc, F.levelOf('cosmos').enterPc, F.levelOf('cosmos').leavePc, F.levelOf('cosmos').far], ['Mpc', 1e-6, 6e4, 4e4, 1e5]);
+  assert.equal(F.isHosted('system'), true); assert.equal(F.isHosted('galaxy'), false); assert.equal(F.isHosted('cosmos'), false); assert.throws(() => F.isHosted('nowhere'));
   assert.equal(F.ENTER_PC, 0.02); assert.equal(F.LEAVE_PC, 0.03);
   assert.equal(F.unitsPerPc({ frame: 'system' }), F.AU_PER_PC); assert.equal(F.unitsPerPc({ frame: 'galaxy' }), 1);
-  assert.throws(() => F.levelOf('cosmos'));
+  assert.equal(F.unitsPerPc({ frame: 'cosmos' }), 1e-6);
 });
 
 test('three levels: galaxy to cosmos and back, with hysteresis', () => {
@@ -173,7 +175,32 @@ test('three levels: relFromCam and unitsPerPc in the cosmos frame', () => {
   assert.equal(F3.hostDistPc(cam), Infinity);
 });
 
-test('the two-level default ignores the outer level: no cosmos switch however far away', () => {
+test('the default instance is the three-level table: far enough out the camera is in cosmos', () => {
   const cam = F.makeCam({ pos: [9e9, 0, 0] });
+  assert.equal(F.stepFrame(cam, []), 'leave'); assert.equal(cam.frame, 'cosmos');
+});
+
+test('real LEVELS: 60 kpc out, 40 kpc back, no flapping at 59 or 50 kpc, velocity x 1e-6, worldPc to 1e-9 across system, galaxy, cosmos, galaxy', () => {
+  const cam = F.makeCam({ pos: [5.9e4, 0, 0] }); cam.vel = [3, 0, 0];
   assert.equal(F.stepFrame(cam, []), null); assert.equal(cam.frame, 'galaxy');
+  cam.pos = [5.9e4 + 0.2e4, 0, 0]; const w0 = F.worldPc(cam);
+  assert.equal(F.stepFrame(cam, []), 'leave'); assert.equal(cam.frame, 'cosmos');
+  assert.ok(Math.abs(cam.vel[0] - 3e-6) < 1e-18); assert.ok(rel(F.worldPc(cam), w0) < 1e-9);
+  for (const d of [5.9e4, 5e4, 4.01e4]) { cam.pos = [d * 1e-6, 0, 0]; assert.equal(F.stepFrame(cam, []), null, `stays in cosmos at ${d}`); assert.equal(cam.frame, 'cosmos'); }
+  cam.pos = [3.9e4 * 1e-6, 0, 0]; assert.equal(F.stepFrame(cam, []), 'enter'); assert.equal(cam.frame, 'galaxy');
+  for (const d of [3.9e4, 5.9e4, 5e4]) { cam.pos = [d, 0, 0]; assert.equal(F.stepFrame(cam, []), null, `stays in galaxy at ${d}`); assert.equal(cam.frame, 'galaxy'); }
+  const hostPc = [60500.123456789, -11000.5, 4000.25], c2 = F.makeCam({ pos: [hostPc[0] + 0.01, hostPc[1], hostPc[2]] }), before = F.worldPc(c2);
+  F.makeFrames(F.LEVELS).enterLevel(c2, 'system', { idx: 1, key: 'h', name: 'h', pc: hostPc });
+  for (const to of ['galaxy', 'cosmos', 'galaxy']) { F3.enterLevel(c2, to); assert.ok(rel(F3.worldPc(c2), before) < 1e-9, to); }
+});
+
+test('float32 relFromCam at 16.9 Mpc keeps a body 1 kpc from the camera to 1e-6 (section 18.5.6)', () => {
+  const camPc = [10139999.37, 11829999.61, 6305389.43], body = [camPc[0] + 700.5, camPc[1] - 599.3, camPc[2] + 500.4];
+  const cam = F.makeCam({ pos: F3.toFrame(camPc, 'cosmos'), frame: 'cosmos' }), r = F3.relFromCam(cam, body);
+  const want = [700.5e-6, -599.3e-6, 500.4e-6];
+  assert.ok(Math.hypot(...r.map((v, i) => v - want[i])) / Math.hypot(...want) < 1e-9, 'doubles');
+  const r32 = r.map(Math.fround);   // the per-frame float32 cast of a camera-relative vector
+  assert.ok(Math.hypot(...r32.map((v, i) => v - want[i])) / Math.hypot(...want) < 1e-6, 'float32');
+  const abs32 = body.map(Math.fround).map((v, i) => v - Math.fround(camPc[i]));   // what a static float32 buffer would give
+  assert.ok(Math.hypot(...abs32.map((v, i) => v - [700.5, -599.3, 500.4][i])) / Math.hypot(700.5, 599.3, 500.4) > 1e-4, 'sanity: a static float32 buffer would not do');
 });

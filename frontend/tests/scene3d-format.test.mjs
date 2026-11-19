@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtQuantity, fmtNum, roundUncertainty, superscript, SCI_HI, SCI_LO } from '../js/blink/scene3d-format.js';
+import { fmtQuantity, fmtNum, roundUncertainty, superscript, SCI_HI, SCI_LO, fmtDistPc, fmtSpeedPc } from '../js/blink/scene3d-format.js';
 import * as R from '../js/blink/scene3d-registry.js';
 import { fmtValue } from '../js/blink/scene3d-physics.js';
 
@@ -74,4 +74,23 @@ test('without an uncertainty the old behaviour is kept; string bounds pass throu
     size: { radius: { v: '< 1.2', unit: 'Rearth', tier: 'measured' } }, props: { mass: { v: '< 0.12', unit: 'Mjup', tier: 'measured' } } };
   const rows = R.kindSpec('exoplanet').card(o, { fromYou: null, evidence: false }).rows, row = (l) => rows.find((r) => r[0] === l)[1];
   assert.equal(row('Mass'), '< 0.12 Mj'); assert.equal(row('Radius'), '< 1.2 R⊕'); assert.equal(row('Orbital period'), '3.20 ± 0.10 d');
+});
+
+test('fmtDistPc chooses AU, pc, kpc or Mpc by value, with light-years beside', () => {
+  assert.equal(fmtDistPc(0.01), '2,060 AU');
+  assert.equal(fmtDistPc(350), '350 pc · 1,140 ly');
+  assert.equal(fmtDistPc(49400), '49.4 kpc · 161,000 ly');
+  assert.equal(fmtDistPc(16.86e6), '16.9 Mpc · 55.0 million ly');
+  assert.equal(fmtDistPc(1e9), '1,000 Mpc · 3.26 billion ly');
+  assert.equal(fmtDistPc(999.9), '1 kpc · 3,260 ly');          // no '1,000 pc'
+  assert.equal(fmtDistPc(NaN), 'n/a'); assert.equal(fmtDistPc(-1), 'n/a');
+});
+
+test('fmtSpeedPc: AU/s, pc/s, kpc/s, Mpc/s and the multiple of light speed', () => {
+  assert.equal(fmtSpeedPc(0), '0');
+  assert.match(fmtSpeedPc(0.001), /^206 AU\/s · ≈ /);
+  assert.match(fmtSpeedPc(2), /^2 pc\/s · ≈ .*× c$/);
+  assert.match(fmtSpeedPc(4.5e4), /^45 kpc\/s · ≈ .*× c$/);
+  assert.match(fmtSpeedPc(1.6e7), /^16 Mpc\/s · ≈ .*× c$/);
+  assert.equal(fmtSpeedPc(NaN), 'n/a');
 });

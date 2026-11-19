@@ -25,6 +25,14 @@ IRSA_TAP_SYNC = IRSA_BASE + "/TAP/sync"
 S3_BASE = _env("SPHEREX_S3_BASE", "https://nasa-irsa-spherex.s3.amazonaws.com/")
 URI_S3_STRIP_PREFIX = "ibe/data/spherex/"
 SESAME_URL = _env("SPHEREX_SESAME_URL", "https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/S")
+# Sesame fallbacks, tried in order only after an upstream failure of the one before (object framework §17.17):
+# the VizieR hosts at the SIMBAD mirror sites, Harvard (CfA) and IDIA (South Africa). SPHEREX_SESAME_MIRRORS
+# (comma-separated) replaces them; an empty value disables the fallback.
+SESAME_MIRRORS = tuple(u.strip() for u in _env(
+    "SPHEREX_SESAME_MIRRORS",
+    "https://vizier.cfa.harvard.edu/viz-bin/nph-sesame/-oxp/S,"
+    "https://vizier.idia.ac.za/viz-bin/nph-sesame/-oxp/S").split(",") if u.strip())
+SESAME_URLS = (SESAME_URL, *SESAME_MIRRORS)
 GAIA_TAP_SYNC = _env("SPHEREX_GAIA_TAP", "https://gea.esac.esa.int/tap-server/tap/sync")
 
 FRAMES_ADQL = (

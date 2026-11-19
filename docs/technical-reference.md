@@ -54,6 +54,7 @@ All URLs and tunables are in `backend/spherex_app/config.py`. Most of them can b
 | `SPHEREX_IRSA_BASE` | `https://irsa.ipac.caltech.edu` | IRSA base URL (TAP and cutout service) |
 | `SPHEREX_S3_BASE` | `https://nasa-irsa-spherex.s3.amazonaws.com/` | public S3 mirror of the Level-2 files |
 | `SPHEREX_SESAME_URL` | CDS Sesame endpoint | object name resolver used by `/api/resolve` |
+| `SPHEREX_SESAME_MIRRORS` | Harvard (CfA) and IDIA (South Africa) Sesame, comma-separated | fallbacks tried in order when the one before fails upstream; empty disables them |
 | `SPHEREX_GAIA_TAP` | ESA Gaia TAP sync endpoint | Gaia DR3 catalogue queries |
 | `SPHEREX_RETRY_BACKOFF` | 0.5 s | first delay between IRSA retries (capped exponential backoff) |
 | `SPHEREX_RESOLVE_TTL` | 86400 s | in-memory lifetime of a name resolution |

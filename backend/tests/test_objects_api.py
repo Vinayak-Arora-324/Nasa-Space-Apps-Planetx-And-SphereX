@@ -715,7 +715,7 @@ def test_an_empty_cone_still_gets_the_context_set_once_and_marked_out_of_cone(ph
     assert {"gal:milky_way", "ongc:ESO056-115", "ongc:NGC0292", "ongc:NGC0224", "ongc:NGC4486", "bh:Sgr A*"} <= set(ids)
     assert SMBH_IDS <= set(ids)
     sky = {o["id"] for o in j["objects"] if not o["in_cone"]}
-    assert len([i for i in sky if not i.startswith("bh:")]) == 162 and SMBH_IDS <= sky
+    assert len([i for i in sky if not i.startswith("bh:")]) == 161 and SMBH_IDS <= sky
     # a cone over M31: M31 is in the sky tile and inside the cone, and is still sent once
     ids = _ids(_kinds3(ra=10.6847, dec=41.2690, radius=3.0))
     assert ids.count("ongc:NGC0224") == 1 and len(ids) == len(set(ids))

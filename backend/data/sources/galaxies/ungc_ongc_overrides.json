@@ -1,5 +1,6 @@
 [
   {"ungc": "LMC", "ongc": "ESO056-115", "reason": "OpenNGC lists the Large Magellanic Cloud under its ESO number (addendum row)"},
   {"ungc": "SMC", "ongc": "NGC0292", "reason": "the Small Magellanic Cloud is NGC 292 in OpenNGC"},
+  {"ungc": "Fornax", "ongc": "ESO356-004", "reason": "the Fornax dwarf spheroidal (OpenNGC lists PGC 010074 and the name 'Fornax Dwarf Spheroidal'); the two catalogue centres are 4.7 arcmin apart, beyond the positional cap (browser check 2026-11-19)"},
   {"ungc": "Milky Way", "ongc": "gal:milky_way", "reason": "the curated record gal:milky_way; UNGC's 'geom' row at 0.01 Mpc is not used"}
 ]

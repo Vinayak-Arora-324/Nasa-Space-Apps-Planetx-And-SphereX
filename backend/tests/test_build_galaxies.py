@@ -180,11 +180,13 @@ def test_expected_merges_on_the_snapshot(committed):
         assert by_ongc[o]["rule"] == "identifier"
     assert (pairs["LMC"]["ongc"], pairs["LMC"]["rule"]) == ("ESO056-115", "override")
     assert (pairs["SMC"]["ongc"], pairs["SMC"]["rule"]) == ("NGC0292", "override")
+    assert (pairs["Fornax"]["ongc"], pairs["Fornax"]["rule"]) == ("ESO356-004", "override")   # one Fornax dSph, not two
+    assert "ungc:Fornax" not in committed["recs"]
     assert pairs["Milky Way"]["ongc"] == "gal:milky_way"
     assert "ungc:Milky Way" not in committed["recs"] and "ungc:MW" not in committed["recs"]
     assert not [r for r in committed["recs"] if "Milky Way" in r and r != "gal:milky_way"]
     rep = committed["report"]
-    assert rep["ungc_merges"]["identifier"] >= 193 and rep["ungc_merges"]["override"] == 3
+    assert rep["ungc_merges"]["identifier"] >= 193 and rep["ungc_merges"]["override"] == 4
     assert rep["ungc_milky_way_row_dropped"] is True
     assert rep["ungc_only"] == 869 - len(pairs) + 0 and rep["ungc_only"] == sum(1 for r in committed["recs"] if r.startswith("ungc:"))
     assert len(rep["ungc_merged_pairs"]) == len(pairs)
@@ -618,7 +620,7 @@ def test_vizier_urls_and_mirror_order():
 def test_report_counts_agree_with_the_records(committed):
     rep, recs = committed["report"], committed["recs"]
     n = len(recs)
-    assert rep["records_written"] == n == committed["manifest"]["count"] == 11450
+    assert rep["records_written"] == n == committed["manifest"]["count"] == 11449
     d = rep["distances"]
     assert sum(d["by_method"].values()) == n and sum(d["by_evidence"].values()) == n
     from collections import Counter

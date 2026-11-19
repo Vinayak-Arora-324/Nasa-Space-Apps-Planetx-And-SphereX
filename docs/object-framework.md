@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, awaiting approval.**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -1560,7 +1560,7 @@ camera comes within a few r50, where the member stars show the cluster. The Evid
 
 ## 17. Phase 2: nebulae and black holes (design)
 
-Status: **approved 2026-11-18, with the conditions recorded in §17.16** (they are already folded into the sections below).
+Status: **approved 2026-11-18, with the conditions recorded in §17.16** (they are already folded into the sections below); **implemented 2026-11-19** (§17.18).
 Sections of §1–§16 that Phase 2 changes carry a "Phase 2 change" note pointing here. Where this section and an earlier one
 disagree, this one wins.
 
@@ -2311,3 +2311,27 @@ The open questions Q1–Q5 were answered as follows, and each condition is folde
 - A mirror is tried only after an **upstream** failure of the one before (timeout, connection error or 5xx). "Not found" from a working Sesame is an answer, not a failure, so it is not retried elsewhere.
 - The response's `source` stays `"sesame"`; a new optional `mirror` field names the host that answered.
 - Tests (offline, with stubbed `get_text`): CDS down → CfA answers; CDS and CfA down → IDIA answers; "not found" from CDS → no further requests; all down → the same upstream error as today.
+
+### 17.18 Implementation notes (2026-11-19)
+
+**What changed from the design during implementation:**
+- **Direction-only radius guard.** It now allows a `measured` or `catalogue` radius (§17.7 item 2), because 19 NEA host stars carry one.
+- **Rosette distance.** It is Russeil's 1.9 kpc, not the 1.3–1.8 kpc the design expected. The link is right; see §17.4.
+- **Two extra overrides:** `Sh2-25 → NGC6523`, and Sh2-281's `russeil_complex` link (§17.4).
+- **Russeil 1° filter.** It measures great-circle separation, and drops 106 of 289 links.
+- **Black-hole values from the papers.** Every number in `black_holes.json` was re-read in the paper text. Cyg X-1's e is now Miller-Jones et al. 2021's 0.0189 (it was Orosz et al. 2011), and A0620-00's i is 50.98 ± 0.87 (it was rounded; §17.8).
+- **Gaia licence.** Gaia DR3 is CC BY-NC 3.0 IGO, so `bh-curated` carries a `credit` (§17.2).
+- **New unit `mas`.** Added to `UNITS` for `gaia_parallax`.
+- **Nebula quads.** They are drawn as their screen bounding box cut to the viewport, with each corner's ellipse coordinates mapped back from its pixel. Up close, clipped triangles showed a seam along the quad's diagonal.
+- **Fixtures follow the build** (§17.12 preamble):
+  - M57 `lo` is 761.4, from the unrounded e_plx;
+  - M42 and the Crab carry more props than §17.12 shows;
+  - Sgr A*'s r_s interval is 12,650,000–12,730,000 km (4 significant digits);
+  - the Gaia BH1 companion's `companion_mass` tier is `catalogue`;
+  - BH3's position tier is `inferred`;
+  - `src` strings are the long "cite (arXiv), where" form.
+
+**Open points found in the browser checks:**
+- **Stellar parameters of the companions.** A loaded Gaia companion's star card shows Gaia FLAME's single-star values where they exist. For BH2 that is a flagged FLAME mass of 2.60 M☉, while the black-hole card quotes El-Badry et al. 2023's 1.07 M☉. The existing merge rule keeps Gaia's value on a tier tie, and `prefer_record` replaces only the distance (approval condition 3). Whether the papers' values should win for these seven stars is a decision for the owner.
+- **Credits line.** It can overlap the nav buttons on narrow screens (not checked on mobile).
+- **Card rounding.** Cards round to 3 significant digits except narrow distance intervals, so Sgr A*'s mass shows as 4,300,000 M☉.

@@ -1,0 +1,112 @@
+{
+ "designations": [
+  "UGC 74",
+  "PGC 645"
+ ],
+ "evidence": "derived",
+ "host": null,
+ "id": "ongc:NGC0012",
+ "kind": "galaxy",
+ "name": "NGC 12",
+ "parent": null,
+ "position": {
+  "dec": 4.6125278,
+  "dist": {
+   "hi": 51.19,
+   "lo": 43.16,
+   "src": "Hubble flow from the heliocentric velocity v_helio (OpenNGC v20260501 RadVel, in props) moved to the CMB frame (v_cmb, in props) with the Planck 2018 solar dipole (369.82 km/s toward l 264.021, b 48.253); H0 = 74.6 km/s/Mpc (Cosmicflows-4 scale; Planck's 67.4 would place it about 11 % farther), q0 = -0.595, peculiar velocity 300 km/s (Cosmicflows-4 Sec. 13); the interval is the velocity uncertainty only (no H0 term)",
+   "tier": "inferred",
+   "unit": "Mpc",
+   "v": 47.18
+  },
+  "epoch": 2000.0,
+  "method": "redshift",
+  "model": "fixed",
+  "ra": 2.1864583,
+  "tier": "catalogue"
+ },
+ "props": {
+  "hubble": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "v": "Sc"
+  },
+  "mag_b": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "unit": "mag",
+   "v": 13.84
+  },
+  "mag_v": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "unit": "mag",
+   "v": 13.18
+  },
+  "redshift": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "v": 0.013049
+  },
+  "surface_brightness": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "unit": "mag/arcsec2",
+   "v": 23.3
+  },
+  "type": {
+   "src": "OpenNGC v20260501 (G)",
+   "tier": "catalogue",
+   "v": "Galaxy"
+  },
+  "v_cmb": {
+   "src": "v_helio + Planck 2018 solar dipole (369.82 km/s toward l 264.021, b 48.253)",
+   "tier": "inferred",
+   "unit": "km/s",
+   "v": 3527.7
+  },
+  "v_helio": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "unit": "km/s",
+   "v": 3886
+  }
+ },
+ "provenance": {
+  "catalogue": "OpenNGC + UNGC (J/AJ/145/101) + Cosmicflows-4 (J/ApJ/944/94) + McConnachie 2012 (J/AJ/144/4)",
+  "dataset": "galaxies",
+  "source": "static:galaxies",
+  "version": "OpenNGC v20260501 (36cb178a)"
+ },
+ "render": {
+  "mag": 13.84
+ },
+ "size": {
+  "angular": {
+   "major": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "arcmin",
+    "v": 1.52
+   },
+   "minor": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "arcmin",
+    "v": 1.21
+   },
+   "pa": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "deg",
+    "v": 127
+   }
+  },
+  "radius": {
+   "src": "half the catalogue major axis at the adopted distance",
+   "tier": "inferred",
+   "unit": "pc",
+   "v": 10430
+  }
+ }
+}

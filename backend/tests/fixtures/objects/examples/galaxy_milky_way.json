@@ -1,0 +1,129 @@
+{
+ "designations": [
+  "Galaxy",
+  "Milky Way (UNGC)"
+ ],
+ "evidence": "measured",
+ "host": null,
+ "id": "gal:milky_way",
+ "kind": "galaxy",
+ "name": "Milky Way",
+ "parent": null,
+ "position": {
+  "dec": -29.0078106,
+  "dist": {
+   "hi": 8286,
+   "lo": 8268,
+   "src": "GRAVITY Collaboration 2022, A&A 657, L12 (arXiv:2112.07478), Sec. 6 (conclusions), best fit of Sec. 4: R0 = 8277 ± 9 pc (statistical; systematic ≈ 30 pc)",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 8277
+  },
+  "epoch": 2000.0,
+  "method": "orbit-fit",
+  "model": "fixed",
+  "ra": 266.4168371
+ },
+ "props": {
+  "bar_angle": {
+   "hi": 29,
+   "lo": 25,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 4.2: 'The near side of the b/p bulge has its major axis in the first Galactic quadrant (0° < l < 90°). The bar angle between major axis and the Sun-Galactic center line ... is φbp = 27° ± 2°'; Sec. 4.3 gives the long bar 28°−33°",
+   "tier": "measured",
+   "unit": "deg",
+   "v": 27
+  },
+  "bar_half_length": {
+   "hi": 5200,
+   "lo": 4800,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 4.3 margin box: 'Rlb: 5.0 ± 0.2 kpc, bar half-length' (long bar)",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 5000
+  },
+  "l_node": {
+   "src": "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200, Vol. 1, Sec. 1.5.3, eq. 1.5.10: galactic longitude of the ascending node of the galactic plane on the ICRS equator, l_Omega = 32.93192 deg",
+   "tier": "catalogue",
+   "unit": "deg",
+   "v": 32.93192
+  },
+  "ngp_dec": {
+   "src": "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200, Vol. 1, Sec. 1.5.3, eq. 1.5.9: delta_G = +27.12825 deg",
+   "tier": "catalogue",
+   "unit": "deg",
+   "v": 27.12825
+  },
+  "ngp_ra": {
+   "src": "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200, Vol. 1, Sec. 1.5.3, eq. 1.5.9: north galactic pole in ICRS, alpha_G = 192.85948 deg ('to be regarded as exact quantities')",
+   "tier": "catalogue",
+   "unit": "deg",
+   "v": 192.85948
+  },
+  "stellar_mass": {
+   "hi": 60000000000,
+   "lo": 40000000000,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 6.4: 'our estimate of the total stellar mass in the Milky Way is M⋆ = 5±1×10^10 Msun'",
+   "tier": "measured",
+   "unit": "Msun",
+   "v": 50000000000
+  },
+  "sun_height": {
+   "hi": 30,
+   "lo": 20,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 3.3: 'we adopt here the best estimate from the complete SDSS photometric survey, i.e. z0 = 25 ± 5 pc (Jurić et al. 2008)'",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 25
+  },
+  "thick_disc_scale_height": {
+   "hi": 1080,
+   "lo": 720,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 5.1 margin box: 'zT: 900±180 pc, thick disk vertical scalelength at R0'",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 900
+  },
+  "thick_disc_scale_length": {
+   "hi": 2200,
+   "lo": 1800,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 5.1 margin box: 'RT: 2.0 ± 0.2 kpc, thick disk radial scalelength'",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 2000
+  },
+  "thin_disc_scale_height": {
+   "hi": 350,
+   "lo": 250,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 5.1 margin box: 'zt: 300±50 pc, thin disk vertical scalelength at R0'",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 300
+  },
+  "thin_disc_scale_length": {
+   "hi": 3100,
+   "lo": 2100,
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 5.1 margin box: 'Rt: 2.6±0.5 kpc, thin disk radial scalelength'",
+   "tier": "measured",
+   "unit": "pc",
+   "v": 2600
+  },
+  "type": {
+   "src": "Bland-Hawthorn & Gerhard 2016, ARA&A 54, 529 (arXiv:1602.07702), Sec. 4: the Galaxy's b/p bulge and long bar",
+   "tier": "catalogue",
+   "v": "Galaxy (ours): barred spiral"
+  }
+ },
+ "provenance": {
+  "catalogue": "Space Maps curated (Milky Way)",
+  "dataset": "galaxies",
+  "source": "static:galaxies",
+  "version": "1"
+ },
+ "render": {
+  "style": "milky_way"
+ },
+ "size": {
+  "angular": null,
+  "radius": null
+ }
+}

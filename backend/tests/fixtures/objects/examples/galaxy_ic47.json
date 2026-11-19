@@ -1,0 +1,64 @@
+{
+ "designations": [
+  "PGC 3093693"
+ ],
+ "evidence": "measured",
+ "host": null,
+ "id": "ongc:IC0047",
+ "kind": "galaxy",
+ "name": "IC 47",
+ "parent": null,
+ "position": {
+  "dec": -13.7407222,
+  "dist": null,
+  "epoch": 2000.0,
+  "model": "fixed",
+  "ra": 10.7292083,
+  "tier": "catalogue"
+ },
+ "props": {
+  "mag_b": {
+   "src": "OpenNGC v20260501",
+   "tier": "catalogue",
+   "unit": "mag",
+   "v": 16.09
+  },
+  "type": {
+   "src": "OpenNGC v20260501 (G)",
+   "tier": "catalogue",
+   "v": "Galaxy"
+  }
+ },
+ "provenance": {
+  "catalogue": "OpenNGC + UNGC (J/AJ/145/101) + Cosmicflows-4 (J/ApJ/944/94) + McConnachie 2012 (J/AJ/144/4)",
+  "dataset": "galaxies",
+  "source": "static:galaxies",
+  "version": "OpenNGC v20260501 (36cb178a)"
+ },
+ "render": {
+  "mag": 16.09
+ },
+ "size": {
+  "angular": {
+   "major": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "arcmin",
+    "v": 0.41
+   },
+   "minor": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "arcmin",
+    "v": 0.24
+   },
+   "pa": {
+    "src": "OpenNGC v20260501",
+    "tier": "catalogue",
+    "unit": "deg",
+    "v": 100
+   }
+  },
+  "radius": null
+ }
+}

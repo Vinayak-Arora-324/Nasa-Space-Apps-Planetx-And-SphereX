@@ -27,7 +27,12 @@
  },
  "prefer_record": {
   "reason": "The single-star Gaia solution ignores the 186-day orbit, which biases its parallax; El-Badry et al. 2023 use the parallax fitted together with the orbit.",
-  "replace": "dist"
+  "replace": [
+   "dist",
+   "mass",
+   "radius",
+   "teff"
+  ]
  },
  "props": {
   "description": {

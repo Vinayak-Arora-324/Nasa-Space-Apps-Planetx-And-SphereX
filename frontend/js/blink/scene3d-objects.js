@@ -120,6 +120,11 @@
 //       the strongest tier wins (measured > catalogue > inferred > illustrative); on a tie, or when only one side has the row,
 //       Gaia's is kept / the present one is used. The winner keeps its own src. Notes that the archive value makes false
 //       ('No effective temperature available...', 'FLAME mass / age not available...') are dropped. Without rec, system is returned as is.
+//       A prefer_record star (section 17.8) is different: each parameter its replace list names (teff, radius, mass) is the record's,
+//       whatever the tiers, and Gaia's single-star value moves to system'.notUsed { teff_k?, radius_rsun?, mass_msun? } (the card lists
+//       it as 'Gaia single-star <param> · not used', the reason in the notes). Every row still Gaia's gets the note
+//       '<Params>: Gaia single-star model; may be biased for this binary.' The star model (starModel) carries notUsed through, and the
+//       renderer draws the star from that same model, so the picture and the card agree.
 //
 // CREDITS (section 17.2)
 //   creditItems(sources, counts) -> [{ dataset, text, credit, licenceName, licence }]; creditsLine(sources, counts) -> 'credit · licence | ...'
@@ -153,12 +158,12 @@
 //       prefer: loaded key -> the star record, for every loaded star whose record has a usable prefer_record (section 17.8): _rebuildStars
 //       re-places those rows with preferredStarPlacement (appended records are already at the record's distance)
 //   preferredStarDistance(rec) -> { pc, lo, hi, src, tier, notUsed: { plxMas, plxLo, plxHi, pc, pcLo, pcHi, reason } } | null   (registry; re-exported)
-//       rec.prefer_record = { replace: 'dist', reason }, distance in position.dist, Gaia single-star parallax in props.gaia_parallax (mas)
+//       rec.prefer_record = { replace: ['dist', ...], reason }, distance in position.dist, Gaia single-star parallax in props.gaia_parallax (mas)
 //   preferredStarPlacement(rec, { xyz, abs } | { dir, d, abs }) -> { pos: [x, y, z] pc, d, abs, gaiaPc } | null   a loaded Gaia row moved to the
 //       curated distance: its direction and apparent G are kept, only the distance (and so the absolute magnitude) changes
 //   (the star card rows for such a star: preferredDistanceRows(rec, { bjPc }) in scene3d-registry.js)
 //   starSignature(stars) -> string   changes when the set of star ids (or their same_as) changes: when _rebuildStars must run again
-import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance } from './scene3d-registry.js';
+import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance, preferredFields } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
 import { radecToXyz, smoothstep, KM_PER_AU } from './scene3d-math.js';
 import { orbitPlacement, J2000_MJD } from './scene3d-orbits.js';
@@ -592,17 +597,28 @@ const strength = (q) => (q && Number.isFinite(TIER_STRENGTH[q.tier]) ? TIER_STRE
 const hasVal = (q) => !!q && (typeof q.v === 'string' ? q.v !== '' : Number.isFinite(q.v));
 const MERGED_ROWS = ['teff_k', 'radius_rsun', 'lum_lsun', 'mass_msun', 'age_gyr', 'spectral_type'];
 const NOTE_FOR_ROW = { teff_k: /^No effective temperature available/, mass_msun: /^FLAME mass not available/, age_gyr: /^FLAME age not available/ };
+const PREFER_ROW = { teff: 'teff_k', radius: 'radius_rsun', mass: 'mass_msun' };   // prefer_record field -> star model row
+const ROW_WORD = { teff_k: 'temperature', radius_rsun: 'radius', lum_lsun: 'luminosity', mass_msun: 'mass', age_gyr: 'age', spectral_type: 'spectral type' };
+const wordList = (w) => (w.length < 2 ? w.join('') : `${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}`);
 export function mergeStarSystem(system, rec) {
   if (!rec) return system;
   const recVals = starValuesFromRecord(rec), vals = { ...((system && system.values) || {}) };
+  const pref = preferredFields(rec), forced = new Set([...pref].map((f) => PREFER_ROW[f]).filter(Boolean)), notUsed = {};
   let notes = system && Array.isArray(system.notes) ? system.notes.slice() : [];
   for (const row of MERGED_ROWS) {
     const a = vals[row], b = recVals[row];
-    if (!hasVal(b) || (hasVal(a) && strength(a) <= strength(b))) continue;   // a tie keeps Gaia's
+    if (!hasVal(b)) continue;
+    if (forced.has(row)) { if (hasVal(a)) notUsed[row] = a; }                // prefer_record: the paper's value, whatever the tiers
+    else if (hasVal(a) && strength(a) <= strength(b)) continue;               // a tie keeps Gaia's
     vals[row] = b;
     if (NOTE_FOR_ROW[row]) notes = notes.filter((n) => !NOTE_FOR_ROW[row].test(n));
   }
-  return { ...(system || {}), values: vals, notes };
+  if (!pref.size) return { ...(system || {}), values: vals, notes };
+  const gaiaRows = MERGED_ROWS.filter((row) => hasVal(vals[row]) && vals[row] !== recVals[row]);
+  if (gaiaRows.length) { const w = wordList(gaiaRows.map((r) => ROW_WORD[r])); notes.push(`${w.charAt(0).toUpperCase()}${w.slice(1)}: Gaia single-star model; may be biased for this binary.`); }
+  const nu = MERGED_ROWS.filter((row) => notUsed[row]);
+  if (nu.length) notes.push(`The Gaia single-star ${wordList(nu.map((r) => ROW_WORD[r]))} ${nu.length > 1 ? 'are' : 'is'} not used: Gaia's GSP-Phot and FLAME model the light as one single star, while the values shown come from the paper's fit of the binary.`);
+  return { ...(system || {}), values: vals, notes, notUsed };
 }
 export function resolveStarAliases(stars, has) {
   const append = [], alias = new Map(), prefer = new Map();

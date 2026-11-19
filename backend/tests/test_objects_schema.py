@@ -461,7 +461,7 @@ def test_render_style():
 def _companion(**kw) -> dict:
     r = load("star_host")
     r.update(id="gdr3:5870569352746779008", name="Gaia BH2 companion",
-             prefer_record={"replace": "dist", "reason": "the single-star solution ignores the orbit"})
+             prefer_record={"replace": ["dist"], "reason": "the single-star solution ignores the orbit"})
     r.update(kw)
     return r
 
@@ -471,6 +471,14 @@ def test_prefer_record_on_a_listed_star_is_accepted():
     r = _companion()
     r["position"]["dist"]["tier"] = "catalogue"
     assert objects.validate_record(r) == []
+
+
+def test_prefer_record_may_replace_the_stellar_parameters_the_record_carries():
+    r = _companion()
+    assert {"teff", "mass"} <= set(r["props"]) and r["size"]["radius"]
+    r["prefer_record"]["replace"] = ["dist", "mass", "radius", "teff"]
+    assert objects.validate_record(r) == []
+    assert objects.PREFER_RECORD_FIELDS == ("dist", "mass", "radius", "teff")
 
 
 def test_prefer_record_ids_are_the_seven_companions():
@@ -490,7 +498,19 @@ def test_prefer_record_ids_are_the_seven_companions():
     "an illustrative distance": lambda r: (r["position"]["dist"].update(tier="illustrative"),
                                            r.update(evidence="illustrative")),
     "no distance": lambda r: (r["position"].update(dist=None, method=None, tier="catalogue")),
-    "a replace value other than dist": lambda r: r["prefer_record"].update(replace="ra"),
+    "a replace value other than a field list": lambda r: r["prefer_record"].update(replace="dist"),
+    "an empty field list": lambda r: r["prefer_record"].update(replace=[]),
+    "an unlisted field (sky position)": lambda r: r["prefer_record"].update(replace=["dist", "ra"]),
+    "an unlisted field (Gaia identity)": lambda r: r["prefer_record"].update(replace=["dist", "identity"]),
+    "an unlisted field (photometry)": lambda r: r["prefer_record"].update(replace=["dist", "gmag"]),
+    "a list without dist": lambda r: r["prefer_record"].update(replace=["teff"]),
+    "a repeated field": lambda r: r["prefer_record"].update(replace=["dist", "dist"]),
+    "fields out of order": lambda r: r["prefer_record"].update(replace=["dist", "teff", "mass"]),
+    "a non-string field": lambda r: r["prefer_record"].update(replace=["dist", 3]),
+    "a replaced field the record lacks": lambda r: (r["props"].pop("mass", None),
+                                                    r["prefer_record"].update(replace=["dist", "mass"])),
+    "a replaced field without a src": lambda r: (r["props"]["teff"].update(src=""),
+                                                 r["prefer_record"].update(replace=["dist", "teff"])),
     "an extra key": lambda r: r["prefer_record"].update(also="position"),
     "no reason": lambda r: r["prefer_record"].pop("reason"),
     "an empty reason": lambda r: r["prefer_record"].update(reason="  "),

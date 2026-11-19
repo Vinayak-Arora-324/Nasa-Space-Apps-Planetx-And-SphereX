@@ -621,7 +621,7 @@ def test_cyg_x1_cone_returns_the_black_hole_and_its_companion(phase2_dir):
     assert bh is not None and star is not None
     assert bh["host"] == star["id"] and bh["evidence"] == "illustrative" and bh["position"]["model"] == "orbit"
     assert bh["position"].get("dist") is None                      # one stored distance per system: the star's
-    assert star["prefer_record"]["replace"] == "dist" and star["position"]["dist"]["v"] == 2220
+    assert star["prefer_record"]["replace"] == ["dist", "mass"] and star["position"]["dist"]["v"] == 2220
     assert star["props"]["gaia_parallax"]["unit"] == "mas"
 
 

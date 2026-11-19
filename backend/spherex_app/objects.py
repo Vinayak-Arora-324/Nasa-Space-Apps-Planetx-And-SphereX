@@ -14,7 +14,8 @@ inclination or node is unknown, or that has an `illustrative` element, must have
 position tier; and a `fixed` position with method `assumed` must have an `illustrative` distance.
 Phase 2 adds: direction-only records (`fixed`, no distance) have no host, no method and no inferred or illustrative `size.radius`; an
 orbit's tier is no stronger than its weakest element; `render.style` is in RENDER_STYLES (`lensing` on black
-holes only); and `prefer_record` is allowed only on the ids in PREFER_RECORD_IDS.
+holes only); and `prefer_record` is allowed only on the ids in PREFER_RECORD_IDS, replacing only the fields
+in PREFER_RECORD_FIELDS.
 
 Data comes from sources (`Source`): live ones (`objects_live`: ephemeris, SkyBoT) and prebuilt static
 datasets (`objects_static`: tiled JSON under config.OBJECTS_DIR). `build_objects` runs every source that
@@ -63,8 +64,8 @@ HOSTED_KINDS = ("exoplanet", "black_hole")
 # `render.style` values the frontend registry may honour (a hint, never data). `lensing` is black holes only.
 RENDER_STYLES = ("lensing",)
 # Star records that may carry `prefer_record` (the seven companions of the curated black holes, 17.8).
-# This list is deliberately explicit: prefer_record replaces a star's distance, so it must not grow into a
-# general override mechanism without a reviewed code change (17.7 item 5).
+# This list is deliberately explicit: prefer_record replaces a star's distance and stellar parameters, so it
+# must not grow into a general override mechanism without a reviewed code change (17.7 item 5).
 PREFER_RECORD_IDS = (
     "gdr3:4373465352415301632",  # Gaia BH1 companion
     "gdr3:5870569352746779008",  # Gaia BH2 companion
@@ -74,6 +75,10 @@ PREFER_RECORD_IDS = (
     "gdr3:3118721026600835328",  # A0620-00 (V616 Mon)
     "gdr3:4477902563164690816",  # MAXI J1820+070
 )
+# What `prefer_record.replace` may name: the distance (always) and the stellar parameters a paper fitted with the
+# orbit. Sky position, epoch, Gaia identity and photometry are never replaceable. Each name maps to where the
+# record holds the replacing value.
+PREFER_RECORD_FIELDS = ("dist", "mass", "radius", "teff")
 POSITION_MODELS = ("fixed", "state", "orbit")
 DIST_UNITS = ("pc", "Mpc")
 
@@ -292,23 +297,55 @@ def _check_render_style(rec: dict, out: list[str]) -> None:
         out.append("render.style: 'lensing' is only for black_hole records")
 
 
+def _prefer_value(rec: dict, field: str) -> Any:
+    """Where a `prefer_record` field's replacing value lives in the record."""
+    if field == "dist":
+        pos = rec.get("position")
+        return pos.get("dist") if isinstance(pos, dict) and pos.get("model") == "fixed" else None
+    if field == "radius":
+        size = rec.get("size")
+        return size.get("radius") if isinstance(size, dict) else None
+    props = rec.get("props")
+    return props.get(field) if isinstance(props, dict) else None
+
+
 def _check_prefer_record(rec: dict, out: list[str]) -> None:
-    """`prefer_record` (17.7 item 5): exactly {replace: "dist", reason}, on a listed star with a
-    measured or catalogue distance."""
+    """`prefer_record` (17.7 item 5): exactly {replace: [field, ...], reason} on a listed star. `replace` is a
+    non-empty list of distinct names from PREFER_RECORD_FIELDS, in that order, and always includes "dist";
+    every named field must be in the record with a src (the paper), and the distance must be measured or
+    catalogue."""
     if "prefer_record" not in rec:
         return
     pr = rec["prefer_record"]
-    if not (isinstance(pr, dict) and set(pr) == {"replace", "reason"} and pr["replace"] == "dist"
-            and isinstance(pr["reason"], str) and pr["reason"].strip()):
-        out.append('prefer_record: must be exactly {"replace": "dist", "reason": <non-empty string>}')
+    shape_ok = (isinstance(pr, dict) and set(pr) == {"replace", "reason"}
+                and isinstance(pr["reason"], str) and bool(pr["reason"].strip()))
+    rep = pr.get("replace") if isinstance(pr, dict) else None
+    if not shape_ok:
+        out.append('prefer_record: must be exactly {"replace": [<field>, ...], "reason": <non-empty string>}')
+    if not (isinstance(rep, list) and rep and all(isinstance(f, str) for f in rep)):
+        out.append("prefer_record: replace must be a non-empty list of field names")
+        rep = []
+    else:
+        bad = [f for f in rep if f not in PREFER_RECORD_FIELDS]
+        if bad:
+            out.append(f"prefer_record: replace may name only {', '.join(PREFER_RECORD_FIELDS)} (not {', '.join(bad)})")
+        elif rep != [f for f in PREFER_RECORD_FIELDS if f in rep]:
+            out.append(f"prefer_record: replace must list distinct fields in the order {', '.join(PREFER_RECORD_FIELDS)}")
+        if "dist" not in rep:
+            out.append('prefer_record: replace must include "dist"')
     if rec.get("kind") != "star":
         out.append("prefer_record: only star records may carry it")
     if rec.get("id") not in PREFER_RECORD_IDS:
         out.append("prefer_record: this id is not in PREFER_RECORD_IDS")
-    pos = rec.get("position")
-    dist = pos.get("dist") if isinstance(pos, dict) and pos.get("model") == "fixed" else None
+    dist = _prefer_value(rec, "dist")
     if not (isinstance(dist, dict) and dist.get("tier") in ("measured", "catalogue")):
         out.append("prefer_record: needs a distance of tier measured or catalogue")
+    for f in rep:
+        if f in PREFER_RECORD_FIELDS and f != "dist":
+            q = _prefer_value(rec, f)
+            if not (isinstance(q, dict) and isinstance(q.get("v"), (int, float)) and isinstance(q.get("src"), str)
+                    and q["src"].strip()):
+                out.append(f"prefer_record: replaces {f}, but the record has no {f} with a src")
 
 
 def validate_record(rec: Any) -> list[str]:

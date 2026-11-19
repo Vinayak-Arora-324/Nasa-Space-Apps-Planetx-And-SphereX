@@ -249,9 +249,37 @@ def test_prefer_record_on_exactly_the_seven_companions(built):
     assert with_pr == sorted(objects.PREFER_RECORD_IDS)
     for i in with_pr:
         r = recs[i]
-        assert r["prefer_record"]["replace"] == "dist" and r["prefer_record"]["reason"].strip()
+        assert r["prefer_record"]["replace"][0] == "dist" and r["prefer_record"]["reason"].strip()
         assert "gaia_parallax" in r["props"] and r["props"]["gaia_parallax"]["unit"] == "mas"
         assert r["position"]["dist"]["tier"] == "measured" and r["position"]["epoch"] == 2016.0
+
+
+def test_prefer_record_replaces_exactly_the_parameters_the_paper_prints(built):
+    recs, _ = built
+    cur = json.loads((b.SOURCES / "black_holes.json").read_text())
+    for system in cur["systems"]:
+        c = system["companion"]
+        if not c:
+            continue
+        r = recs[f"gdr3:{c['gaia_dr3']}"]
+        printed = [f for f in ("mass", "radius", "teff") if f in c]
+        assert r["prefer_record"]["replace"] == ["dist", *printed], c["name"]
+        for f in printed:
+            q = r["size"]["radius"] if f == "radius" else r["props"][f]
+            assert q["v"] == c[f]["v"] and q["src"].startswith(b.paper_cite(cur["papers"], c[f]["src"])), (c["name"], f)
+    by_name = {recs[i]["name"]: recs[i]["prefer_record"]["replace"] for i in objects.PREFER_RECORD_IDS}
+    assert by_name == {"Gaia BH1 companion": ["dist", "mass", "radius", "teff"],
+                       "Gaia BH2 companion": ["dist", "mass", "radius", "teff"],
+                       "LS II +14 13": ["dist", "mass", "radius", "teff"],
+                       "HD 226868": ["dist", "mass"], "V404 Cyg": ["dist"], "V616 Mon": ["dist", "mass"],
+                       "MAXI J1820+070 companion": ["dist", "mass"]}
+
+
+def test_bh2_companion_carries_the_papers_mass_not_flames(built):
+    recs, _ = built
+    c = recs["gdr3:5870569352746779008"]
+    assert c["props"]["mass"]["v"] == 1.07 and "El-Badry et al. 2023" in c["props"]["mass"]["src"]
+    assert "mass" in c["prefer_record"]["replace"]
 
 
 def test_no_hosted_black_hole_has_a_distance_of_its_own(built):

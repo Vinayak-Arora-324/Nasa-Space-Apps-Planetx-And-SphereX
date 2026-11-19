@@ -217,6 +217,7 @@ export function starModel(input = {}) {
       : input.kind === 'ctx' ? inferred(bpRp, 'from Johnson B−V (XHIP)')
       : { v: bpRp, src: 'Gaia DR3 photometry', tier: 'measured' };
   }
+  if (sys && sys.notUsed && typeof sys.notUsed === 'object') out.notUsed = sys.notUsed;   // prefer_record: Gaia's single-star values, listed as not used
   out.rgb = teffToRgb(T);
   out.limbU = limbDarkeningU(T);
   out.radiusAu = radius.v * RSUN_AU;

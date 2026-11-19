@@ -504,7 +504,7 @@ test('childGroups: one heading per kind from the registry nouns, in registry ord
 
 test('the star card for a prefer_record star: the curated distance with its paper, then the Gaia single-star value as not used with the reason', () => {
   const rec = { id: 'gdr3:5870569352746779008', kind: 'star', name: 'Gaia BH2 companion',
-    prefer_record: { replace: 'dist', reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
+    prefer_record: { replace: ['dist'], reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
     position: { model: 'fixed', ra: 1, dec: 2, dist: { v: 1164.1, lo: 1140.5, hi: 1189, unit: 'pc', src: 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas', tier: 'measured' } },
     props: { gaia_parallax: { v: 0.6721, lo: 0.5676, hi: 0.7766, unit: 'mas', src: 'Gaia DR3 single-star solution (RUWE 8.0)', tier: 'measured' } } };
   const r = R.preferredStarDistance(rec);

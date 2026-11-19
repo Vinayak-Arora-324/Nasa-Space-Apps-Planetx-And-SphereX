@@ -76,6 +76,8 @@
 //   childGroups(kids, fmt) -> [{ kind, noun, title: 'Exoplanets · 7', items: [{ o, name, line, tier }] }]   the host card's child list, one
 //                                         heading per kind from the registry nouns, in registry order
 //   beyondKinds() -> kind[]               every registered kind whose layer is in group 'beyond' (the HUD's count line)
+//   PREFER_FIELDS = ['dist', 'mass', 'radius', 'teff']   what prefer_record.replace may name (backend PREFER_RECORD_FIELDS)
+//   preferredFields(rec) -> Set   the fields a star record's prefer_record replaces (empty without one; unknown names dropped)
 //   preferredStarDistance(rec) -> { pc, lo, hi, src, tier, notUsed: { plxMas, plxLo, plxHi, pc, pcLo, pcHi, reason } } | null   (section 17.8)
 //   preferredDistanceRows(rec, { bjPc, fmt }) -> { rows, notes } | null   the star card's 'Distance' row (curated value, own tier and src)
 //                                         and 'Gaia single-star distance · not used' row; the reason is in notes
@@ -467,16 +469,23 @@ export function childGroups(kids, fmt = fmtNum) {
   return out;
 }
 
-// ---- prefer_record (section 17.8): a curated distance for a star that Gaia's single-star solution gets wrong
+// ---- prefer_record (section 17.8): a curated distance (and stellar parameters) for a star that Gaia's single-star solution gets wrong
+export const PREFER_FIELDS = ['dist', 'mass', 'radius', 'teff'];
+/** The fields rec.prefer_record.replace names (a list; a bare 'dist' string from schema drafts counts as ['dist']), as a Set of PREFER_FIELDS. */
+export function preferredFields(rec) {
+  const r = rec && rec.prefer_record && rec.prefer_record.replace;
+  const list = Array.isArray(r) ? r : typeof r === 'string' ? [r] : [];
+  return new Set(list.filter((f) => PREFER_FIELDS.includes(f)));
+}
 /**
- * The curated distance of a star record with prefer_record { replace: 'dist', reason }, or null (no prefer_record, another `replace`, or no distance).
+ * The curated distance of a star record with prefer_record { replace: ['dist', ...], reason }, or null (no prefer_record, `dist` not replaced, or no distance).
  * -> { pc, lo, hi, src, tier, notUsed: { plxMas, plxLo, plxHi, pc, pcLo, pcHi, reason } }
  * notUsed is the single-star Gaia parallax (props.gaia_parallax, mas) and its inverse in pc; null fields when the record has no such parallax.
  * Only the distance is replaced: the caller keeps the Gaia sky position.
  */
 export function preferredStarDistance(rec) {
   const pr = rec && rec.prefer_record, d = rec && rec.position && rec.position.dist;
-  if (!pr || pr.replace !== 'dist' || !d) return null;
+  if (!pr || !preferredFields(rec).has('dist') || !d) return null;
   const pc = pcExact(d);
   if (!(pc > 0)) return null;
   const lo = Number.isFinite(d.lo) ? pcExact({ v: d.lo, unit: d.unit }) : null, hi = Number.isFinite(d.hi) ? pcExact({ v: d.hi, unit: d.unit }) : null;

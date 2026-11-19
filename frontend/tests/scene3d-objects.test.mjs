@@ -8,6 +8,8 @@ import { orbitPlacement, hashUnit } from '../js/blink/scene3d-orbits.js';
 import { defaultLayers, SCHEMA_MAJOR } from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-frames.js';
 import * as M from '../js/blink/scene3d-math.js';
+import { starModel } from '../js/blink/scene3d-physics.js';
+import { renderStarCard } from '../js/blink/scene3d-card.js';
 
 const AU = F.AU_PER_PC;
 const q = (v, unit, tier = 'measured') => ({ v, unit, src: 'test', tier });
@@ -802,7 +804,7 @@ const sgr = () => bh('bh:Sgr A*', { name: 'Sagittarius A*', host: null, parent: 
   props: { mass: { v: 4.297e6, unit: 'Msun', src: 'GRAVITY', tier: 'measured' }, state: { v: 'low-luminosity accretion', src: 't', tier: 'catalogue' } } });
 const bh2Star = (o = {}) => ({
   id: BH_HOST, kind: 'star', name: 'Gaia BH2 companion', designations: [], same_as: [], host: null, parent: null,
-  prefer_record: { replace: 'dist', reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
+  prefer_record: { replace: ['dist'], reason: 'The single-star Gaia solution ignores the 1,277-day orbit (RUWE 8.0), which biases its parallax.' },
   position: { model: 'fixed', ra: 262.17, dec: -0.58, epoch: 2016, method: 'parallax', dist: { v: 1164.1, lo: 1140.5, hi: 1189.0, unit: 'pc', src: 'El-Badry et al. 2023, Table 2: parallax 0.859 ± 0.018 mas', tier: 'measured' } },
   props: { gmag: { v: 13.7, unit: 'mag', src: 'Gaia DR3', tier: 'measured' }, gaia_parallax: { v: 0.6721, lo: 0.5676, hi: 0.7766, unit: 'mas', src: 'Gaia DR3 single-star solution (RUWE 8.0)', tier: 'measured' } },
   evidence: 'measured', render: { mag: 13.7 }, ...o,
@@ -871,6 +873,8 @@ test('prefer_record: BH2\'s companion is at 1,164 pc and the single-star Gaia pa
   assert.ok(d.notUsed.pcLo < d.notUsed.pc && d.notUsed.pc < d.notUsed.pcHi); assert.match(d.notUsed.reason, /RUWE 8/);
   assert.equal(preferredStarDistance(bh2Star({ prefer_record: undefined })), null);
   assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: 'ra', reason: 'x' } })), null);
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: ['mass'], reason: 'x' } })), null, 'dist not replaced');
+  assert.equal(preferredStarDistance(bh2Star({ prefer_record: { replace: 'dist', reason: 'x' } })).pc, 1164.1, 'a bare dist string still reads as [dist]');
   assert.equal(preferredStarDistance(bh2Star({ position: { ...bh2Star().position, dist: null } })), null);
   assert.equal(preferredStarDistance(null), null);
   assert.equal(preferredStarDistance(bh2Star({ props: {} })).notUsed.pc, null);
@@ -943,4 +947,86 @@ test('star card rows for a prefer_record star are in the registry tests; the Gai
   assert.equal(r.rows[0][0], 'Distance'); assert.match(r.rows[0][1], /1,16\d/); assert.equal(r.rows[0][2], 'measured'); assert.match(r.rows[0][3], /El-Badry/);
   assert.equal(r.rows[1][0], 'Gaia single-star distance · not used'); assert.match(r.rows[1][1], /0\.672 mas → 1,490 pc/); assert.match(r.rows[1][1], /Bailer-Jones 1,450 pc/);
   assert.match(r.notes[0], /RUWE 8\.0/); assert.equal(preferredDistanceRows(bh2Star({ prefer_record: undefined })), null);
+});
+
+// ---- prefer_record stellar parameters (section 17.8, 17.18 follow-up): the papers' values, not Gaia's single-star ones
+const bh2Paper = (o = {}) => bh2Star({
+  prefer_record: { replace: ['dist', 'mass', 'radius', 'teff'], reason: bh2Star().prefer_record.reason },
+  size: { radius: { v: 7.77, lo: 7.52, hi: 8.02, unit: 'Rsun', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' }, angular: null },
+  props: { ...bh2Star().props,
+    teff: { v: 4604, lo: 4517, hi: 4691, unit: 'K', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' },
+    mass: { v: 1.07, lo: 0.88, hi: 1.26, unit: 'Msun', src: 'El-Badry et al. 2023, MNRAS 521, 4323, Table 2 (red giant)', tier: 'catalogue' } }, ...o });
+// a Gaia /api/system payload shaped like the BH2 companion's: FLAME's single-star mass is 2.60 (flagged); the other values are test inputs
+const bh2Gaia = () => ({ values: {
+  dist_pc: { v: 1488, src: 'Bailer-Jones 2021 (geometric)', tier: 'measured' },
+  teff_k: { v: 4700, lo: 4650, hi: 4750, src: 'Gaia DR3 GSP-Phot', tier: 'catalogue' },
+  radius_rsun: { v: 9.4, lo: 9.1, hi: 9.7, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  lum_lsun: { v: 37, lo: 35, hi: 39, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  mass_msun: { v: 2.6, lo: 2.3, hi: 2.9, src: 'Gaia DR3 FLAME', tier: 'catalogue' },
+  age_gyr: { v: 0.8, src: 'Gaia DR3 FLAME', tier: 'catalogue' } },
+  notes: ['FLAME quality flags set (1): treat radius, luminosity, mass and age with caution'] });
+
+test('prefer_record stellar parameters: BH2\'s companion uses the paper\'s mass, radius and Teff whatever the tiers; Gaia\'s go to notUsed', () => {
+  const m = mergeStarSystem(bh2Gaia(), bh2Paper());
+  assert.equal(m.values.mass_msun.v, 1.07); assert.match(m.values.mass_msun.src, /El-Badry/);
+  assert.equal(m.values.radius_rsun.v, 7.77); assert.equal(m.values.teff_k.v, 4604);
+  assert.deepEqual(Object.keys(m.notUsed).sort(), ['mass_msun', 'radius_rsun', 'teff_k']);
+  assert.equal(m.notUsed.mass_msun.v, 2.6); assert.match(m.notUsed.mass_msun.src, /FLAME/);
+  assert.equal(m.values.lum_lsun.v, 37, 'a parameter the paper does not print keeps Gaia\'s value'); assert.equal(m.values.age_gyr.v, 0.8);
+  assert.ok(m.notes.includes('Luminosity and age: Gaia single-star model; may be biased for this binary.'), m.notes.join(' | '));
+  assert.ok(m.notes.some((n) => /^The Gaia single-star temperature, radius and mass are not used: /.test(n)));
+  assert.ok(m.notes.includes('FLAME quality flags set (1): treat radius, luminosity, mass and age with caution'), 'Gaia\'s own notes stay');
+  // without the replace list, the old rule: a tier tie keeps Gaia's FLAME value
+  const plain = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: { replace: ['dist'], reason: 'x' } }));
+  assert.equal(plain.values.mass_msun.v, 2.6); assert.deepEqual(plain.notUsed, {});
+  assert.ok(plain.notes.some((n) => /^Temperature, radius, luminosity, mass and age: Gaia single-star model/.test(n)));
+  // a star with no prefer_record is untouched by the new notes
+  const none = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: undefined }));
+  assert.equal(none.notUsed, undefined); assert.deepEqual(none.notes, bh2Gaia().notes);
+  // only a mass printed (Cyg X-1 style): the mass is replaced, Gaia's Teff and radius stay with the note
+  const cyg = mergeStarSystem(bh2Gaia(), bh2Paper({ prefer_record: { replace: ['dist', 'mass'], reason: 'x' } }));
+  assert.equal(cyg.values.mass_msun.v, 1.07); assert.equal(cyg.values.teff_k.v, 4700); assert.deepEqual(Object.keys(cyg.notUsed), ['mass_msun']);
+  assert.ok(cyg.notes.includes('Temperature, radius, luminosity and age: Gaia single-star model; may be biased for this binary.'));
+  assert.ok(cyg.notes.includes('The Gaia single-star mass is not used: Gaia\'s GSP-Phot and FLAME model the light as one single star, while the values shown come from the paper\'s fit of the binary.'));
+});
+
+test('prefer_record stellar parameters: the star model (what is drawn) uses the same values as the card', () => {
+  const md = starModel({ system: mergeStarSystem(bh2Gaia(), bh2Paper()), absG: 0.5, bpRp: 1.4, distPc: 1164.1, kind: 'gaia' });
+  assert.equal(md.massMsun.v, 1.07); assert.equal(md.radiusRsun.v, 7.77); assert.equal(md.teff.v, 4604);
+  assert.ok(Math.abs(md.radiusAu - 7.77 * 0.00465047) < 1e-12, 'the drawn size is the paper\'s radius');
+  assert.deepEqual(md.rgb, starModel({ system: { values: { teff_k: { v: 4604, tier: 'catalogue' } } } }).rgb, 'the colour is the paper\'s Teff');
+  assert.equal(md.notUsed.mass_msun.v, 2.6);
+});
+
+// a minimal DOM for renderStarCard: elements with children, className, textContent and a flattened text
+function fakeDoc() {
+  const mk = (tag) => ({ tag, className: '', children: [], _text: '', title: '', ownerDocument: doc, style: {},
+    appendChild(c) { this.children.push(c); return c; }, removeChild(c) { this.children.splice(this.children.indexOf(c), 1); },
+    get firstChild() { return this.children[0] || null; }, addEventListener() {},
+    set textContent(t) { this._text = String(t); }, get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); } });
+  const doc = { createElement: mk, createTextNode: (t) => ({ textContent: t }) };
+  return { doc, host: mk('div') };
+}
+const cardRows = (host) => {
+  const dl = host.children.find((c) => c.className === 'card-rows'), out = [];
+  for (let i = 0; i < dl.children.length; i += 2) out.push([dl.children[i].textContent, dl.children[i + 1].textContent.slice(1).trim(), dl.children[i + 1].children[0].title]);
+  return out;
+};
+
+test('prefer_record stellar parameters: BH2\'s companion card shows the paper\'s 1.07 M☉ and lists FLAME\'s 2.60 M☉ as not used', () => {
+  const rec = bh2Paper(), md = starModel({ system: mergeStarSystem(bh2Gaia(), rec), absG: 0.5, bpRp: 1.4, distPc: 1164.1, kind: 'gaia' });
+  const pref = preferredDistanceRows(rec, { bjPc: 1488 });
+  const { host } = fakeDoc();
+  renderStarCard(host, { ...md, notes: [...md.notes, ...pref.notes] }, { title: rec.name, distRows: pref.rows });
+  const rows = cardRows(host), get = (label) => rows.find((r) => r[0] === label);
+  assert.deepEqual(rows.map((r) => r[0]).slice(0, 7), ['Temperature', 'Gaia single-star temperature · not used', 'Radius', 'Gaia single-star radius · not used', 'Luminosity', 'Mass', 'Gaia single-star mass · not used']);
+  assert.match(get('Mass')[1], /^1\.07 M☉/); assert.match(get('Mass')[2], /El-Badry et al\. 2023/);
+  assert.match(get('Gaia single-star mass · not used')[1], /^2\.60 M☉/); assert.match(get('Gaia single-star mass · not used')[2], /FLAME/);
+  assert.match(get('Radius')[1], /^7\.77 R☉/); assert.match(get('Temperature')[1], /^4,604 K/);
+  assert.match(get('Luminosity')[2], /FLAME/);
+  assert.ok(get('Gaia single-star distance · not used'), 'the distance row is still there');
+  const notes = host.children.filter((c) => c.className === 'card-note').map((c) => c.textContent);
+  assert.ok(notes.includes('Luminosity and age: Gaia single-star model; may be biased for this binary.'));
+  assert.ok(notes.some((n) => /^The Gaia single-star temperature, radius and mass are not used/.test(n)));
+  assert.ok(notes.some((n) => /^The Gaia single-star distance is not used: /.test(n)));
 });

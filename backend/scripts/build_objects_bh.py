@@ -18,8 +18,8 @@ Design: docs/object-framework.md sections 17.8 to 17.12.
 `--check` exits 1 when the committed dataset differs from a fresh build or fails `objects_static.verify_dataset`.
 
 Output: `black_hole` records (Sgr A* and GRS 1915+105 `fixed`; the other seven hosted `orbit` records) and one
-`star` record per companion, which carries `prefer_record` (the system's one stored distance) and the single-star
-Gaia parallax as `gaia_parallax`. Nothing is invented: an assumed value is `illustrative` and says so in its src.
+`star` record per companion, which carries `prefer_record` (the system's one stored distance, and the stellar
+parameters its paper prints: they replace Gaia's single-star ones) and the single-star Gaia parallax as `gaia_parallax`. Nothing is invented: an assumed value is `illustrative` and says so in its src.
 """
 
 from __future__ import annotations
@@ -420,7 +420,13 @@ def companion_record(papers: dict, system: dict, snap: dict, prov: dict) -> dict
     return objects.record(
         id=f"gdr3:{c['gaia_dr3']}", kind="star", name=c["name"], designations=desig, position=position, size=size,
         props=props, provenance=prov, evidence="measured", render={"mag": gmag}) | {
-        "same_as": [], "prefer_record": {"replace": "dist", "reason": c["prefer_reason"]}}
+        "same_as": [], "prefer_record": {"replace": prefer_fields(c), "reason": c["prefer_reason"]}}
+
+
+def prefer_fields(c: dict) -> list[str]:
+    """What the companion's prefer_record replaces: the distance, and each stellar parameter the paper prints (and
+    the curated file therefore carries). A parameter the paper does not print keeps Gaia's single-star value."""
+    return [f for f in objects.PREFER_RECORD_FIELDS if f == "dist" or f in c]
 
 
 def build_records(cur: dict, snap: dict) -> tuple[list[dict], dict]:

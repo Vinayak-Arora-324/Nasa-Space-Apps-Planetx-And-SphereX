@@ -1647,7 +1647,7 @@ export class Scene3D {
     const e = this._entry(sel.id);
     const c = e.spec.card(e.o, { fromYou: this.evidence ? null : fromYouFor(e, rel, (r) => this._fromYou(r)), evidence: this.evidence, fmtNum,
       place: this.store.placement(e.id), lensing: this._lens && this._lens.get(e.id) || null, hostName: e.host ? this.store.hostName(e.host) : null,
-      hostRecord: e.host ? this.store.starRecord(e.host) : null, children: e.kind === 'galaxy' ? this.store.childrenOf(e.id) : undefined });
+      hostRecord: e.host ? this.store.starRecord(e.host) : null, parentName: e.o.parent ? this.store.hostName(e.o.parent) : null, children: e.kind === 'galaxy' ? this.store.childrenOf(e.id) : undefined });
     // a galaxy lists its black holes with a Go there each (they are drawn only when resolved, see _childrenFor)
     const children = e.kind === 'galaxy' ? this._childrenFor(e.id, pinned) : null;
     renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled, children });

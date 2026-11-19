@@ -472,6 +472,8 @@ test('black hole card, fixed (Sgr A*): type, state, mass, distance, r_s inferred
   assert.deepEqual(c.notes, ['Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.', 'The disc and ring are illustrative.']);
   const ev = R.kindSpec('black_hole').card(sgrRec(), ctx({ evidence: true })); assert.equal(row(ev, 'Look'), undefined); assert.ok(row(ev, 'Event horizon (r_s)'));
   assert.deepEqual(R.kindSpec('black_hole').card(sgrRec(), ctx()).notes, ['The disc and ring are illustrative.'], 'no enlargement note without a lensing item');
+  const inMw = R.kindSpec('black_hole').card({ ...sgrRec(), parent: 'gal:milky_way' }, ctx({ parentName: 'Milky Way' }));   // section 18.8: Sgr A* names its galaxy
+  assert.deepEqual(row(inMw, 'Galaxy').slice(0, 3), ['Galaxy', 'Milky Way', 'catalogue']); assert.equal(inMw.rows[2][0], 'Galaxy');
 });
 
 test('black hole card, hosted: companion distance, orbit rows with their evidence, no disc for a dormant black hole', () => {

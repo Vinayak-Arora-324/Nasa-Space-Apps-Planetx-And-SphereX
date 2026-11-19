@@ -587,6 +587,7 @@ function blackHoleCard(o, ctx) {
   const ty = prop(o, 'type'), st = prop(o, 'state'), mass = prop(o, 'mass'), r = o.size && o.size.radius;
   rows.push(['Type', (ty && ty.v) || 'black hole', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (st) rows.push(['State', String(st.v), st.tier || 'catalogue', srcOf(st)]);
+  if (isSupermassive(o) && o.parent && ctx.parentName) rows.push(['Galaxy', String(ctx.parentName), 'catalogue', `its parent record, ${o.parent}`]);   // Sgr A*: the Milky Way
   const smbh = isSupermassive(o), mpub = prop(o, 'mass_published'), dpub = prop(o, 'dist_published'), ring = prop(o, 'ring_diameter');
   const factor = smbh && hasV(mpub) && hasV(mass) ? rescaleFactor(p.dist, mass, mpub, dpub) : null, rescaled = factor != null && Math.abs(factor - 1) > 1e-9;
   rows.push(qtyRow(rescaled ? `Mass (rescaled ×${Number(factor.toPrecision(5))})` : 'Mass', mass, (q) => fq(q, 'M☉'), 'measured'));

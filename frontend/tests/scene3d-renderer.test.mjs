@@ -116,9 +116,12 @@ test('datasetCounts with skyScope counts the sky-tile galaxies and black holes t
     in_cone: false, size: { radius: null, angular: { major: catQ(60, 'arcmin') } }, props: { type: { v: 'Nebula', src: 't', tier: 'catalogue' } }, provenance: { source: 'static:nebulae', dataset: 'nebulae' }, evidence: 'measured', render: {} };
   const bh = { id: 'bh:M87*', kind: 'black_hole', name: 'M87*', designations: [], host: null, parent: 'ongc:M87', position: gal('x').position, in_cone: false, size: { radius: { v: 1e-3, unit: 'km', src: 't', tier: 'inferred' } },
     props: { type: { v: 'supermassive', src: 't', tier: 'catalogue' }, mass: catQ(6.5e9, 'Msun') }, provenance: { source: 'static:smbh-curated', dataset: 'smbh-curated' }, evidence: 'measured', render: { style: 'lensing' } };
-  const s = storeOf(m, far, near, neb, bh);
+  // Sgr A* (bh-curated, parent the Milky Way) carries no Gaia values: outside its cone it does not bring bh-curated's Gaia credit
+  const sgr = { ...bh, id: 'bh:Sgr A*', name: 'Sagittarius A*', parent: 'gal:milky_way', provenance: { source: 'static:bh-curated', dataset: 'bh-curated' } };
+  const s = storeOf(m, far, near, neb, bh, sgr);
   assert.deepEqual(datasetCounts(s), { galaxies: 1 });
   assert.deepEqual(datasetCounts(s, { skyScope: true }), { galaxies: 3, 'smbh-curated': 1 });
+  assert.deepEqual(datasetCounts(storeOf({ ...sgr, in_cone: true }), { skyScope: true }), { 'bh-curated': 1 });
   const sources = [{ id: 'static:galaxies', status: 'ok', count: 3, provenance: { dataset: 'galaxies', credit: 'Credit: OpenNGC', licence_name: 'CC BY-SA 4.0' } }];
   assert.equal(creditsLine(sources, datasetCounts(s, { skyScope: true }), [starCreditItem(true)]), 'Credit: OpenNGC · CC BY-SA 4.0 | Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
   assert.equal(creditsLine(sources, datasetCounts(s, { skyScope: true }), [starCreditItem(false)]), 'Credit: OpenNGC · CC BY-SA 4.0');

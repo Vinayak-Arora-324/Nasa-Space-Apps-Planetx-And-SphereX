@@ -807,7 +807,8 @@ export function datasetCounts(store, { skyScope = false } = {}) {
   const out = {};
   for (const r of store.recs) {
     const ds = r.o.provenance && r.o.provenance.dataset;
-    if (ds && (r.o.in_cone === true || (skyScope && (r.spec.galaxyScope === 'sky' || isSupermassive(r.o))))) out[ds] = (out[ds] || 0) + 1;
+    // Sgr A* (parent: the Milky Way) is in bh-curated's sky tile but carries no Gaia values: its dataset's Gaia credit counts only when its cone is open
+    if (ds && (r.o.in_cone === true || (skyScope && (r.spec.galaxyScope === 'sky' || (isSupermassive(r.o) && r.o.parent !== 'gal:milky_way'))))) out[ds] = (out[ds] || 0) + 1;
   }
   for (const s of store.stars.values()) { const ds = s.provenance && s.provenance.dataset; if (ds && s.in_cone === true) out[ds] = (out[ds] || 0) + 1; }
   return out;

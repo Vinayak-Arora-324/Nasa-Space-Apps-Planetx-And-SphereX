@@ -635,3 +635,108 @@ def test_sources_carry_the_credits_the_app_shows(phase2_dir):
     bh = next(s for s in j["sources"] if s["id"] == "static:bh-curated")
     assert bh["provenance"]["credit"] == "Credit: ESA/Gaia/DPAC"
     assert bh["provenance"]["licence_name"].startswith("CC BY-NC 3.0 IGO")
+
+
+# --- Phase 3: galaxies, the Milky Way and the supermassive black holes through /api/objects (§18.14) ----
+
+PHASE3 = ("galaxies", "smbh-curated", "bh-curated")
+SMBH_IDS = {"bh:M87*", "bh:NGC 4258*", "bh:M31*", "bh:M32*", "bh:Cen A*", "bh:M81*", "bh:M104*", "bh:NGC 4889*"}
+
+
+@pytest.fixture
+def phase3_dir(tmp_path, monkeypatch):
+    """The committed galaxies, smbh-curated and bh-curated datasets (linked, not copied: the galaxies are 12 MB)."""
+    d = tmp_path / "objs"
+    d.mkdir()
+    for name in PHASE3:
+        (d / name).symlink_to(DATA / name, target_is_directory=True)
+    monkeypatch.setattr(config, "OBJECTS_DIR", d)
+    objects.reset_sources()
+    return d
+
+
+def _kinds3(**params):
+    return _get(**{"kinds": "galaxy,black_hole", "radius": 0.5, **params}).json()
+
+
+def test_m31_cone_gives_the_galaxy_in_cone_with_its_measured_distance_and_its_black_hole(phase3_dir):
+    j = _kinds3(ra=10.6847, dec=41.2690)
+    m31, bh = _obj_by_id(j, "ongc:NGC0224"), _obj_by_id(j, "bh:M31*")
+    assert m31["in_cone"] is True and m31["name"] == "Andromeda Galaxy" and m31["evidence"] == "measured"
+    d = m31["position"]["dist"]
+    assert m31["position"]["method"] == "cepheid" and d["unit"] == "Mpc" and "Cosmicflows-4" in d["src"]
+    assert [a["method"] for a in m31["alt_distances"]] and all(a["reason"].startswith("not used") for a in m31["alt_distances"])
+    assert bh["parent"] == "ongc:NGC0224" and bh["position"]["dist"]["v"] == d["v"]
+    assert bh["props"]["mass"]["v"] == 1.4e8 and "mass_published" not in bh["props"]          # not rescaled ...
+    assert bh["props"]["mass_note"]["v"]                                                       # ... and says why
+    assert all(objects.validate_record(o) == [] for o in j["objects"])
+
+
+def test_m87_and_m87_star_share_one_distance_and_the_mass_is_rescaled_to_it(phase3_dir):
+    j = _kinds3(ra=187.7059, dec=12.3911)
+    m87, bh = _obj_by_id(j, "ongc:NGC4486"), _obj_by_id(j, "bh:M87*")
+    assert m87["in_cone"] is True and bh["in_cone"] is True and bh["parent"] == "ongc:NGC4486"
+    assert bh["position"]["dist"] == m87["position"]["dist"] | {"src": bh["position"]["dist"]["src"]}
+    p = bh["props"]
+    factor = m87["position"]["dist"]["v"] / p["dist_published"]["v"]
+    assert p["mass"]["v"] == pytest.approx(p["mass_published"]["v"] * factor, rel=1e-6)
+    assert p["ring_diameter"]["unit"] == "arcsec" and p["ring_diameter"]["tier"] == "measured"
+
+
+def test_ngc4258_galaxy_and_black_hole_use_the_same_maser_distance(phase3_dir):
+    j = _kinds3(ra=184.7396, dec=47.3040)
+    g, bh = _obj_by_id(j, "ongc:NGC4258"), _obj_by_id(j, "bh:NGC 4258*")
+    assert g["position"]["method"] == "maser" and bh["position"]["dist"]["v"] == g["position"]["dist"]["v"]
+    assert bh["props"]["dist_published"]["v"] == 7.576 and "not used" in bh["props"]["dist_published"]["src"]
+
+
+def test_hubble_flow_and_cluster_member_sources_state_their_assumptions(phase3_dir):
+    j = _kinds3(ra=187.7059, dec=12.3911, radius=5.0)
+    flow = [o for o in j["objects"] if o["position"].get("method") == "redshift"]
+    members = [o for o in j["objects"] if o["position"].get("method") == "group-member" and o["id"].startswith("ongc:")]
+    assert flow and all("H0 = 74.6" in o["position"]["dist"]["src"] and "67.4" in o["position"]["dist"]["src"] for o in flow)
+    assert all(o["evidence"] == "derived" and o["position"]["dist"]["tier"] == "inferred" for o in flow + members)
+    assert any("Virgo cluster" in o["position"]["dist"]["src"] and "group 41220" in o["position"]["dist"]["src"] for o in members)
+
+
+def test_galactic_centre_sgr_a_star_names_the_milky_way_and_shares_its_r0(phase3_dir):
+    j = _kinds3(ra=266.417, dec=-29.008)
+    sgr, mw = _obj_by_id(j, "bh:Sgr A*"), _obj_by_id(j, "gal:milky_way")
+    assert sgr["parent"] == "gal:milky_way" and sgr["in_cone"] is True
+    assert mw["position"]["dist"]["unit"] == "pc"
+    sd = sgr["position"]["dist"]
+    assert (sd["v"] * (1000 if sd["unit"] == "kpc" else 1)) == pytest.approx(mw["position"]["dist"]["v"], rel=1e-9)
+
+
+def test_an_empty_cone_still_gets_the_context_set_once_and_marked_out_of_cone(phase3_dir):
+    j = _kinds3(ra=0.0, dec=-89.5)          # no catalogued galaxy here
+    ids = _ids(j)
+    assert len(ids) == len(set(ids))
+    assert {"gal:milky_way", "ongc:ESO056-115", "ongc:NGC0292", "ongc:NGC0224", "ongc:NGC4486", "bh:Sgr A*"} <= set(ids)
+    assert SMBH_IDS <= set(ids)
+    sky = {o["id"] for o in j["objects"] if not o["in_cone"]}
+    assert len([i for i in sky if not i.startswith("bh:")]) == 162 and SMBH_IDS <= sky
+    # a cone over M31: M31 is in the sky tile and inside the cone, and is still sent once
+    ids = _ids(_kinds3(ra=10.6847, dec=41.2690, radius=3.0))
+    assert ids.count("ongc:NGC0224") == 1 and len(ids) == len(set(ids))
+
+
+def test_the_large_response_is_gzip_compressed(phase3_dir):
+    r = client.get("/api/objects", params={"ra": 187.7, "dec": 12.4, "radius": 5, "mjd": MJD, "kinds": "galaxy"},
+                   headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert r.json()["kinds"]["galaxy"]["status"] == "ok"
+
+
+def test_the_galaxy_sources_carry_their_credits_and_no_gaia(phase3_dir):
+    j = _kinds3(ra=10.6847, dec=41.2690)
+    for sid in ("static:galaxies", "static:smbh-curated"):
+        prov = next(s for s in j["sources"] if s["id"] == sid)["provenance"]
+        assert "Mattia Verga" in prov["credit"] and prov["licence_name"].startswith("CC BY-SA 4.0")
+        assert "No Gaia values" in prov["data_licence_note"] and "Gaia" not in prov["credit"]
+
+
+@pytest.mark.parametrize("name", ["nea-exoplanets", "hr23-clusters", "nebulae", "bh-curated", "galaxies", "smbh-curated"])
+def test_every_committed_dataset_verifies(name):
+    from spherex_app.objects_static import verify_dataset
+    assert verify_dataset(DATA / name) == []

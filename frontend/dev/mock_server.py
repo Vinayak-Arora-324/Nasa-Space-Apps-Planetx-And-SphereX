@@ -14,7 +14,9 @@ Synthetic sky (offsets xi=east, eta=north in arcsec from the request centre):
 Blink extensions: stream `model=1` (extra background + leftover planes, fitted-source metadata,
 field stars, moving objects) or `model=progressive` (raw frames first, then one `model` record per
 ok frame carrying the background + leftover planes), `per_visit`, fov up to 3.5 (client picks scale), /api/coverage,
-/api/movers/{known,linked,search/*}. If frontend/js/blink/skygl.js does not exist yet, a Canvas2D
+/api/movers/{known,linked,search/*}. /api/objects adds the real galaxies and supermassive black holes from the
+committed static datasets (frontend/data/objects/galaxies, smbh-curated): try M31 (ra=10.6847&dec=41.2690) or M87
+(ra=187.7059&dec=12.3911) in /scene3d.html. If frontend/js/blink/skygl.js does not exist yet, a Canvas2D
 stub (dev/skygl-stub.js) is served in its place so the shell can be tested alone.
 """
 import json, math, os, random, re, struct, sys, time, mimetypes, threading, uuid
@@ -349,7 +351,7 @@ def scene3d_payload(ra, dec, radius, limit):
 # ---- /api/objects: the space-maps.objects/1 contract, from the mock solar system above ----
 OBJ_SCHEMA = "space-maps.objects/1"
 OBJ_KINDS = ["sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "star", "exoplanet", "cluster", "nebula", "black_hole", "galaxy"]
-OBJ_SERVED = ["sun", "planet", "moon", "dwarf_planet", "asteroid", "comet"]
+OBJ_SERVED = ["sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "black_hole", "galaxy"]   # black_hole: the SMBHs only (no bh-curated)
 OBJ_RADII_KM = dict(Sun=695700, Mercury=2440, Venus=6052, Earth=6378, Moon=1737, Mars=3396, Jupiter=71492, Saturn=60268, Uranus=25559, Neptune=24764)
 MOCK_PROV = {"catalogue": "Space Maps dev mock (synthetic, not a real ephemeris)", "version": None, "citation": "none", "url": None}
 
@@ -367,6 +369,67 @@ def _angsep(ra1, dec1, ra2, dec2):
     r1, d1, r2, d2 = map(math.radians, (ra1, dec1, ra2, dec2))
     h = math.sin((d2 - d1) / 2) ** 2 + math.cos(d1) * math.cos(d2) * math.sin((r2 - r1) / 2) ** 2
     return math.degrees(2 * math.asin(min(1.0, math.sqrt(h))))
+
+# ---- the prebuilt galaxies and supermassive black holes, read from the committed static datasets ----
+# Real records (frontend/data/objects/<dataset>/), expanded the way objects_static.py serves them: record_defaults
+# filled in, integer `src` values resolved from the manifest's src_table. Sky-tile records (the context set: the
+# Milky Way, the Magellanic Clouds, M31, M87, ... and every SMBH) come with every request; the rest only inside the
+# cone. Other static datasets (exoplanets, clusters, nebulae, bh-curated) stay "unavailable" in the mock.
+OBJ_STATIC = {"galaxies": "galaxy", "smbh-curated": "black_hole"}
+_STATIC = {}
+
+def _src_holders(r):
+    pos, size, props = r.get("position"), r.get("size"), r.get("props")
+    if isinstance(pos, dict):
+        yield pos
+        if isinstance(pos.get("dist"), dict): yield pos["dist"]
+    if isinstance(size, dict):
+        if isinstance(size.get("radius"), dict): yield size["radius"]
+        if isinstance(size.get("angular"), dict): yield from (q for q in size["angular"].values() if isinstance(q, dict))
+    if isinstance(props, dict): yield from (q for q in props.values() if isinstance(q, dict))
+
+def _static_dataset(name):
+    """(provenance row, [(record, is_sky)]) for one committed dataset, or None when it is not built."""
+    if name in _STATIC: return _STATIC[name]
+    root = os.path.join(ROOT, "data", "objects", name)
+    try:
+        with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh: man = json.load(fh)
+        table, defaults, sky = man.get("src_table") or [], man.get("record_defaults") or {}, set(man.get("sky_tiles") or ())
+        recs = []
+        for tile in list(man["tiles"]) + sorted(sky - set(man["tiles"])):
+            with open(os.path.join(root, "tiles", tile + ".json"), encoding="utf-8") as fh: doc = json.load(fh)
+            for r in doc["objects"]:
+                for k, v in defaults.items(): r.setdefault(k, json.loads(json.dumps(v)))
+                for h in _src_holders(r):
+                    if isinstance(h.get("src"), int) and not isinstance(h.get("src"), bool): h["src"] = table[h["src"]]
+                recs.append((r, tile in sky))
+        prov = dict(man["provenance"], source="static:" + name, dataset=name, build=man.get("build"), count=man.get("count"))
+        _STATIC[name] = (prov, recs)
+    except (OSError, ValueError, KeyError, IndexError) as e:
+        print(f"mock: static dataset {name} not loaded ({e})", file=sys.stderr)
+        _STATIC[name] = None
+    return _STATIC[name]
+
+def static_objects(ra, dec, radius, kinds):
+    """Records and source rows from OBJ_STATIC for the requested kinds; in_cone is truthful for sky records too."""
+    out, rows = [], []
+    for name, kind in OBJ_STATIC.items():
+        if kind not in kinds: continue
+        ds = _static_dataset(name)
+        if ds is None:
+            rows.append({"id": "static:" + name, "status": "error", "ms": 0, "count": 0, "dropped": 0,
+                         "provenance": {"source": "static:" + name, "dataset": name, "error": "not built"}})
+            continue
+        prov, recs = ds
+        n = 0
+        for r, is_sky in recs:
+            p = r.get("position") or {}
+            inside = isinstance(p.get("ra"), (int, float)) and _angsep(ra, dec, p["ra"], p["dec"]) <= radius
+            if inside or is_sky:
+                out.append(dict(r, in_cone=bool(inside)))
+                n += 1
+        rows.append({"id": "static:" + name, "status": "ok", "ms": 1, "count": n, "dropped": 0, "provenance": prov})
+    return out, rows
 
 def objects_payload(ra, dec, radius, mjd, kinds, limit):
     earth, planets, bodies = mock_solar(ra, dec, radius, mjd)
@@ -410,18 +473,25 @@ def objects_payload(ra, dec, radius, mjd, kinds, limit):
         props = {"class": _oq(b["class"], "mock SkyBoT", "catalogue"), "vmag": _oq(b["vmag"], "mock SkyBoT", "catalogue", "mag"),
                  "dist_sun": _oq(b["dh_au"], "mock SkyBoT", "catalogue", "au"), "dist_earth": _oq(b["dg_au"], "mock SkyBoT", "catalogue", "au")}
         out.append(rec(rid, "comet" if comet else "asteroid", b["name"], [rid.split(":", 1)[1]] if comet else [str(b["number"])], "ss:sun", pos, None, props, sky_prov, b["vmag"]))
+    st_objs, st_rows = static_objects(ra, dec, radius, kinds)
+    st_ok = {OBJ_STATIC[row["id"][7:]]: row["id"] for row in st_rows if row["status"] == "ok"}
     by_kind, info = {}, {}
     for k in kinds:
+        if k in st_ok:   # sky-tile records come whatever the cone; no magnitude cap order for these, as in objects_static
+            items = [r for r in st_objs if r["kind"] == k]
+            by_kind[k] = items[:limit]
+            info[k] = {"status": "ok", "source": st_ok[k], "count": len(by_kind[k]), "truncated": len(items) > limit}
+            continue
         items = sorted((r for r in out if r["kind"] == k and (k in ("sun", "planet", "moon") or r["in_cone"])),
                        key=lambda r: (r["render"].get("mag") is None, r["render"].get("mag") or 0.0, r["id"]))
         by_kind[k] = items[:limit]
         info[k] = ({"status": "ok", "source": "ephem" if k in ("sun", "planet", "moon") else "skybot", "count": len(by_kind[k]), "truncated": len(items) > limit}
-                   if k in OBJ_SERVED else {"status": "unavailable", "source": None, "count": 0, "truncated": False})
+                   if k in OBJ_SERVED and k not in OBJ_STATIC.values() else {"status": "unavailable", "source": None, "count": 0, "truncated": False})
     objs = [r for k in kinds for r in by_kind[k]]
     n = lambda src: sum(1 for r in objs if r["provenance"]["source"] == src)
     return {"schema": OBJ_SCHEMA, "query": {"ra": ra, "dec": dec, "radius": radius, "mjd": mjd, "kinds": kinds}, "objects": objs, "kinds": info,
             "sources": [{"id": "ephem", "status": "ok", "ms": 1, "count": n("ephem"), "dropped": 0, "provenance": ephem_prov},
-                        {"id": "skybot", "status": "ok", "ms": 1, "count": n("skybot"), "dropped": 0, "provenance": sky_prov}]}
+                        {"id": "skybot", "status": "ok", "ms": 1, "count": n("skybot"), "dropped": 0, "provenance": sky_prov}] + st_rows}
 
 
 

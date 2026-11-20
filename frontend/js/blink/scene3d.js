@@ -13,10 +13,13 @@ import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
 import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE, carrySpeed, SpeedTracker, hudSpeed } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
-import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows, gaiaDataRow, isMilkyWay } from './scene3d-registry.js';
+import { SkyClock, jdNow } from './skyclock.js';
+import { VIEW_JD_RANGE, oscPath, motionSummary } from './scene3d-motion.js';
+import { planetOrbitPath, PLANET_IDS, EARTH_ORBIT_NP } from './ephem.js';
+import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows, gaiaDataRow, isMilkyWay, starEpochRow } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
   objectStarParams, starValuesFromRecord, resolveStarAliases, preferredStarPlacement, starSignature, billboardItems, lensingItems, lensVisible, homeMarkers, markerPoints, mergeStarSystem,
-  MW_FADE_PC, skyFadeOf, fromYouFor, visibleCounts, galaxyFade, withSmbh, presenceOf, GALAXY_PICK_MIN } from './scene3d-objects.js';
+  MW_FADE_PC, skyFadeOf, fromYouFor, visibleCounts, galaxyFade, withSmbh, presenceOf, GALAXY_PICK_MIN, GREY_ALPHA, greyRgb } from './scene3d-objects.js';
 import { galaxyQuad, galaxySurfacePc, GALAXY_VERTEX_FLOATS } from './scene3d-galaxy.js';
 import { fmtDistPc } from './scene3d-format.js';
 import { orbitPath } from './scene3d-orbits.js';
@@ -31,6 +34,10 @@ const CONE_DIST = 3000;          // pc, the distance at which the cone-edge ring
 const CORE_SIGMA_PX = 0.42;      // CSS px: gaussian sigma of a faint star's core (it is integrated over each pixel)
 const LIMIT_DEFAULT = 12, LIMIT_MIN = 0, LIMIT_MAX = 25;
 const MAX_LABELS = 40;
+const MAX_TICK_MS = 100;         // the clock never sees more wall time than this per frame (a hidden tab does not make the sky jump)
+const LINE_REBUILD_DAYS = 30;    // the Sun's planet orbits are rebuilt when the date has moved this far (section 20.4.1)
+const MPERF_N = 240;             // frames in the rolling window of scene.perf
+const MEMBER_RING_PX = 12, MEMBER_FAINT = 0.3;   // cluster member rings (section 20.9): size, and the alpha of a member below probability 0.5
 const PICK_PX = 10, GO_DEG = 2;
 const NEAR_PC = 0.05;            // stars this close to the camera are drawn exactly and may become spheres
 // Milky Way glow (frontend/data/milkyway.webp, see backend/scripts/build_milkyway.py). MW_K sets its brightness against
@@ -77,21 +84,42 @@ function slerp(a, b, t) {
 export const fmtNum = regFmtNum;
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
-// Vertex layouts (floats): stars 7 = x y z abs r g b; points 8 = x y z size alpha r g b; lines 7 = x y z r g b a.
-const STRIDE = { stars: 28, points: 32, lines: 28 };
+// Vertex layouts (floats): stars 7 = x y z abs r g b; points 8 = x y z size alpha r g b; lines 9 = x y z r g b a t mode.
+// A line's t is the fraction of its path length (0..1) and mode its style (section 20.4.4, the Evidence ring's dash idea of section 16.10: a fixed
+// number of dashes around the path, so a pattern scales with the orbit): 0 solid (measured), 1 dashed (derived), 2 dotted (illustrative).
+const STRIDE = { stars: 28, points: 32, lines: 36 };
+export const LINE_MODE = { solid: 0, dashed: 1, dotted: 2 };
+/** The line style of a record's evidence: measured solid, derived dashed, everything else (illustrative, invalid) dotted. */
+export const lineModeOf = (evidence) => (evidence === 'measured' ? LINE_MODE.solid : evidence === 'derived' ? LINE_MODE.dashed : LINE_MODE.dotted);
+/** The colour of a line, desaturated and faded when it is beyond its valid range (greyed means nothing else, section 20.17 item 2). */
+export const lineRgba = ([r, g, b, a], greyed) => { if (!greyed) return [r, g, b, a]; const c = greyRgb([r, g, b]); return [c[0], c[1], c[2], a * GREY_ALPHA]; };
 
-/** Expand polylines into GL_LINES segments with one colour. Returns { data, n }. */
-function linesToBuf(polys, [r, g, b, a]) {
+/**
+ * GL_LINES data for paths: items { p: flat xyz (Float64Array or number[]), rgba: [r, g, b, a], mode } -> { data, n }. t runs along each path by chord length.
+ */
+export function pathsToBuf(items) {
   let n = 0;
-  for (const p of polys) n += Math.max(0, p.length - 1) * 2;
-  const data = new Float32Array(n * 7);
+  for (const it of items) n += Math.max(0, Math.floor(it.p.length / 3) - 1) * 2;
+  const data = new Float32Array(n * 9);
   let k = 0;
-  for (const p of polys) {
-    for (let i = 0; i < p.length - 1; i++) {
-      for (const q of [p[i], p[i + 1]]) { data.set([q[0], q[1], q[2], r, g, b, a], k); k += 7; }
+  for (const it of items) {
+    const p = it.p, m = Math.floor(p.length / 3), [r, g, b, a] = it.rgba;
+    if (m < 2) continue;
+    let total = 0;
+    for (let i = 1; i < m; i++) total += Math.hypot(p[3 * i] - p[3 * i - 3], p[3 * i + 1] - p[3 * i - 2], p[3 * i + 2] - p[3 * i - 1]);
+    let acc = 0;
+    for (let i = 0; i < m - 1; i++) {
+      const seg = Math.hypot(p[3 * i + 3] - p[3 * i], p[3 * i + 4] - p[3 * i + 1], p[3 * i + 5] - p[3 * i + 2]);
+      data[k++] = p[3 * i]; data[k++] = p[3 * i + 1]; data[k++] = p[3 * i + 2]; data[k++] = r; data[k++] = g; data[k++] = b; data[k++] = a; data[k++] = total > 0 ? acc / total : 0; data[k++] = it.mode;
+      acc += seg;
+      data[k++] = p[3 * i + 3]; data[k++] = p[3 * i + 4]; data[k++] = p[3 * i + 5]; data[k++] = r; data[k++] = g; data[k++] = b; data[k++] = a; data[k++] = total > 0 ? acc / total : 1; data[k++] = it.mode;
     }
   }
   return { data, n };
+}
+/** Expand polylines ([x, y, z] points) into GL_LINES segments with one colour and style. Returns { data, n }. */
+export function linesToBuf(polys, rgba, mode = 0) {
+  return pathsToBuf(polys.map((poly) => ({ p: poly.flat(), rgba, mode })));
 }
 export class Scene3D {
   /**
@@ -112,6 +140,14 @@ export class Scene3D {
     this.layers = loadLayers();                                  // {layerId: bool}, saved in localStorage
     this.store = new ObjectStore();                              // planets, the Moon, small bodies (later catalogues): /api/objects
     this._ver = 0;                                               // bumps when layers, evidence or objects change (the pick cache key)
+    // The sky clock (section 20.3, 20.10): one per page, paused until someone presses play. setObjects puts it at the payload's epoch. The frame loop feeds it a
+    // virtual wall clock that advances by at most MAX_TICK_MS a frame, so a backgrounded tab does not jump; the store follows it (_stepTime).
+    this.clock = new SkyClock({ jd: jdNow(Date.now()), minJd: VIEW_JD_RANGE.min, maxJd: VIEW_JD_RANGE.max, rate: 1 });
+    this.payloadMjd = null; this.gaiaEpoch = 2016;
+    this._vNow = 0; this._vLast = null; this._motionNo = 0; this._timeDirty = false; this._hostSet = new Set(); this._movRecs = []; this._greySnap = new Uint8Array(0);
+    this._ptEntries = []; this._ptData = null; this._lineJd = null; this._lineSel = ''; this._earthLive = null; this._objectsLoaded = false;
+    this._mperf = new Float64Array(MPERF_N); this._mperfN = 0; this._mperfK = 0; this._cardMotion = 0;
+    this._mem = { id: null, state: 'none', file: null, list: null, solid: null, highlighted: 0, starVer: -1 }; this._memFiles = new Map(); this._starVer = 0;
     this._vis = []; this._groups = {}; this._warned = new Set(); this.pxPerRad = 1;
     this._visAll = []; this._bb = []; this._gf = 1;            // _visAll: every visible entry; _vis: the same minus the supermassive black holes not resolved (smbhVisible); _bb: this frame's billboard items; _gf: galaxyFade
     this.st = { n: 0, pos: new Float64Array(0), data: new Float32Array(0), gal: new Float32Array(0), meta: [] };
@@ -236,36 +272,50 @@ export class Scene3D {
       if (cosSep < Math.cos(2 / 60 * D2R)) return false;
       return Math.abs(M.apparentMag(r[I.abs_g], d) - c.vmag) < 1.5;
     };
+    if (Number.isFinite(payload.epoch)) this.gaiaEpoch = payload.epoch;   // the stars' catalogue epoch (2016.0): they are not moved with the clock (section 20.17 item 1)
     this.gaia = { rows: payload.rows, I, match: (c) => payload.rows.some((r) => near(r, c)) };
     this._rebuildStars();
   }
   /**
    * Objects payload: the response of /api/objects (schema space-maps.objects/1). Replaces what was there. Returns the
    * store's ingest result ({ ok, unknownKinds } or { ok: false, error }) so the page can say when the schema is too new.
+   * The first payload puts the clock at its epoch (the clock starts paused there, section 20.3). A re-query payload ({ requery: true }, section 20.6) leaves the
+   * clock and the camera alone: the store is moved to the clock's date at once, and a selection survives by id.
    */
-  setObjects(payload) {
+  setObjects(payload, { requery = false } = {}) {
     const r = this.store.ingest(payload);
     this._ver++; this._pickSig = ''; this._near = null;
-    const e = this._earthAu();
+    if (r.ok) {
+      const m = this.store.query && Number.isFinite(this.store.query.mjd) ? this.store.query.mjd : null;
+      this.payloadMjd = m;
+      this._movRecs = this.store.recs.filter((x) => x.mover);
+      this._greySnap = Uint8Array.from(this._movRecs, (x) => (x.greyed ? 1 : 0));
+      const pl = this.store.placement('ss:earth'); this._earthLive = pl && pl.sysAu ? pl.sysAu : null;   // moves in place with setTime
+      if (!requery && !this._objectsLoaded && m !== null) this.clock.setJd(m + 2400000.5, { source: 'query' });
+      this._objectsLoaded = true;
+      this._applyTime(true);                                     // the store at the clock's date, before any buffer is built from it
+    }
+    const e = this._earthLive;
     let cb = { data: new Float32Array(0), n: 0 };
     if (e) {
       const { ra, dec, radius } = this.target;
-      cb = linesToBuf(M.coneLines(ra, dec, radius, 8).map((pl) => pl.map((q) => [q[0] + e[0], q[1] + e[1], q[2] + e[2]])), [1, 0.82, 0.55, 0.4]);
+      cb = linesToBuf(M.coneLines(ra, dec, radius, 8), [1, 0.82, 0.55, 0.4]);   // about the origin: drawn with Earth as the eye offset, so it follows Earth
     }
     this._put('coneSolar', cb.data, cb.n);
-    if (this.scene === 'solar') this.cam = this._startCam('solar');
+    if (this.scene === 'solar' && !requery) this.cam = this._startCam('solar');
     // Objects usually land before Gaia. The host stars they bring (and the host resolver that needs them) change only with
     // the set of star records, so an unchanged set skips the rebuild; the resolver closes over this._alias and this._keyIdx.
     if (starSignature(this.store.stars) !== this._starSig) this._rebuildStars();
     else this._refreshObjectBuffers();
+    this._cardSig = '';
     return r;
   }
   /** Visible entries and the per-host buffers (points, orbit lines) after the objects, layers, evidence, frame or host changed. */
   _refreshObjectBuffers() { this._refreshVisible(); this._refreshGroups(); this._rebuildPoints(); this._rebuildLines(); }
   /** Earth's heliocentric position in AU from its record (the patch's cone is drawn around it), or null. */
   _earthAu() {
-    const p = this.store.earth && this.store.earth.position.xyz_au;
-    return Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) ? p.slice(0, 3) : null;
+    const p = this._earthLive || (this.store.earth && this.store.earth.position.xyz_au);   // the drawn Earth (it moves with the clock), else the payload's
+    return Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) ? [p[0], p[1], p[2]] : null;
   }
   /** The star key of the camera's system frame, or null in the galaxy frame. */
   _hostKey() { return this.cam.frame === 'system' ? this.cam.host.key : null; }
@@ -275,39 +325,72 @@ export class Scene3D {
    */
   _rebuildPoints() {
     this._refreshVisible();
-    const key = this._hostKey(), pts = [];
+    const key = this._hostKey(), pts = [], ents = [];
     if (key) {
       for (const e of this._vis) {
         if (e.renderer !== 'point') continue;
-        const c = e.spec.color(e.o);
-        pts.push(e.sysAu[0], e.sysAu[1], e.sysAu[2], e.spec.pointSize(e.o), 0.9, c[0], c[1], c[2]);
+        const c = e.spec.color(e.o), g = !!e.greyed;                 // greyed: beyond its valid range (section 20.17 item 2), and nothing else
+        const rgb = g ? greyRgb(c) : c;
+        pts.push(e.sysAu[0], e.sysAu[1], e.sysAu[2], e.spec.pointSize(e.o), g ? 0.9 * GREY_ALPHA : 0.9, rgb[0], rgb[1], rgb[2]);
+        ents.push(e);
       }
     }
     this._bufHost = key;
-    this._put('points', new Float32Array(pts), pts.length / 8);
+    this._ptEntries = ents; this._ptData = new Float32Array(pts);
+    this._put('points', this._ptData, pts.length / 8);
+  }
+  /** The moving points' positions, written into the same Float32Array and sent with bufferSubData: no allocation, no new buffer (section 20.10). */
+  _refillPoints() {
+    const ents = this._ptEntries, d = this._ptData;
+    if (!d || !ents.length || this._bufHost === null) return;
+    for (let i = 0; i < ents.length; i++) { const a = ents[i].sysAu, o = 8 * i; d[o] = a[0]; d[o + 1] = a[1]; d[o + 2] = a[2]; }
+    const g = this.gpu.points;
+    if (g && !this.lost) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, g.b); gl.bufferSubData(gl.ARRAY_BUFFER, 0, d); }
   }
   /**
-   * The orbit lines for the camera's current host (buffer lineSys, AU relative to the host). The Sun: a circle per Sun-hosted
-   * planet. Another star: the ellipse of each of its exoplanets (orbitPath), only with the exoplanets layer on and never in the
-   * Evidence view, because the orientation of those orbits is illustrative. The orbits layer is checked when drawing.
+   * The orbit lines for the camera's current host (buffer lineSys, AU relative to the host), styled by evidence (section 20.4.4): solid measured, dashed
+   * derived, dotted illustrative; a line beyond its valid range is dotted and greyed. The Sun: plan94's ellipse of each planet at the clock's date (rebuilt when
+   * it has moved LINE_REBUILD_DAYS), and the osculating orbit of the selected small body. Another star: the ellipse of each of its hosted records (exoplanets,
+   * black holes); the Evidence view keeps the measured and derived ones and hides the illustrative ones (a change to section 16.8). The orbits layer is checked
+   * when drawing.
    */
   _rebuildLines() {
-    const key = this._hostKey(), polys = [];
+    const key = this._hostKey(), items = [], ev = this.evidence;
+    this._lineJd = this.clock.jd; this._lineSel = this._selOrbitKey();
     if (key === SUN_HOST.key) {
+      const jd = this.clock.jd;
       for (const o of this.store.byKind.get('planet') || []) {      // the Moon travels with Earth: it has no orbit of its own
         const p = o.host === SUN_HOST.key && this.store.placement(o.id);
-        if (p && p.sysAu) polys.push(M.orbitCircle(Math.hypot(p.sysAu[0], p.sysAu[1], p.sysAu[2])));
+        if (!p || !p.sysAu) continue;
+        const np = o.id === 'ss:earth' ? EARTH_ORBIT_NP : PLANET_IDS[o.id];
+        const path = np ? planetOrbitPath(jd, np, 160) : M.orbitCircle(Math.hypot(p.sysAu[0], p.sysAu[1], p.sysAu[2])).flat();
+        items.push({ p: path, rgba: [0.6, 0.7, 0.95, 0.18], mode: lineModeOf(o.evidence || 'measured') });
       }
-    } else if (key && !this.evidence) {
+      const sel = this._selOrbitKey() && this.store.get(this._selOrbitKey()), m = sel && this.store.mover(sel.id);
+      if (m && m.model === 'kepler') {
+        const ok = this.store.validity(sel.id).ok;
+        if (ok || !ev) items.push({ p: oscPath(m, 256, 50), rgba: lineRgba([0.96, 0.78, 0.45, 0.5], !ok), mode: ok ? lineModeOf(sel.evidence || 'measured') : LINE_MODE.dotted });   // beyond its range: illustrative, so not in the Evidence view
+      }
+    } else if (key) {
       for (const o of this.store.childrenOf(key)) {
         const spec = kindSpec(o.kind), l = spec && spec.layer;
         if (!spec || !spec.hosted || (l && this.layers[l] === false)) continue;
+        const pl = this.store.placement(o.id), greyed = !!(pl && pl.greyed);
+        const illustrative = greyed || (o.evidence !== 'measured' && o.evidence !== 'derived');
+        if (ev && illustrative) continue;
         const path = orbitPath(o);
-        if (path.length) polys.push(path);
+        if (path.length) items.push({ p: path.flat(), rgba: lineRgba([0.55, 0.75, 0.9, 0.3], greyed), mode: greyed ? LINE_MODE.dotted : lineModeOf(o.evidence) });
       }
     }
-    const lines = linesToBuf(polys, key === SUN_HOST.key ? [0.6, 0.7, 0.95, 0.18] : [0.55, 0.75, 0.9, 0.3]);
+    const lines = pathsToBuf(items);
     this._put('lineSys', lines.data, lines.n);
+  }
+  /** The id of the selected small body whose osculating orbit is drawn (asteroid, comet, dwarf planet with a kepler mover), else ''. */
+  _selOrbitKey() {
+    const s = this.sel;
+    if (!s || s.kind === 'star' || s.kind === 'group' || s.kind === 'sun') return '';
+    const m = (s.kind === 'asteroid' || s.kind === 'comet' || s.kind === 'dwarf_planet') && this.store.mover(s.id);
+    return m && m.model === 'kepler' ? s.id : '';
   }
   get hasSolar() { return this.store.hasSolar; }
   /** The kinds' layers are toggles: turning one off hides its objects, labels and picks, and clears a selection in it. */
@@ -390,7 +473,7 @@ export class Scene3D {
       const i = keyIdx.get(this.cam.host.key);
       this.cam.host = i === undefined ? { ...this.cam.host } : { ...this.cam.host, idx: i, pc: this._starPc(i) };
     }
-    this._disarmIdx = null; this._near = null; this._ver++;
+    this._disarmIdx = null; this._near = null; this._ver++; this._starVer++;
     this._syncStarFrame();
     this._refreshObjectBuffers();                                 // the resolver re-placed the hosted records
   }
@@ -476,6 +559,7 @@ export class Scene3D {
     this._takeOver();
     this.ap = null; this.sel = null; this.hover = null; this.card.hidden = true; this._cardT = 0;
     this.cam = this._startCam(name);
+    this._applyTime(true);                                      // the new frame's host is evaluated at the clock's date
     this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null;
     this._refreshObjectBuffers();
     this.hooks.onScene(this.scene);
@@ -882,6 +966,7 @@ export class Scene3D {
   _onFrameChange(kind, prev) {
     const cam = this.cam, to = F.levelOf(cam.frame), from = F.levelOf(prev);
     this._syncStarFrame(); this._ver++; this._pickSig = ''; this._near = null; this.hooks.onScene(this.scene);
+    this._applyTime(true);                                        // a system frame's host is evaluated at the clock's date from now on (section 20.4)
     this._refreshObjectBuffers();                                 // the visible set and the per-host buffers depend on the frame and the host
     if (to.hosted) {
       this._system(cam.host.idx);
@@ -1006,6 +1091,113 @@ export class Scene3D {
     if (o.s >= 1 && o.done) { const done = o.done; o.done = null; done(); }
   }
 
+  // ------------------------------------------------------------------ time (sections 20.3, 20.10)
+  /** Wall time to the clock, then the store to the clock's date when it changed. vNow is a virtual wall clock: no frame adds more than MAX_TICK_MS. */
+  _stepTime(t) {
+    this._vNow += this._vLast === null ? 0 : Math.min(t - this._vLast, MAX_TICK_MS);
+    this._vLast = t;
+    const r = this.clock.tick(this._vNow);
+    if (r.changed || this._timeDirty || this.store.mjd !== this.clock.mjd) this._applyTime(false);
+  }
+  /**
+   * Moves the store to the clock's date: the Sun's records always, plus the camera's system host. A moved store refills the point buffer in place, sends the
+   * moving markers, labels and picks to the next frame (they read the live positions), and rebuilds what the date or a greyed flip changes (_onMoved).
+   * force: evaluate even when the date is unchanged (a payload just ingested, or the camera entered another host's frame).
+   */
+  _applyTime(force) {
+    const t0 = performance.now(), mjd = this.clock.mjd, hs = this._hostSet;
+    this._timeDirty = false;
+    if (!force && this.store.mjd === mjd) return;
+    hs.clear(); hs.add(SUN_HOST.key);
+    if (this.cam && this.cam.frame === 'system') hs.add(this.cam.host.key);
+    const moved = this.store.setTime(mjd, { hosts: hs });
+    if (moved) this._onMoved();
+    const dt = performance.now() - t0;
+    this._mperf[this._mperfK] = dt; this._mperfK = (this._mperfK + 1) % MPERF_N; if (this._mperfN < MPERF_N) this._mperfN++;
+  }
+  _onMoved() {
+    this._motionNo++; this._pickSig = ''; this._near = null;
+    // a record that crossed the edge of its valid range changes style everywhere (points, lines, markers, labels, the Evidence view): rebuild from the store
+    const recs = this._movRecs, snap = this._greySnap;
+    let flipped = false;
+    for (let i = 0; i < recs.length; i++) { const g = recs[i].greyed ? 1 : 0; if (g !== snap[i]) { snap[i] = g; flipped = true; } }
+    if (flipped) { this._ver++; this._refreshObjectBuffers(); return; }
+    this._refillPoints();
+    if (this._lineJd === null || Math.abs(this.clock.jd - this._lineJd) > LINE_REBUILD_DAYS) this._rebuildLines();
+  }
+  /** scene.perf: the cost of the motion path (setTime and the buffer refill) over the last MPERF_N moved frames, in ms (section 20.10 budget: 2 ms). */
+  get perf() {
+    const n = this._mperfN;
+    if (!n) return { motionMs: { mean: 0, p95: 0, max: 0, n: 0 } };
+    const a = Array.from(this._mperf.subarray(0, n)).sort((x, y) => x - y);
+    return { motionMs: { mean: a.reduce((x, y) => x + y, 0) / n, p95: a[Math.min(n - 1, Math.floor(0.95 * n))], max: a[n - 1], n } };
+  }
+  /** The status line's "Moving: ..." text: what moves in the current view, and on what evidence (motionSummary), counting what is beyond its range. */
+  motionText() { return motionSummary(this.store.motionItems(this._visAll)).text; }
+
+  // ------------------------------------------------------------------ cluster member stars (section 20.9, 20.17 item 4)
+  /**
+   * While a cluster with assets.members is selected: its member file is fetched once (cached per id; never on page load) and matched to the loaded star keys
+   * (`gdr3:<id>`). Rings are drawn on the matches by _memberRings, and the card reads the counts (_membersCtx). Deselecting clears them.
+   */
+  _updateMembers() {
+    const s = this.sel, o = s && s.kind === 'cluster' ? this.store.get(s.id) : null, id = o && o.assets && o.assets.members ? o.id : null, m = this._mem;
+    if (id !== m.id) {
+      Object.assign(m, { id, state: id ? 'loading' : 'none', file: null, list: null, solid: null, highlighted: 0, starVer: -1 });
+      this._cardSig = '';
+      if (id) this._loadMembers(o);
+    }
+    if (m.file && m.starVer !== this._starVer) this._matchMembers();
+  }
+  _loadMembers(o) {
+    const id = o.id, ds = o.provenance && o.provenance.dataset;
+    let p = this._memFiles.get(id);
+    if (!p) {
+      p = ds ? fetch(`./data/objects/${ds}/${o.assets.members}`).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then((f) => { if (!f || !Array.isArray(f.members) || !/^space-maps\.cluster-members\//.test(f.format || '')) throw new Error('not a member file'); return f; })
+        : Promise.reject(new Error('no dataset'));
+      this._memFiles.set(id, p);
+      p.catch(() => { if (this._memFiles.get(id) === p) this._memFiles.delete(id); });   // a failure is retried at the next selection
+    }
+    p.then((f) => { if (this._mem.id === id) { this._mem.file = f; this._mem.state = 'ok'; this._mem.starVer = -1; this._cardSig = ''; } },
+      () => { if (this._mem.id === id) { this._mem.state = 'error'; this._cardSig = ''; } });
+  }
+  /** The member ids that are loaded stars: this._mem.list (star indices) and .solid (1 when the stored probability is 500 thousandths or more, i.e. Prob >= 0.5). */
+  _matchMembers() {
+    const m = this._mem, idx = [], solid = [];
+    for (const row of m.file.members) {
+      const i = this._keyIdx.get('gdr3:' + row[0]);
+      if (i === undefined) continue;
+      idx.push(i); solid.push(row[1] >= 500 ? 1 : 0);
+    }
+    m.list = Int32Array.from(idx); m.solid = Uint8Array.from(solid); m.highlighted = idx.length; m.starVer = this._starVer; this._cardSig = '';
+  }
+  /** The card's ctx.members for a cluster: { n, nP50, highlighted, src } | { loading: true } | { error }, or undefined without a member file. */
+  _membersCtx(o) {
+    if (!o.assets || !o.assets.members) return undefined;
+    const m = this._mem;
+    if (m.id !== o.id || m.state === 'loading') return { loading: true };
+    if (m.state === 'error' || !m.file) return { error: 'could not be loaded' };
+    return { n: m.file.n, nP50: m.file.n_p50, highlighted: m.highlighted, src: m.file.src };
+  }
+  /** marks (8 floats a point) plus a ring on each member star of the selected cluster: solid at probability >= 0.5, faint below. Catalogue data, so the Evidence view keeps them. */
+  _memberRings(marks) {
+    const m = this._mem, cam = this.cam;
+    if (!m.list || !m.list.length || !(F.isHosted(cam.frame) || this._gf > 1e-3)) return marks;
+    const o = this.store.get(m.id), c = o ? kindSpec(o.kind).color(o) : [1, 0.9, 0.7], host = cam.frame === 'system' ? cam.host.idx : -1, p = this.st.pos, gf = this._gf;
+    const out = new Float32Array(marks.length + 8 * m.list.length); out.set(marks);
+    let k = marks.length;
+    for (let j = 0; j < m.list.length; j++) {
+      const i = m.list[j];
+      if (i === host) continue;                                   // the host star is a sphere at the origin of its own frame
+      const rel = F.relFromCam(cam, [p[3 * i], p[3 * i + 1], p[3 * i + 2]]);
+      out[k] = rel[0]; out[k + 1] = rel[1]; out[k + 2] = rel[2]; out[k + 3] = -MEMBER_RING_PX; out[k + 4] = (m.solid[j] ? 0.9 : MEMBER_FAINT) * gf;
+      out[k + 5] = c[0]; out[k + 6] = c[1]; out[k + 7] = c[2];
+      k += 8;
+    }
+    return out.subarray(0, k);
+  }
+
   // ------------------------------------------------------------------ frame loop
   start() {
     if (this.running || this.lost) return;
@@ -1107,7 +1299,10 @@ export class Scene3D {
     const dt = this._last ? Math.min(0.05, (t - this._last) / 1000) : 0;
     this._last = t; this._t = t / 1000; this._frameNo++;
     this._resize();
+    this._stepTime(t);                                           // the clock, and the store at its date (before the visible list: a greyed flip rebuilds it)
     this._refreshVisible();                                      // once per frame: reused by drawing, labels, picking and validity
+    if (this._selOrbitKey() !== this._lineSel) this._rebuildLines();   // the selected small body's orbit appears and goes with the selection
+    this._updateMembers();
     this._step(dt);
     this._stepAutopilot(dt);
     this._stepIntro(dt); this._stepSnap(dt);
@@ -1188,7 +1383,7 @@ export class Scene3D {
     if (!inSys) { if (this.layers.cone && starsOn) this._drawLines('lineStars', gf); }   // the cone outline fades with the stars
     else {                                                        // orbits of the current host; the cone outline is the Sun's only (it is Earth's patch)
       if (bufOk && this.layers.orbits) this._drawLines('lineSys');
-      if (sun && this.layers.cone) this._drawLines('coneSolar');
+      if (sun && this.layers.cone) this._drawLines('coneSolar', 1, this._earthLive);   // the cone is built about the origin: Earth as the eye offset moves it with Earth
     }
     if (starsOn) {
       this._drawStars('stars', skip);
@@ -1200,6 +1395,7 @@ export class Scene3D {
     // a lensing entry keeps its marker in the Evidence view and when its look is too small to draw (lensVisible); otherwise its look is the marker
     let marks = markerPoints(lensVisible(vis, lens, this.evidence), groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
     this._home = homeMarkers(cam, { project: this._pjAll, galaxyFade: this._gf, store: this.store, evidence: this.evidence });   // "you came from here" (section 19.3.9): hollow rings
+    marks = this._memberRings(marks);                             // the selected cluster's member stars (section 20.9)
     if (this._home.length) {
       const h = new Float32Array(marks.length + 8 * this._home.length); h.set(marks);
       this._home.forEach((m, i) => h.set([m.rel[0], m.rel[1], m.rel[2], -HOME_PX, m.alpha, m.rgb[0], m.rgb[1], m.rgb[2]], marks.length + 8 * i));
@@ -1407,16 +1603,17 @@ export class Scene3D {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
-  _drawLines(key, alpha = 1) {
+  _drawLines(key, alpha = 1, origin = null) {
     const g = this.gpu[key]; if (!g || !g.n) return;
-    const gl = this.gl, pr = this.prog.line, cam = this.cam;
+    const gl = this.gl, pr = this.prog.line, cam = this.cam, o = origin || [0, 0, 0];
     gl.useProgram(pr.p);
     gl.uniform1f(pr.u.u_a, alpha);
     gl.bindBuffer(gl.ARRAY_BUFFER, g.b);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE.lines, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, STRIDE.lines, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, STRIDE.lines, 28);
     gl.uniformMatrix4fv(pr.u.u_vp, false, this.vp);
-    gl.uniform3f(pr.u.u_eye, cam.pos[0], cam.pos[1], cam.pos[2]);
+    gl.uniform3f(pr.u.u_eye, cam.pos[0] - o[0], cam.pos[1] - o[1], cam.pos[2] - o[2]);
     gl.drawArrays(gl.LINES, 0, g.n);
   }
   _starUniforms(eye, skip) {
@@ -1601,7 +1798,7 @@ export class Scene3D {
   }
   _hoverPick() {
     const c = this.cam, h = this.hover;
-    const sig = `${this._ver}|${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${c.frame}|${this.cssW}x${this.cssH}`;
+    const sig = `${this._ver}|${this._motionNo}|${h.x.toFixed(1)},${h.y.toFixed(1)}|${c.pos.join(',')}|${c.yaw}|${c.pitch}|${c.frame}|${this.cssW}x${this.cssH}`;
     if (sig !== this._pickSig) { this._pickSig = sig; this._pickSel = this._pickAt(h.x, h.y, PICK_PX); }
     return this._pickSel;
   }
@@ -1642,6 +1839,7 @@ export class Scene3D {
         // the Gaia credit row (section 18.12): every Gaia star, and the archive stars that carry Gaia DR3 ids (NEA hosts) or Gaia values (the bh-curated companions)
         dataRow: m.kind === 'gaia' || (m.kind === 'obj' && m.id.startsWith('gdr3:')) || (rec && rec.provenance && rec.provenance.dataset === 'bh-curated') ? gaiaDataRow() : null,
         children: this._childrenFor(m.key, pinned),
+        epochRow: m.kind === 'gaia' ? starEpochRow(this.gaiaEpoch, 'Gaia DR3') : null,   // the stars stay at their catalogue epoch whatever the clock says (section 20.17 item 1)
         loading: !!s && s.state === 'loading' && pinned, error: s && s.state === 'error' ? `Could not load system details: ${s.error}` : null });
       return;
     }
@@ -1665,7 +1863,9 @@ export class Scene3D {
     const e = this._entry(sel.id);
     const c = e.spec.card(e.o, { fromYou: this.evidence ? null : fromYouFor(e, rel, (r) => this._fromYou(r)), evidence: this.evidence, fmtNum,
       place: this.store.placement(e.id), lensing: this._lens && this._lens.get(e.id) || null, hostName: e.host ? this.store.hostName(e.host) : null,
-      hostRecord: e.host ? this.store.starRecord(e.host) : null, parentName: e.o.parent ? this.store.hostName(e.o.parent) : null, children: e.kind === 'galaxy' ? this.store.childrenOf(e.id) : undefined });
+      hostRecord: e.host ? this.store.starRecord(e.host) : null, parentName: e.o.parent ? this.store.hostName(e.o.parent) : null, children: e.kind === 'galaxy' ? this.store.childrenOf(e.id) : undefined,
+      // Phase 5 (section 20): the drawn date and what the card says about it, the validity of the placement, a small body's elements, Earth, the cluster's members
+      mjd: this.store.mjd, payloadMjd: this.payloadMjd, validity: this.store.validity(e.id), mover: this.store.mover(e.id), earthAu: this._earthLive || undefined, members: this._membersCtx(e.o) });
     // a galaxy lists its black holes with a Go there each (they are drawn only when resolved, see _childrenFor)
     const children = e.kind === 'galaxy' ? this._childrenFor(e.id, pinned) : null;
     renderBodyCard(this.card, { title: c.title, subtitle: c.subtitle, rows: c.rows, notes: c.notes, onGo, goLabel, goDisabled, children });
@@ -1680,9 +1880,10 @@ export class Scene3D {
     if (!sel || !this._valid(sel)) return hide();
     const key = this._selKey(sel) + (pinned ? 'P' : 'h'), stale = key !== this._cardSig;
     const busy = pinned && this.card.matches(':hover');           // do not rebuild the card under the pointer (it would eat a click)
-    if (stale || (!busy && t - this._cardT > (pinned ? 1000 : 250)) || this.card.hidden) {
+    const dated = !busy && this._motionNo !== this._cardMotion && t - this._cardT > 250;   // the date moved: refresh the card at most 4 times a second
+    if (stale || dated || (!busy && t - this._cardT > (pinned ? 1000 : 250)) || this.card.hidden) {
       this._renderCard(sel, pinned);
-      this._cardSig = key; this._cardT = t;
+      this._cardSig = key; this._cardT = t; this._cardMotion = this._motionNo;
     }
     this.card.hidden = false;
     this.card.classList.toggle('pinned', pinned);
@@ -1730,8 +1931,8 @@ export class Scene3D {
       const box = { x0: L.x + 6, y0: L.y - 7, x1: L.x + 10 + w, y1: L.y + 7 };
       if (placed.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
-      const la = L.alpha != null ? L.alpha : 1;                  // a direction-only label fades with the sky (skyFade)
-      const rgb = L.rgb ? L.rgb.map((v) => Math.round(255 * v)).join(', ') : '233, 230, 223';   // a home label has its marker's colour
+      const la = (L.alpha != null ? L.alpha : 1) * (L.greyed ? GREY_ALPHA + 0.25 : 1);   // a direction-only label fades with the sky (skyFade); a greyed one (beyond its valid range) is fainter and grey
+      const rgb = L.greyed ? '170, 172, 178' : L.rgb ? L.rgb.map((v) => Math.round(255 * v)).join(', ') : '233, 230, 223';   // a home label has its marker's colour
       lab.fillStyle = `rgba(${rgb}, ${(0.9 * la).toFixed(3)})`;
       lab.beginPath(); lab.arc(L.x, L.y, 1.6, 0, Math.PI * 2); lab.fill();
       lab.fillStyle = `rgba(${rgb}, ${(0.8 * la).toFixed(3)})`;

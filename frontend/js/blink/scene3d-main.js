@@ -3,6 +3,9 @@
 // side by side and fail separately, and wires the HUD and the layers panel to the Scene3D renderer.
 // This is the first view of a spot picked on the sphere; its SPHEREx frames load only from "Watch this patch change".
 import { getScene3D, getObjects, getCoverage } from '../api.js';
+import { clockText } from './skyclock.js';
+import { TimeBar, statusSegments } from './timebar.js';
+import { Requerier, requeryStatus } from './scene3d-requery.js';
 import { Scene3D, fmtNum } from './scene3d.js';
 import { contextStars } from './scene3d-math.js';
 import { layers as layerList, kinds as kindList, kindSpec, beyondKinds } from './scene3d-registry.js';
@@ -67,7 +70,6 @@ getCoverage().then((j) => {
 document.title = 'Inside the patch · 3D fly-through';
 
 // ---------------------------------------------------------------- status banner
-let solarDate = '';
 let pageScene = 'stars';        // the scene the HUD last reported: the Gaia sentences of #warn belong to the Stars scene
 let gaiaState = 'loading';      // loading | ok | error
 let objectsState = 'loading';   // loading | ok | error
@@ -89,7 +91,8 @@ function onHud(h) {
   $('hud-where').textContent = h.frame === 'system'
     ? `Near ${h.hostName} · ${fmtNum(h.surfaceAu)} AU from its surface`
     : `${h.frame === 'cosmos' ? 'Intergalactic' : 'Interstellar'} · ${fmtDistPc(h.dist).split(' · ')[0]} from the Sun`;
-  $('hud-dist').textContent = `${fmtDistPc(h.dist)}${h.scene === 'solar' && solarDate ? ' · ' + solarDate : ''}`;
+  $('hud-dist').textContent = fmtDistPc(h.dist);
+  if (scene) { const ct = clockText(scene.clock); $('hud-date').textContent = `${ct.date} ${ct.time}${scene.clock.playing ? ' · ' + ct.rate : ''}`; }   // the sky clock (section 20.3), not the payload's date
   // speedMode (hudSpeed, section 19.3.6): 'turning' while an autopilot trip turns (the camera is not moving yet), 'rest' below the noise floor, else the speed
   const speedText = h.speedMode === 'turning' ? 'turning' : h.speedMode === 'rest' ? `0 · cruise ${fmtSpeedPc(h.cruisePc).split(' · ')[0]}` : fmtSpeedPc(h.speedPc);
   $('hud-speed').textContent = `${speedText}${h.flying ? ' · autopilot' : ''}`;
@@ -219,6 +222,33 @@ try {
   $('btn-stars').disabled = true; $('btn-solar').disabled = true; $('btn-reset').disabled = true; $('btn-evidence').disabled = true; $('btn-layers').disabled = true;
 }
 
+// ---------------------------------------------------------------- time: the time bar and the re-query (sections 20.3, 20.6)
+const MJD0 = 2400000.5;
+/** A re-queried payload replaces the objects (selection survives by id, the store moves to the clock's date at once); a failed SkyBoT never gets here. */
+const requerier = new Requerier({
+  cone: { ra, dec, radius },
+  now: () => performance.now(),
+  fetchObjects: (params, signal) => getObjects(params, signal),
+  onIngest: (payload) => {
+    const r = scene.setObjects(payload, { requery: true });
+    refreshCredits(payload.sources);
+    if (r.ok) setNote(scene.store.errorNotes().map((n) => `${kindsPhrase(n.kinds)} are missing: ${n.error}`).join(' '), 'objects');
+    refreshWarn();
+  },
+});
+let timeBar = null;
+if (scene) {
+  timeBar = new TimeBar({ root: $('timebar'), clock: scene.clock });
+  scene.clock.on('settle', ({ jd }) => requerier.onSettle(jd - MJD0));   // paused, unchanged for 1.5 s, not held: never while playing, editing or tweening
+  // the status line and the deferred re-query's timer, four times a second
+  setInterval(() => {
+    requerier.tick();
+    const c = scene.clock;
+    timeBar.setStatus(statusSegments({ summary: scene.motionText(), clock: c, epoch: scene.gaiaEpoch,
+      requery: requeryStatus({ state: requerier.state, mjd: c.mjd, playing: c.playing, rate: c.rate, now: performance.now() }) }));
+  }, 250);
+}
+
 // ---------------------------------------------------------------- loading
 async function loadContext() {
   try {
@@ -283,8 +313,7 @@ async function loadObjects() {
     if (!r.ok) { objectsState = 'error'; setNote(r.error, 'objects'); }
     else {
       objectsState = 'ok';
-      const m = p.query && p.query.mjd;
-      if (Number.isFinite(m)) solarDate = new Date((m - 40587) * 86400000).toISOString().slice(0, 10) + ' UTC';
+      requerier.seed(p);                                           // the payload drawn now: its day and small bodies (section 20.6)
       setNote(scene.store.errorNotes().map((n) => `${kindsPhrase(n.kinds)} are missing: ${n.error}`).join(' '), 'objects');
     }
   } catch (e) {

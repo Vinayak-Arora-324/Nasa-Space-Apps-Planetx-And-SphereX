@@ -113,6 +113,29 @@
 .layers-panel .chips .layer-break { flex-basis: 100%; height: 0; }
 .layers-panel .chips .pill.sub { margin-left: 20px; height: 32px; font-size: 12px; }
 
+/* ---- time bar (js/blink/timebar.js): controls, one status line and the line legend; in flow in the dock, above the credits ---- */
+.timebar { position: relative; box-sizing: border-box; max-width: min(760px, 100%); pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 8px 5px; border-radius: 12px; background: rgba(5, 7, 11, 0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.tb-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; max-width: 100%; }
+.timebar .tb-btn { height: 32px; min-width: 32px; padding: 0 10px; font-size: 13px; }
+.timebar .tb-step, .timebar .tb-play, .timebar .tb-more-btn { padding: 0 8px; letter-spacing: -0.04em; }
+.timebar .tb-play { min-width: 40px; }
+.timebar.playing .tb-play { border-color: var(--accent); color: var(--accent); }
+.tb-rate { min-width: 5.2em; text-align: center; color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.timebar .tb-readout { max-width: 100%; font-size: 12px; white-space: nowrap; }
+.tb-menu { position: absolute; z-index: 6; right: 6px; bottom: calc(100% + 6px); display: flex; gap: 6px; padding: 4px; border: 1px solid var(--ctl-border); border-radius: 10px; background: rgba(5, 7, 11, 0.92); }
+.tb-menu[hidden], .tb-edit[hidden], .tb-status[hidden] { display: none; }
+.tb-edit { position: absolute; z-index: 6; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); display: flex; flex-wrap: wrap; align-items: end; justify-content: center; gap: 8px; max-width: calc(100vw - 24px); padding: 8px 10px; border: 1px solid var(--ctl-border); border-radius: 10px; background: rgba(5, 7, 11, 0.92); }
+.tb-field { display: flex; flex-direction: column; gap: 2px; color: var(--text-2); font-size: 11px; }
+.tb-date, .tb-hour { height: 32px; padding: 0 8px; border: 1px solid var(--ctl-border); border-radius: 6px; background: var(--ctl-fill); color: var(--ctl-text); font: inherit; font-size: 13px; color-scheme: dark; }
+.tb-hour { width: 4.5em; }
+.tb-status { margin: 0; max-width: 100%; max-height: calc(3 * 1.4em + 2px); overflow-y: auto; overscroll-behavior: contain; color: var(--text-2); font-size: 11px; line-height: 1.4; text-align: center; overflow-wrap: anywhere; }
+.tb-legend { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 10px; color: var(--text-2); font-size: 10.5px; line-height: 1.4; }
+.tb-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.tb-swatch { display: inline-block; width: 22px; height: 0; border-top: 2px solid rgba(160, 182, 242, 0.9); }
+.tb-swatch.dashed { border-top-style: dashed; }
+.tb-swatch.dotted { border-top-style: dotted; }
+@media (max-width: 600px) { .timebar { padding: 4px 6px 5px; } .tb-legend { font-size: 10px; } }
+
 /* ---- bottom bar ---- */
 .bottom { width: max-content; max-width: 100%; pointer-events: auto; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 4px; border-radius: 12px; background: rgba(5, 7, 11, 0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .pills { display: flex; gap: 6px; }

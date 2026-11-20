@@ -32,6 +32,7 @@
     <dl class="readout">
       <div><dt>Where</dt><dd id="hud-where">Interstellar</dd></div>
       <div><dt>From the Sun</dt><dd id="hud-dist" class="mono">0 pc</dd></div>
+      <div><dt>Sky date</dt><dd id="hud-date" class="mono"></dd></div>
       <div><dt>Speed</dt><dd id="hud-speed" class="mono"></dd></div>
       <div class="dim"><dt>Mode</dt><dd id="hud-mode" class="mono"></dd></div>
       <div><dt>Nearest</dt><dd id="hud-near" class="mono">n/a</dd></div>
@@ -60,6 +61,7 @@
         <li>L opens the layers: the Milky Way glow, the cone outline, star names, and each kind of solar-system object. In the Stars scene the Sun, the planets and the Moon are marked across the whole sky, and dwarf planets, asteroids and comets inside the cone; picking one offers to show it in the Solar system. Under Beyond the Solar system, exoplanets, star clusters, nebulae and black holes: a star with planets is marked by its name, and picking it lists them. A nebula with no known distance is drawn on the sky as seen from the Sun; its card has Turn to it, and G does the same.</li>
         <li>I shows or hides the read-outs at the top left. Tab jumps to the Sun's system. E switches the evidence view, which hides everything illustrative. H returns to the start view. [ and ] change the magnitude limit.</li>
         <li>Auto speed (on by default) makes your speed a fraction of the distance to the nearest star or planet, so you slow down as you arrive and cannot fly into one. The wheel sets that fraction; T switches to a fixed speed. Shift goes ten times faster. R and Space go up, F goes down.</li>
+        <li>Time: P plays or pauses the sky clock (it starts paused, at today), , and . slow it down and speed it up, Shift+, runs it backwards, N returns to now. The date under the controls opens a date field. The planets and the Moon move on the ephemeris, small bodies on their orbits, exoplanets on theirs; a body drawn grey is beyond the range its data supports, and the Evidence view hides it. Stars stay at their catalogue epoch. Orbit lines: solid measured, dashed derived, dotted illustrative. When the clock rests on another day, the small bodies for that day are fetched.</li>
         <li>Touch: one finger looks around, two fingers pinch to move, a tap names a star.</li>
       </ul>
       <button type="button" id="help-start" class="btn accent">Start</button>
@@ -76,6 +78,9 @@
        above the nav however many rows it wraps to, never under it; its height is published as --dock-h for panels above it -->
   <div id="bottom-dock" class="bottom-dock">
   <p id="hint" class="hint" aria-live="polite">Click the sky to fly</p>
+
+  <!-- the sky clock's controls, status line and orbit-line legend (js/blink/timebar.js); above the credits line -->
+  <div id="timebar" class="timebar"></div>
 
   <p id="credits" class="credits" aria-label="Data credits" hidden></p>
 

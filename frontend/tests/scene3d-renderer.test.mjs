@@ -141,3 +141,34 @@ test('a galaxy looks the same in the galaxy and the cosmos frame (the switch has
   const e = visOf(s, 'cosmos', camC);
   assert.equal(e.length, 1, 'the cosmos frame draws the galaxy');
 });
+
+// ------------------------------------------------------------------ Phase 5: orbit line data (section 20.4.4, 20.17 items 5 and 6)
+import { pathsToBuf, linesToBuf, lineModeOf, lineRgba, LINE_MODE } from '../js/blink/scene3d.js';
+import { GREY_ALPHA, greyRgb } from '../js/blink/scene3d-objects.js';
+
+test('lineModeOf: measured solid, derived dashed, illustrative (and anything else) dotted', () => {
+  assert.equal(lineModeOf('measured'), LINE_MODE.solid);
+  assert.equal(lineModeOf('derived'), LINE_MODE.dashed);
+  assert.equal(lineModeOf('illustrative'), LINE_MODE.dotted);
+  assert.equal(lineModeOf('invalid'), LINE_MODE.dotted);
+  assert.equal(lineModeOf(undefined), LINE_MODE.dotted);
+});
+
+test('lineRgba: only a greyed line is desaturated and faded, to the same style as a greyed marker', () => {
+  assert.deepEqual(lineRgba([0.6, 0.7, 0.95, 0.3], false), [0.6, 0.7, 0.95, 0.3]);
+  const g = lineRgba([0.6, 0.7, 0.95, 0.3], true), c = greyRgb([0.6, 0.7, 0.95]);
+  assert.deepEqual(g.slice(0, 3), c); assert.ok(Math.abs(g[3] - 0.3 * GREY_ALPHA) < 1e-12);
+});
+
+test('pathsToBuf: 9 floats a vertex (x y z r g b a t mode), t runs 0..1 by chord length, each path keeps its own style', () => {
+  const flat = [0, 0, 0, 1, 0, 0, 3, 0, 0];                       // two segments, 1 and 2 long
+  const { data, n } = pathsToBuf([{ p: flat, rgba: [1, 0.5, 0.25, 0.4], mode: 1 }, { p: [0, 1, 0, 0, 2, 0], rgba: [0, 1, 0, 1], mode: 2 }]);
+  assert.equal(n, 6); assert.equal(data.length, 6 * 9);
+  const v = (i) => Array.from(data.subarray(9 * i, 9 * i + 9));
+  assert.deepEqual(v(0), [0, 0, 0, 1, 0.5, 0.25, Math.fround(0.4), 0, 1]);
+  assert.ok(Math.abs(v(1)[7] - 1 / 3) < 1e-6 && Math.abs(v(2)[7] - 1 / 3) < 1e-6 && v(3)[7] === 1 && v(1)[8] === 1);
+  assert.deepEqual([v(4)[7], v(5)[7], v(4)[8]], [0, 1, 2]);
+  assert.equal(pathsToBuf([{ p: [1, 2, 3], rgba: [1, 1, 1, 1], mode: 0 }]).n, 0, 'a single point draws nothing');
+  const polys = linesToBuf([[[0, 0, 0], [1, 0, 0], [1, 1, 0]]], [1, 1, 1, 1]);
+  assert.equal(polys.n, 4); assert.equal(polys.data[8], 0, 'solid');
+});

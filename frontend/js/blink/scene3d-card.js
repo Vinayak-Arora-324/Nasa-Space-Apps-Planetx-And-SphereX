@@ -89,7 +89,7 @@ function finish(doc, root, dl, used, notes, onGo, loading, error, goLabel, child
  * goLabel: the button's text (default 'Go there'). goDisabled: a reason string; the button is shown disabled with it as its title.
  * children: the list of a star's planets (see addChildren), after the rows and before the notes.
  */
-export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows, dataRow } = {}) {
+export function renderStarCard(host, model, { title, subtitle, distFromCameraText, onGo, loading, error, goLabel, goDisabled, children, distRows, dataRow, epochRow } = {}) {
   const doc = host.ownerDocument;
   clear(host);
   host.appendChild(el(doc, 'h3', 'card-title', title || 'Star'));
@@ -110,6 +110,8 @@ export function renderStarCard(host, model, { title, subtitle, distFromCameraTex
   else row('Distance from Sun', m.distPc, 'pc', 2);
   row('G', m.gMag, 'mag', 2);
   row('BP−RP', m.bpRp, 'mag', 2);
+  // epochRow ([label, text, tier, src]): the epoch of the star's catalogue position (section 20.17 item 1): the stars do not move with the sky clock
+  if (epochRow) addRow(doc, dl, epochRow[0], epochRow[1], epochRow[2], epochRow[3] || '', used);
   if (distFromCameraText) addRow(doc, dl, 'From you', distFromCameraText, 'illustrative', 'distance from the camera right now', used);
   // dataRow ([label, text, tier, src]): the Gaia credit row of a Gaia star (section 18.12); shown in the Evidence view too
   if (dataRow) addRow(doc, dl, dataRow[0], dataRow[1], dataRow[2], dataRow[3] || '', used);

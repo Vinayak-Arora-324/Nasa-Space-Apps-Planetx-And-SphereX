@@ -131,21 +131,33 @@ void main(){
   vec3 hue = v_col/max(max(v_col.r, v_col.g), max(v_col.b, 1e-4));
   o = vec4(hue*(invT(min(I, 1.0)) + 0.5*log2(max(I, 1.0))), 1.0);
 }`;
+// Lines: x y z, rgba, and a_line = (t, mode). t is the fraction of the path (0..1), mode the style of section 20.4.4: 0 solid (measured), 1 dashed
+// (derived), 2 dotted (illustrative). The pattern is keyed by the path fraction, like the Evidence ring's dashes (BB_FS, section 16.10): a fixed number
+// of dashes around an orbit, half on (dashed) or 30 % on (dotted), so the same orbit looks the same at any zoom.
 export const LINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec4 a_col;
+layout(location=2) in vec2 a_line;
 uniform mat4 u_vp;
 uniform vec3 u_eye;
 out vec4 v_col;
-void main(){ gl_Position = u_vp * vec4(a_pos - u_eye, 1.0); v_col = a_col; }`;
+out vec2 v_line;
+void main(){ gl_Position = u_vp * vec4(a_pos - u_eye, 1.0); v_col = a_col; v_line = a_line; }`;
 export const LINE_FS = `#version 300 es
 precision highp float;
 in vec4 v_col;
+in vec2 v_line;
 out vec4 o;
 uniform float u_a;                                         // an overall alpha (the cone outline fades with galaxyFade)
 ${INVT}
-void main(){ o = vec4(invT3(v_col.rgb * v_col.a * u_a), 1.0); }`;
+void main(){
+  if (v_line.y > 0.5) {
+    float ph = fract(v_line.x * (v_line.y > 1.5 ? 120.0 : 56.0));
+    if (ph > (v_line.y > 1.5 ? 0.3 : 0.55)) discard;
+  }
+  o = vec4(invT3(v_col.rgb * v_col.a * u_a), 1.0);
+}`;
 
 // Impostor spheres: a screen rectangle per body (u_rect, NDC), a ray-sphere intersection per pixel. u_c is the sphere
 // centre in view space in units of the sphere's radius, computed on the CPU in doubles, so it is exact from 1 R to kpc.

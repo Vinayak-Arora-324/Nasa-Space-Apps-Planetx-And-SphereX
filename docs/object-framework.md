@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20, awaiting approval.**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -4032,3 +4032,552 @@ Chromium on a real Wayland display with real-time rAF; 1280 × 800 unless stated
 - The home ring and the old galaxy-frame Sun marker were not looked at together between 20 and 40 kpc, where both can
   show.
 - The Galactic Centre's Gaia cone took 176 s to load cold (the upstream archive, the same before and after).
+
+## 20. Phase 5: time and behaviour (design)
+
+Status: **designed 2026-11-20, awaiting approval** (open questions in §20.16). Sections of §1–§19 that Phase 5 changes
+will carry a "Phase 5 change" note pointing here. Where this section and an earlier one disagree, this one wins.
+
+Phase 5 is the second of the follow-up phases of §18.16: orbit animation over time, the general evidence rule for
+hosted kinds (§17.15, approval condition 2), and the cluster member-star highlight (§16.12). "Turn back the sky"
+(Phase 6) and lensing and real images (Phase 7) are out of scope; Phase 5 only builds the time model Phase 6 will reuse.
+The fourth Phase 5 item of §18.16, a per-galaxy `kpc` frame, is conditional on showing resolved stars of other
+galaxies, which nothing does yet, so it stays open and unbuilt.
+
+Every external fact below was checked live on **2026-11-20**:
+- IMCCE SkyBoT (`ssp.imcce.fr/webservices/skybot/api/conesearch.php` and `resolver.php`): the output fields, the frame
+  and epoch of its state vectors, and the range of epochs it serves (§20.2);
+- the two-body drift of SkyBoT states, measured against SkyBoT itself for nine bodies (§20.5);
+- ERFA's `plan94.c` and `moon98.c` (github.com/liberfa/erfa, `master`), for the accuracy statements the client
+  ephemeris inherits;
+- the JPL DE440 header (`ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440`), for the Earth–Moon mass ratio;
+- the Gaia archive (ESA TAP), for the largest proper motion in Gaia DR3;
+- VizieR through the CfA mirror, with IDIA answering the same metadata, for the HR24 members table; CDS
+  (`vizier.cds.unistra.fr`) did not answer, and no mirror served the catalogue's `ReadMe` file.
+
+Numbers measured here come from scripts run against those services and the committed data; the build reports and the
+tests give the final ones.
+
+### 20.1 Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| The time model | A pure, DOM-free module, **`frontend/js/blink/skyclock.js`**: one `SkyClock` per page holding the sky time (a TT Julian Day), the rate (sky days per wall second, signed), play/pause, a range, "now", and a `tweenTo` for scripted trips. The 3D view uses it now; Phase 6's "Turn back the sky" replaces its own `jd0 → jd1` tween with it. The time bar (DOM) is a separate file (§20.3). |
+| The 3D view's range | **1900-01-01 to 2100-01-01 TT**, the range `/api/objects` accepts (`mjd` 15020–88069, §4.1). Q1. |
+| Planets and the Moon | Evaluated in the browser from `ephem.js` (ERFA plan94 and moon98, already shipped for the 2D rewind), the same algorithms the server's astropy built-in ephemeris uses. Earth comes from the Earth–Moon barycentre and the Moon. A constant per-body **anchor** makes the drawn position equal to the server's at the payload's epoch, so starting the clock never makes anything jump (§20.4.1). |
+| Dwarf planets | Not from the ephemeris: they come from SkyBoT, so they move like asteroids and comets (§20.4.2). The checklist grouped them with the planets. |
+| Asteroids and comets | SkyBoT returns a heliocentric **state vector** (position and velocity, equatorial, at a reference epoch on a 10-day grid) that the backend throws away today. The backend keeps it in the record (`position.osc`, §20.11), and the client propagates it as a two-body orbit around the Sun (universal variables, so hyperbolic comets work), anchored like the planets (§20.4.2). |
+| Exoplanets and binary black holes | `orbitPlacement` at the clock's date, precompiled per record so that a frame does no hashing or allocation (§20.4.3). |
+| Valid ranges | Per source, stated on cards and in the time bar (§20.5). Beyond its range a record is drawn **greyed** in the normal view and is **hidden in the Evidence view**, because its placement is then an extrapolation (illustrative). Q2. |
+| Re-querying `/api/objects` | Only small bodies need it (the planets are computed in the browser, static datasets do not depend on the date). The page re-queries with the new `mjd` when the clock **settles** (paused for 1.5 s) more than one day from the payload's epoch and inside SkyBoT's range. While the clock plays it never re-queries (§20.6). Q3. |
+| Stars | Stay fixed at their catalogue epoch (2016.0 for Gaia). Proper motion is **not** applied in Phase 5: within 1900–2100 the worst case is Barnard's star, 20′ off at 1900. Phase 6 brings space motion to the shared catalogues (§20.7). Q1. |
+| Illustrative motion | May animate, and stays visibly illustrative: orbit lines are styled by their evidence (solid measured, dashed derived, dotted illustrative), the label of an illustrative moving body carries ◌, and the time bar lists what is moving and on what evidence (§20.4.4). Q5. |
+| General rule for hosted kinds | **A system drawn as one group marker takes its host's evidence; a resolved system draws each record with its own.** No special case for any kind: in the Evidence view TRAPPIST-1's seven planets and Cyg X-1's black hole appear as their host's group marker in the galaxy frame, and stay hidden inside their system. Grouping uses each orbit's size, not where the body is on it (§20.8). |
+| Cluster member highlight | §16.12 design (a), using **HR24's members table**: one static member file per cluster within 500 pc (695 clusters, 89,738 members), fetched when the cluster is selected, and drawn as rings on the payload stars that are members (§20.9). Q4. |
+| A selected small body's orbit | Its osculating orbit is drawn while it is selected, dotted beyond its valid range. This is new scope, so it is asked as Q6 (§20.10). |
+
+### 20.2 Sources, facts and dates (checked 2026-11-20)
+
+| Fact | Checked how | Used for |
+|---|---|---|
+| SkyBoT `-output=all` (cone search and resolver) returns, per object, `"position (au)": {x, y, z}`, `"velocity (au/d)": {x, y, z}` and `ref_epoch` (a JD), besides the fields `movers.parse_skybot` reads today. | Live JSON for a cone at (150°, +10°), JD 2461000.5, and for Ceres by name. | §20.4.2, §20.11 |
+| The vectors are **heliocentric, equatorial (ICRF axes)** and refer to `ref_epoch`, not to the requested epoch. With Earth from astropy, `Earth(t) + dg · û(RA, Dec)` equals `position + velocity · (t − ref_epoch)` to about 1e-4 AU for Ceres at two epochs; the rest is light time (0.013 d × 0.0094 AU/d). Rotated as if ecliptic, the residual is 0.4–0.7 AU. | Script against the live resolver and `objects_live.earth_xyz`. | the frame and epoch of `position.osc` |
+| `ref_epoch` is a whole Julian Day divisible by 10 at or before the requested epoch in every probe: 2461000.5 → 2461000; 2461001.2 → 2461000; 2461100.5 → 2461100; 2461364.5 (today) → 2461360; 2415020.5 → 2415020. So the state can be up to about 10 days older than the query. | Live probes. | the anchor (§20.4.2) |
+| SkyBoT serves epochs from between **1890-02-08 and 1890-02-12** (JD 2411406.5 refused, 2411410.5 served) to between **2060-03-21 and 2060-03-26** (2473539.5 served, 2473544.5 refused: "The requested time span does not exist, or is temporarily unavailable"). | Bisection on the live resolver (Ceres). | §20.5, §20.6 |
+| ERFA `plan94`: "From comparisons with JPL ephemeris DE102, they quote the following maximum errors over the interval 1800-2050" (L, B in arcsec; R in km): Mercury 4, 1, 300; Venus 5, 1, 800; EMB 6, 1, 1000; Mars 17, 1, 7700; Jupiter 71, 5, 76000; Saturn 81, 13, 267000; Uranus 86, 7, 712000; Neptune 11, 1, 253000. "Over the interval 1000-3000, they report that the accuracy is no worse than 1.5 times that over 1800-2050." For np = 3 it returns the Earth–Moon barycentre. | `plan94.c` notes 3 and 5. | §20.5 |
+| ERFA `moon98`: "Comparisons with ELP/MPP02 over the interval 1950-2100 gave RMS errors of 2.9 arcsec in geocentric direction, 6.1 km in position … The worst case errors were 18.3 arcsec in geocentric direction, 31.7 km in position". | `moon98.c` note 3. | §20.5 |
+| astropy 8.0.2's built-in ephemeris (the server's `ephem` source) uses `erfa.epv00` for the Earth and the Sun, `erfa.moon98` for the Moon and `erfa.plan94` for the planets. | The installed `astropy/coordinates/solar_system.py`. | the anchor (§20.4.1) |
+| DE440's Earth–Moon mass ratio `EMRAT` = 81.30056822149722. | DE440 header, group 1041. | Earth from the barycentre |
+| Earth computed as `plan94(EMB) − Moon / (1 + EMRAT)` differs from `epv00` by **2,081 km rms and 6,496 km at most** over 1900–2100 (23,565 dates, every 3.1 d). | pyerfa script. | the anchor (§20.4.1) |
+| Gaia DR3's largest proper motion is Barnard's star, `gdr3:4472832130942575872`: pmRA −801.55, pmDec 10,362.39 mas/yr (pm 10,393.349 mas/yr), parallax 546.98 mas, RV −110.47 km/s. | ESA TAP, `gaiadr3.gaia_source`, `ORDER BY pm DESC`. | §20.7 |
+| HR24 has a members table, `J/A+A/686/A42/members` ("Member stars of clusters (table 2)"), with `Name`, `ID`, `GaiaDR3`, `inrt` (within the King tidal radius), `Prob` (membership probability), positions at 2016.0, mean proper motions, parallax and photometry. Rights URI: the VizieR licence page, as for the pinned clusters table. A list constraint (`ID==2,=3`) works on the CfA ASU interface. | ASU `-meta.all` on CfA and IDIA; a live query. | §20.9 |
+| The Pleiades (`Melotte_22`, ID 4423) has **1,721** member rows, the clusters table's `N`; 1,014 have `Prob ≥ 0.5`, and they are exactly the 1,014 with `inrt = 1`; 1,484 have G < 18. | Live query of the members table. | §20.9 |
+| The pinned clusters snapshot sums `N` to **1,291,929** members. Within a `dist50` of 250 / 500 / 1,000 / 2,000 pc there are 234 / **695** / 1,669 / 3,455 clusters with 24,373 / **89,738** / 193,208 / 407,651 members. | The committed `clusters-hr24-2026-11-18.csv.gz`. | §20.9, Q4 |
+
+### 20.3 The shared clock (`skyclock.js`) and the time bar (`timebar.js`)
+
+**`skyclock.js`** (new, pure, imports `skytime.js` only):
+
+```js
+export const RATES = [1/24, 0.25, 1, 7, 30.436875, 365.25, 3652.5];   // sky days per wall second: 1 h, 6 h, 1 d, 1 wk, 1 mo, 1 yr, 10 yr
+export class SkyClock {
+  constructor({ jd, minJd, maxJd, rate = 1, nowMs = () => Date.now() })
+  jd; minJd; maxJd; rate; playing;          // jd is TT; rate is signed (negative runs backwards)
+  get mjd()                                  // jd - 2400000.5 (TT; TDB - TT is under 2 ms and ignored, as in section 16.6)
+  tick(wallMs) -> { jd, changed, limit }     // advances by rate * wallMs / 1000 days while playing; a tween overrides it
+  play(); pause(); toggle();
+  setRate(r); faster(); slower(); reverse(); // faster/slower step through RATES, keeping the sign; reverse flips it
+  setJd(jd, { source })                      // clamps to the range; source is 'user' | 'now' | 'tween' | 'query'
+  jumpToNow()                                // jdNow(nowMs()), clamped
+  tweenTo(jd, { durationMs, ease })          // a scripted trip (Phase 6); tick() follows it and ends paused at jd
+  settled(wallMs, quietMs = 1500) -> bool    // paused (or a tween ended) and jd unchanged for quietMs: the re-query trigger
+  on(event, fn)                              // 'change' | 'limit' | 'settle' | 'rate'
+}
+export function jdNow(ms)                    // UTC from the wall clock, then TT = UT + deltaT(year) (skytime.deltaT)
+export function clockText(clock) -> { date: '20 Nov 2026', time: '14:00 UT', rate: '1 day/s', dir: 1 | -1 | 0, julian: bool }
+```
+
+- Reaching either end of the range pauses the clock there and emits `limit`; the time bar says why ("The 3D view
+  covers 1900–2100").
+- Dates are formatted with `skytime.calendarFromJd` (Julian calendar before 1582, astronomical year numbering, BCE),
+  so Phase 6's range of ±15,000 years needs no new formatting. The time shown is UT, TT − ΔT, labelled "UT" (UTC did
+  not exist before 1960).
+- Phase 6 constructs its own clock with its own range; nothing in `skyclock.js` knows about the 3D view.
+
+**`timebar.js`** (new, DOM, owned by the renderer slice): a row in the bottom dock, above the credits line.
+- Controls: **Now**, **slower** (◀◀), **play/pause**, **faster** (▶▶), the rate ("1 day/s", "−1 yr/s"), and the date and
+  time readout, which is also a button that opens a date field (`<input type="date">` plus hours).
+- Keys: **P** play/pause, **,** slower, **.** faster, **N** now (all unbound today). Shift+, reverses.
+- Below the controls, one line of status from the renderer (§20.4.4): what is moving and on what evidence, and any
+  range warning ("Small bodies beyond ±1 yr of their SkyBoT epoch are greyed").
+- At 375 px: Now, play/pause, the rate and the date (no time); slower and faster go under a "⋯" button.
+- The HUD's date row (§7.5) reads the clock instead of `query.mjd`.
+
+The clock starts **paused at the payload's epoch** (today, rounded to the hour), so the page looks as it does now until
+someone presses play. Play starts at 1 day/s.
+
+### 20.4 What moves
+
+The store (`scene3d-objects.js`) gains a motion layer in a new pure module, **`scene3d-motion.js`**.
+
+- At ingest each record is compiled into a mover, or none:
+  - `{ model: 'ephem', np | 'moon' | 'earth', anchor }` for Sun-hosted `state` records from `ephem`;
+  - `{ model: 'kepler', plan, anchor, epochJd }` for `state` records with `position.osc`;
+  - `{ model: 'orbit', plan }` for `orbit` records.
+- `store.setTime(mjd, { hosts })` re-evaluates movers in place (no allocation; each writes into its record's `sysAu`
+  and `galPc`) and returns whether anything moved.
+  - It evaluates only records whose host is in `hosts`: the Sun always (its markers show from Earth in the galaxy frame)
+    and the camera's system host.
+  - Other hosts are evaluated when the camera enters their frame. In the galaxy frame they are grouped on their star
+    anyway (§20.8), so their offsets are not drawn.
+- `store.validity(id, mjd) -> { ok, reason, lo, hi }` (§20.5).
+- At the payload's epoch every mover reproduces the server's position exactly (the anchor), and
+  `setTime(query.mjd)` leaves every record where `ingest` put it. That is a test.
+
+#### 20.4.1 Planets, the Moon and the Sun
+
+- `ephem.js` gains two exports:
+  - `heliocentric(jd) -> { earth, moon, planets: { mercury: [x, y, z], … } }` (AU, ICRS axes). The planets come from
+    `plan94`, and Earth = `plan94(EMB) − moonGeocentric / (1 + EMRAT)` with DE440's `EMRAT`. The Moon is Earth plus
+    `moonGeocentric`, so the Moon relative to Earth is exactly the moon98 vector.
+  - `planetElements(jd, np)`: plan94's mean elements, for the orbit lines.
+- **Anchor.** At ingest, `anchor = xyz_server(t₀) − xyz_client(t₀)` per body, with t₀ the payload's epoch. The drawn
+  position is `xyz_client(t) + anchor`.
+  - For the planets the anchor is the rounding of the server's coordinates (both sides run plan94; a test bounds it at
+    1e-8 AU).
+  - For Earth and the Moon it is the epv00 difference, at most 6,496 km (§20.2). Without it, starting the clock would
+    move Earth by up to one Earth radius, which shows from the default Solar-system camera.
+- The Sun stays at the origin of its system frame. Its galaxy-frame marker is at −Earth, as now.
+- **Orbit lines.** Today they are circles of radius |r| (§16.8), which a moving planet would leave (Mercury's e is
+  about 0.2). They become plan94's ellipses at the clock's date, rebuilt when the date has moved more than 30 days
+  since the last rebuild. They are measured placements and stay in the Evidence view, as the circles do now.
+- Tier and evidence are unchanged (`measured`, ephemeris). The card's position `src` reads "ERFA plan94/moon98 in the
+  browser (ephem.js), anchored to the server ephemeris at \<payload date\>" whenever the clock is not at the payload's
+  epoch.
+
+#### 20.4.2 Asteroids, comets and dwarf planets
+
+- **Backend:**
+  - `parse_skybot` keeps `position (au)`, `velocity (au/d)` and `ref_epoch`; the cache key moves to `skybot-4`.
+  - `skybot_record` writes them as `position.osc` (§20.11) with tier `catalogue` (SkyBoT's computed state, like its
+    positions).
+  - The record's own `xyz_au` and `geo` are unchanged, so the server's placement at the query epoch is what it was.
+- **Client propagation** (`scene3d-motion.js`):
+  - two-body motion about the Sun with μ = k², the Gaussian constant `ephem.js` already uses (`GK`; the body's mass is
+    ignored);
+  - the universal-variable Kepler equation with Stumpff functions, solved by Newton's method and warm-started from the
+    previous frame's value, so elliptic, parabolic and hyperbolic orbits (interstellar `I/` objects, many `C/` comets)
+    share one code path;
+  - the anchor is the server's `xyz_au` minus the propagated position at the payload's epoch. It absorbs the light
+    time in SkyBoT's astrometric direction and the up to 10 days between `ref_epoch` and the query.
+- **Osculating elements** (a, e, i, Ω, ω, q, the period when e < 1) are derived once at ingest. They are shown on the
+  card as "Osculating elements from SkyBoT's state at JD 2461360.0 (catalogue)" and drawn for a selected body (Q6).
+- The `state` model's `mjd` keeps meaning the epoch of `xyz_au`; the drawn date is the clock's.
+
+#### 20.4.3 Exoplanets and binary black holes
+
+- `scene3d-orbits.js` gains `compileOrbit(rec) -> plan | null` and `evalOrbit(plan, mjd, out) -> out`.
+  - `compileOrbit` does everything `orbitPlacement` does except the Kepler solve: the hashed node, inclination, ω and
+    phase; the sky basis; and the two 3-vectors that map (r cos u, r sin u) to ICRS.
+  - `evalOrbit` solves Kepler (warm-started) and writes `xyzAu` into `out`.
+  - `orbitPlacement(rec, mjd)` keeps its API and results and is rewritten over the two, which a test checks to 1e-12 AU.
+- **The phase source drives what the card says** (the §16.6 rules, unchanged):
+
+  | Phase source | Animation | Card text (example) |
+  |---|---|---|
+  | `t_conj_mjd` (transit or conjunction time) | measured period from the measured epoch | "Phase from the 2017 transit time, ±3.5° at this date" |
+  | `t_peri_mjd` (periastron time) | the same | "Phase from the periastron time (2015), ±1.9° at this date" (Gaia BH1) |
+  | neither (**T_p missing**) | the measured period from an **assumed** starting phase (the hash at J2000) | "No published phase epoch: the motion runs at the measured 5.6-day period from an assumed starting point; where it is on its orbit is illustrative" (Cyg X-1) |
+  | period without an interval | as its source; σ is unknown | "…; the phase uncertainty at this date is not known (no period error published)" |
+
+- **Light time.** Archive epochs are times seen from the Solar System. The phase drawn at date t is therefore the phase
+  observed from here at t (the system's own state about d/c earlier). A transit drawn at t is a transit seen at t. The
+  card says so once, in its notes.
+- A hosted black hole moves relative to its companion, which stays at the origin of the system frame (the relative
+  orbit of §17.8). The card says "relative orbit; the star is held still".
+
+#### 20.4.4 Keeping illustrative motion visibly illustrative
+
+In the normal view (the Evidence view hides illustrative placements anyway, §3):
+- **Orbit lines by evidence.** Solid for measured (planets, Gaia BH1 and BH2), dashed for derived (Gaia BH3), dotted
+  for illustrative (exoplanets with an unknown node, the X-ray binaries). A line beyond its source's valid range is
+  drawn greyed.
+  - **Change to §16.8:** a non-Sun host's measured and derived orbits stay in the Evidence view, solid and dashed; only
+    illustrative ones are hidden there. Today all of them are hidden.
+  - The line styles reuse the dashed pattern of the Evidence ring (§16.10), keyed by line distance in the line shader.
+- **Labels.** The label of a moving record whose drawn placement is illustrative ends in ◌, the illustrative tier
+  glyph (TRAPPIST-1 e ◌).
+- **The time bar's status line** names what is moving: "Moving: 8 planets and the Moon (ephemeris) · 214 small bodies
+  (SkyBoT orbits, ±1 yr) · 7 exoplanets ◌ (orbit orientation unknown)". This is built by a pure
+  `motionSummary(visible, validity)` helper.
+
+### 20.5 Accuracy and valid ranges
+
+| Source | Valid range in the 3D view | Accuracy inside it | Beyond it |
+|---|---|---|---|
+| Planets (plan94) | the whole clock range (1900–2100 lies inside plan94's 1000–3000) | plan94's quoted maximum errors over 1800–2050 (§20.2), for example Jupiter 71″ and 76,000 km, Saturn 81″ and 267,000 km | — |
+| Earth | the same | plan94's EMB errors plus up to 13,000 km from the anchored epv00 difference (2 × 6,496 km) | — |
+| Moon (moon98) | the same | moon98's worst case over 1950–2100: 18.3″, 31.7 km (relative to Earth) | — |
+| Asteroids, comets, dwarf planets (SkyBoT state + two-body) | **±1 year of the record's `osc` epoch**, and inside SkyBoT's served range for re-queries (1890-02 to 2060-03) | measured drift below, ≤ 0.04° within ±1 yr for every body tested | greyed; hidden in the Evidence view; card warning; a re-query on settle (§20.6) |
+| Exoplanets, black holes with a phase epoch | while the phase σ at the date (§16.6: 360° · \|t − T₀\| · σ_P / P²) is ≤ 90° | the card's ± phase | the phase is "effectively unknown at this date": the placement counts as illustrative (it already is for every exoplanet; for a measured or derived orbit it is demoted) |
+| Orbits with an assumed phase | none claimed (always illustrative) | — | — |
+
+**Two-body drift of SkyBoT states, measured 2026-11-20.**
+- Method: the state at t₀ = JD 2461360 (SkyBoT's epoch for today) is propagated two-body and compared with SkyBoT's
+  own state at t₀ + Δt, which comes from SkyBoT's integrated orbit.
+- What it measures: drift relative to SkyBoT, not against truth.
+- Units: |Δr| / geocentric distance, in degrees, an upper bound on the direction error seen from Earth.
+- The ±1 yr columns are −370 and +360 days, because of the 10-day grid.
+
+| Body (class) | −10 yr | −1,000 d | −1 yr | +1 yr | +1,000 d | +10 yr |
+|---|---|---|---|---|---|---|
+| Ceres (main belt) | 1.07 | 0.106 | 0.018 | 0.024 | 0.27 | 0.77 |
+| Eros (NEA, Amor) | 0.37 | 0.036 | 0.040 | 0.027 | 0.0046 | 0.013 |
+| Apophis (NEA, Aten) | 0.64 | 0.048 | 0.0094 | 0.0086 | **52** | **33** |
+| Hektor (Jupiter Trojan) | 1.12 | 0.068 | 0.0055 | 0.0051 | 0.050 | 0.26 |
+| Chiron (Centaur) | 0.14 | 0.015 | 0.0021 | 0.0021 | 0.013 | 0.071 |
+| Pluto (KBO, 3:2) | 0.053 | 0.0074 | 0.0010 | 0.0010 | 0.0069 | 0.036 |
+| 2P/Encke (Jupiter family) | 2.51 | 0.063 | 0.0046 | 0.0018 | 0.056 | n/a |
+| 29P/Schwassmann–Wachmann 1 | 1.12 | 0.062 | 0.0064 | 0.0067 | 0.074 | n/a |
+| 1P/Halley | 0.054 | 0.0082 | 0.0011 | 0.0011 | 0.0073 | n/a |
+
+- Apophis passes Earth in April 2029. Two-body motion cannot follow that, which is the 52°.
+- "n/a": SkyBoT serves no epoch 10 years ahead of today for these comets.
+- The 1P run hit two solver failures in the measuring script (e = 0.968 with a starting guess of π), which are left out.
+  The client uses universal variables, which a test drives at e = 0.968 and e = 1.2.
+- **The window.** At ±1 yr every body is within 0.04°, about one pixel at the default field. At ±1,000 days Ceres is
+  0.27° off, and a close approach can break it completely. One window for every class keeps the rule explainable;
+  per-class windows would let TNOs run ±10 yr. That is Q3.
+
+**Greyed, concretely.** Markers and points at 35 % alpha, desaturated; orbit lines greyed; the label without ◌ but
+with "(extrapolated)"; the card's first row "Drawn \<Δt\> beyond its valid range (\<reason\>)". The Evidence view hides
+the record, because its placement is then an extrapolation beyond what the source supports, which is illustrative by
+§3. Greyed records still count in the HUD and on host cards, because they exist.
+
+### 20.6 Re-querying `/api/objects`
+
+| What | Needs the server at a new date? |
+|---|---|
+| Planets, the Moon, the Sun | No: computed in the browser. |
+| Static datasets (exoplanets, clusters, nebulae, black holes, galaxies) | No: they do not depend on `mjd`. |
+| Asteroids, comets, dwarf planets | **Yes**, for two reasons: SkyBoT's set is the bodies **in the cone at the query epoch** (main-belt asteroids cross a 3° cone in days to weeks, so the population changes), and the states drift (§20.5). |
+
+**Rule.**
+- When the clock **settles** (paused, or a tween ended, with the date unchanged for 1.5 s) at a date more than one day
+  from the payload's `query.mjd`, the page fetches `/api/objects` with `mjd` set to the settled date rounded to the
+  hour (the server's cache rounding, §4.3).
+- It does not re-query while playing, beyond SkyBoT's served range (§20.2, a constant in `skyclock.js` with its check
+  date), or when the last re-query for the same rounded hour failed.
+- While a re-query is in flight the time bar says "Fetching the small bodies for \<date\>…". The store keeps drawing
+  the propagated set.
+- On arrival, `ingest` replaces the store (ids are stable, so a selection survives, §7.2). New anchors are taken at the
+  new epoch. Bodies that left the cone disappear, which is right: the patch is the cone at that date.
+- Cost: a warm SkyBoT cache answers in well under a second; a cold SkyBoT cone can take up to the 25 s source deadline (§4.2), and keeps filling the cache after it. Static tiles are
+  cached in memory on the server.
+- A full payload is fetched, not `kinds=asteroid,comet,dwarf_planet`, because the store replaces its contents on every
+  payload (§18.18 item 4) and a merge path is more than this needs.
+
+While playing far from the payload's epoch, the time bar's status line says "Small bodies: the 214 in the cone on 20
+Nov 2026, moved along their orbits; pause to fetch the ones there on \<date\>".
+
+### 20.7 Stars and proper motion
+
+**Recommendation: stars stay fixed in Phase 5.**
+- The Gaia stars are at epoch 2016.0. Over 1900–2100 the largest displacement in Gaia DR3 is Barnard's star at
+  10,393 mas/yr: 116 years × 10.39″ = **20.1′** at 1900, and 14.5′ at 2100.
+- Its distance changes by 110.5 km/s × 116 yr ≈ 0.013 pc, under 1 % of 1.83 pc.
+- Stars with proper motions under 100 mas/yr, the great majority, move less than 12″.
+- Applying motion would mean:
+  - adding `pmra`, `pmdec` and `radial_velocity` to the Gaia star payload, with the cache key bumped and every cold
+    cone re-queried (the Galactic Centre took 176 s cold, §19.15);
+  - a velocity attribute in the star shader;
+  - the same for the XHIP context stars and the curated star records.
+- That is Phase 6's work in any case, because "Turn back the sky" needs space motion over millennia (it does it today
+  with `skytime.js` on its own catalogue).
+- Phase 5 says it instead. The time bar's status line adds "Stars at their 2016 positions" when |t − 2016| > 10 yr,
+  and the star card adds the epoch.
+- Q1 asks whether to bring proper motion forward.
+
+### 20.8 The general evidence rule for hosted kinds (§17.15, approval condition 2)
+
+**Rule.** *A system drawn as one group marker takes its host's evidence. A resolved system draws each of its records
+with its own evidence.* The host's evidence is:
+- its star record's `evidence` when there is one (NEA hosts, the curated companions);
+- `measured` for a payload Gaia star (Bailer-Jones geometric distance, tier `measured`, `system3d.py`) or an XHIP
+  context star (Hipparcos parallax);
+- `measured` for the Sun.
+
+The rule applies to every hosted kind (exoplanets, black holes, the Sun's planets and small bodies), with no special
+case.
+
+**Mechanics** (`groupState`, `visibleObjects`):
+1. A host's group is built from **every** record of that host whose layer is on, whatever its evidence or validity
+   (existence is measured, §3). Today it is built from the visible entries only.
+2. The spread that decides grouping is each record's **orbit size**: `a (1 + e)` for `orbit` records and the drawn
+   |r| for `state` records. Today it is the drawn position.
+   - So a system groups and ungroups at the same camera distance whatever the date, the phase or the view.
+   - An eccentric wide orbit would otherwise group and ungroup as its planet moved.
+3. A grouped system draws one marker at the host. In the Evidence view it is hidden only when the host's evidence is
+   illustrative. In both views it is hollow when the host's evidence is derived (today every group marker is solid).
+4. A resolved system draws its records individually, each with its own evidence. In the Evidence view, illustrative
+   ones are hidden and derived ones hollow, as today.
+5. Picking a non-Sun group selects the host star, whose card lists every child (unchanged, §16.8).
+
+**Every visible change:**
+- **Galaxy frame, Evidence view:** hosts whose records are all illustrative now show their group marker and label.
+  - Examples: "TRAPPIST-1 · 7 exoplanets", "HD 226868 · 1 black hole" (Cyg X-1), "V616 Mon · 1 black hole".
+  - That is every NEA host whose own evidence is measured: 4,504 of 4,852 star records in the snapshot.
+  - Today these markers vanish in the Evidence view.
+- **Group markers become hollow for derived hosts:** 275 NEA star records. They are solid today, whatever the host.
+- **Group markers of illustrative hosts are hidden in the Evidence view:** 73 NEA star records, all of them hosts whose
+  distance is assumed (`method: assumed`). Today they are hidden because their planets are.
+- **Wide orbits group by orbit size.** At 1280 × 800 (`pxPerRad` ≈ 693), 8 px at the frame-switch distance (0.02 pc)
+  is about 48 AU, so 66 exoplanets with a ≥ 48 AU can today ungroup in the galaxy frame depending on where they are on
+  their orbits. Each now groups and ungroups at a fixed camera distance from its star, whatever its phase.
+- **HUD counts in the galaxy frame** include grouped hosted records in the Evidence view ("7 exoplanets, on their
+  stars").
+- **Unchanged:**
+  - inside a system frame, illustrative placements are hidden in the Evidence view and listed on the host card;
+  - `hostCountText` still reads "(positions illustrative)";
+  - the Sun's group is unchanged in either view (the Sun is measured);
+  - in the Stars scene at the start camera the solar system is resolved, so each planet and small body keeps its own
+    evidence, and greyed extrapolated small bodies are hidden in the Evidence view.
+
+### 20.9 The cluster member-star highlight (§16.12)
+
+**Design (a)**, now possible because HR24 publishes a members table (§20.2):
+
+- **Build** (`build_objects_hr23.py`, `script_version` 2):
+  - It fetches `J/A+A/686/A42/members` for every cluster with `dist50 ≤ 500 pc` (695 clusters; ID-list constraints in
+    batches) through the existing mirrors.
+  - It commits the snapshot `members-hr24-<date>.csv.gz` (`ID`, `GaiaDR3`, `Prob`, `inrt`; rows sorted) with
+    `SOURCE.json` entries.
+  - It writes one file per cluster, `frontend/data/objects/hr23-clusters/members/<ID>.json`:
+    `{ "format": "space-maps.cluster-members/1", "cluster": "hr23:Melotte_22", "src": "Hunt & Reffert 2024, table 2 (J/A+A/686/A42/members)", "members": [["45000919277665536", 192, 0], …] }`.
+    Ids are strings (they exceed 2⁵³), probabilities are integers in thousandths, sorted by id.
+  - The manifest gains `members: { max_dist_pc: 500, count, files: { "<ID>": { n, sha256 } } }`.
+  - The cluster records gain `assets.members = "members/<ID>.json"` (§20.11).
+  - `--check` covers the member files byte for byte. The build report gives the clusters, members, bytes, and how many
+    members have Prob ≥ 0.5.
+  - Expected size: about 2.5–3 MB on disk for ~90k members (~28 B per member), about 1 MB gzipped (an estimate; the
+    report gives the real number).
+- **Client:**
+  - Selecting a cluster with `assets.members` fetches the file once (cached per id) from
+    `/data/objects/<dataset>/<path>`.
+  - The renderer intersects the members with its loaded star keys (`gdr3:<id>` through the existing `_starIdx` map)
+    and draws a ring on each member star: solid for Prob ≥ 0.5, faint for the rest.
+  - The rings are drawn in the galaxy frame and in a member's system frame, while the cluster stays selected.
+  - The rings are catalogue data (membership from Gaia astrometry), so they stay in the Evidence view.
+- **Card rows:**
+  - "Members (HR24): 1,721 · 1,014 with probability ≥ 0.5";
+  - "In this view: N highlighted";
+  - the note "Members outside the star layer (beyond the cone, or fainter than its limit) are not drawn".
+  - Clusters beyond 500 pc instead say "Member list shipped for clusters within 500 pc".
+- **Licence:** the same as the clusters table (VizieR terms; HR24 values derived from Gaia DR3, so "Credit:
+  ESA/Gaia/DPAC" and CC BY-NC 3.0 IGO, already on the dataset's credit line). Both `LICENSE.md` files name the
+  members folder.
+
+### 20.10 Renderer and pages
+
+- **Frame loop** (`scene3d.js`):
+  1. `clock.tick(dt)`;
+  2. if the date changed, `store.setTime(mjd, { hosts: [ss:sun, camera host] })`;
+  3. if anything moved, refill the point buffer in place (`bufferSubData` on a reused `Float32Array`) and mark
+     markers, labels and the pick cache dirty;
+  4. orbit lines rebuild only on the 30-day rule (planets) or a selection change (a small body's orbit).
+- **Time scale.** One clock drives both scenes, and switching scenes keeps the date.
+- **Small body orbit (Q6).** While a small body is selected, its osculating ellipse (or the hyperbola within 50 AU) is
+  drawn dotted from `osc`, greyed beyond its valid range.
+- **Frame-time budget.** Animation may add at most 2 ms of CPU a frame at the worst patch (the inner solar system with
+  the full SkyBoT cone, 3 × 2,000 bodies). It is measured with `performance.now()` around `setTime` and the buffer
+  refill (`scene.perf`), as well as by rAF frame times, because Phase 4's 60 Hz display hid any cost below one vsync
+  (§19.15).
+- **Card rows**, per kind as §20.4–§20.5 give them: the drawn date, the source, the validity and the phase text.
+
+### 20.11 Schema and validator changes (`objects.py`; schema stays `space-maps.objects/1`)
+
+1. `state` positions may carry **`osc`**:
+   `{ "epoch_jd": 2461360.0, "xyz_au": [x, y, z], "vxyz_au_d": [vx, vy, vz], "frame": "icrf-heliocentric", "src": "IMCCE SkyBoT state vector at its reference epoch", "tier": "catalogue" }`.
+   - The validator requires finite numbers, a speed below 0.2 AU/d, `epoch_jd` within 60 days of the position's `mjd`,
+     a known `frame`, and a tier no stronger than the position's.
+   - It is allowed only with `method: "orbit-propagation"`.
+2. Records may carry **`assets`**, a map from a known key (`members`) to a path relative to the record's dataset
+   folder.
+   - Paths match `^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+.\-]+)*$`, with no `..` and no leading `/`.
+   - Static sources only.
+3. Validity is a client rule (§20.5) and is not stored. A record's `evidence` keeps describing its placement at its
+   own epoch.
+
+### 20.12 Evidence and tiers of every new field
+
+| Field or value | Tier | Evidence of the drawn placement |
+|---|---|---|
+| `position.osc` (SkyBoT state) | `catalogue` | the record's (`measured`) within ±1 yr of `epoch_jd`; illustrative beyond (§20.5) |
+| osculating elements on a small-body card | `catalogue` (derived from `osc` with μ = k²) | — |
+| planets and the Moon at the clock's date (plan94, moon98, anchored) | `measured` (ephemeris, §3) | `measured` over the whole clock range |
+| exoplanet and black-hole placement at the clock's date | unchanged (§16.6, §17.8) | unchanged, demoted to illustrative where the phase σ exceeds 90° |
+| the assumed starting phase (T_p missing) | `illustrative` | `illustrative` |
+| a grouped system's marker | — | the host's evidence (§20.8) |
+| cluster membership (`members` files) | `catalogue` | rings stay in the Evidence view |
+| greyed (extrapolated) look, the ◌ on labels, orbit line styles | display only | — |
+
+### 20.13 Test plan
+
+**Backend** (`uv run pytest`, offline):
+- `test_movers.py`: `parse_skybot` keeps `position (au)`, `velocity (au/d)` and `ref_epoch` (fixture from the live
+  JSON of 2026-11-20); missing vectors give `None`, not a failure; the cache key is `skybot-4`.
+- `test_objects_live.py`: `skybot_record` writes `osc` with the right frame, epoch and tier; a record without vectors
+  has no `osc`; `xyz_au` and `geo` are unchanged.
+- `test_objects_schema.py`: `osc` accepted on a SkyBoT state, and rejected with a non-finite number, a speed of 1 AU/d,
+  an epoch 100 days from `mjd`, an unknown frame, a tier stronger than the position's, or `method: "ephemeris"`.
+  `assets` accepted, and rejected with `..`, a leading `/` or an unknown key.
+- `test_build_hr23.py`: member files from a synthetic members snapshot (sorting, thousandths, the 500 pc cut, `assets`
+  on exactly the clusters within 500 pc, the manifest's `members` map); the snapshot's counts; byte-identical rebuild
+  and `--check` over tiles and member files; the licence text names the members folder.
+- `test_objects_api.py`: a SkyBoT-mocked cone returns `osc`; the Pleiades cone's cluster has `assets.members`;
+  `--check` on all six datasets.
+
+**Frontend** (`node --test frontend/tests/*.test.mjs`):
+- `skyclock.test.mjs` (new):
+  - `tick` at each rate, both directions;
+  - clamping and `limit` at both ends;
+  - `faster`/`slower`/`reverse` through `RATES`;
+  - `jumpToNow` with a fixed `nowMs` (TT = UT + ΔT);
+  - `tweenTo` with easing, ending paused;
+  - `settled` after 1.5 s quiet and not while playing;
+  - `clockText` for 1900, 2100 and a BCE date in the Julian calendar (Phase 6's range).
+- `ephem.test.mjs`:
+  - `heliocentric(jd)` against pyerfa fixtures at five dates in 1900–2100: planets equal plan94 to 1e-12 AU; Earth
+    within 6,500 km of epv00 (bound 7,000 km); the Moon minus Earth equals moon98 to the existing tolerance;
+  - `planetElements` reproduces `plan94`'s position from its own elements.
+- `scene3d-motion.test.mjs` (new):
+  - universal-variable propagation matches the closed-form ellipse at e = 0.08 and 0.968 (1P) to 1e-10 AU over ±1 yr,
+    and a hyperbola at e = 1.2 against a closed-form hyperbolic solution;
+  - Ceres from the 2026-11-20 fixture state reproduces SkyBoT's +360 d state within the measured 0.0014 AU;
+  - the anchor makes `setTime(query.mjd)` return the server's `xyz_au` exactly;
+  - validity: `ok` inside ±1 yr, `reason: 'osc-epoch'` beyond;
+  - no allocation in `setTime` (the record arrays are the same objects before and after).
+- `scene3d-orbits.test.mjs`: `orbitPlacement` equals the compiled path to 1e-12 AU at many dates for TRAPPIST-1 b,
+  Gaia BH1 and Cyg X-1; the hash test vectors are unchanged; the phase-σ demotion for a measured orbit beyond 90°.
+- `scene3d-objects.test.mjs`:
+  - `groupState`: groups from every layer-on record in the Evidence view; spread from `a(1+e)`; group evidence from
+    the host (measured, derived → hollow, illustrative → hidden); "TRAPPIST-1 · 7 exoplanets" in the Evidence view;
+    the Sun's group unchanged;
+  - a resolved system's illustrative records hidden in the Evidence view;
+  - `motionSummary` text;
+  - greyed records: hidden in the Evidence view, counted in the HUD and on host cards.
+- `scene3d-registry.test.mjs`:
+  - card rows: the drawn date, the ephemeris `src` when the clock is off the payload epoch, the small-body osculating
+    elements and the out-of-range warning, each phase-source text of §20.4.3 (including "No published phase epoch");
+  - cluster member rows, in range and beyond 500 pc.
+
+### 20.14 Work split
+
+`scene3d.js` has one owner: slice R.
+
+| Slice | Model | Files (exclusive) | Depends on |
+|---|---|---|---|
+| S. SkyBoT state vectors | Sonnet | `movers.py` (parse, cache key), `objects_live.py`, `objects.py` (the `osc` and `assets` rules), `frontend/dev/mock_server.py` (`osc` in mocked small bodies), `test_movers.py`, `test_objects_live.py`, `test_objects_schema.py`, their fixtures | this section |
+| M. Cluster members | Sonnet, after S's `objects.py` commit | `build_objects_hr23.py`, `backend/data/sources/hr23-clusters/**`, `frontend/data/objects/hr23-clusters/**` (both `LICENSE.md`), `test_build_hr23.py`, cluster fixtures | S (`assets`) |
+| T1. Clock, ephemeris, motion, orbits | Sonnet, in parallel with S and M | `skyclock.js` (new), `scene3d-motion.js` (new), `ephem.js`, `scene3d-orbits.js`, `skyclock.test.mjs`, `scene3d-motion.test.mjs`, `ephem.test.mjs`, `scene3d-orbits.test.mjs`, pyerfa and SkyBoT fixtures under `frontend/tests/fixtures/` | this section |
+| T2. Store and registry | Sonnet, after T1 | `scene3d-objects.js`, `scene3d-registry.js`, `scene3d-format.js` (date and Δt text), their tests | T1 |
+| R. Renderer, time bar and pages | Sonnet, after T2 (and S, M for the checks) | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d-card.js`, `timebar.js` (new), `scene3d.html`, `scene3d.css`, `api.js` (the re-query) | T2, S, M |
+| D. Docs, integration, review | me | this doc, `docs/technical-reference.md`, `test_objects_api.py`, `README.md` if keys are listed there | all |
+
+Haiku runs both suites, and `--check` on all six datasets, after each slice.
+
+Commits: (1) this design; (2) SkyBoT state vectors and the schema; (3) cluster members; (4) clock, ephemeris, motion
+and orbits; (5) store and registry; (6) renderer, time bar and pages; (7) docs.
+
+### 20.15 Browser checks
+
+On a fresh backend (or `--reload`), in a headed Chromium in a **foreground tab with real-time rAF**, at 1280 × 800
+unless stated. Each check records frame times before (`main` before Phase 5) and after, and `scene.perf` for the
+motion cost.
+- **TRAPPIST-1** (346.626, −5.043):
+  - in its system frame at 1 h/s, the seven planets move at their periods on dotted orbits, with ◌ labels;
+  - the card gives the transit-time phase and its ± at the date;
+  - Evidence view: the planets and orbits are hidden in the system frame, the host card lists seven;
+  - back in the galaxy frame, "TRAPPIST-1 · 7 exoplanets" shows in the Evidence view, solid;
+  - set 1900: the card's ± grows to the §20.4.3 values (b: about 40°).
+- **The inner solar system over a year:**
+  - the Solar system scene at 1 mo/s from today for 12 months;
+  - Mercury to Mars move on plan94 ellipses, and the Moon circles Earth at 1 d/s;
+  - starting the clock makes nothing jump (the anchor);
+  - "Now" returns to today;
+  - reverse runs back.
+- **An asteroid or comet far from its epoch:**
+  - select Ceres (or the brightest small body of an ecliptic patch);
+  - play 2 years ahead: after one year it greys, its card warns, the Evidence view hides it and its orbit line greys;
+  - pause: within about 1.5 s a re-query fetches the bodies for that date, the selection survives, and the body is no
+    longer greyed;
+  - try 2065 (beyond SkyBoT): no re-query, and the time bar says why.
+- **Gaia BH1 next to Cyg X-1:**
+  - Gaia BH1 (262.171, −0.581) moves on a solid orbit at its 185.6-day period, its card citing the periastron time;
+    the orbit stays in the Evidence view;
+  - Cyg X-1 (299.590, 35.202) moves on a dotted orbit, its card saying no phase epoch is published, and is hidden in
+    the Evidence view, where "HD 226868 · 1 black hole" shows from the galaxy frame.
+- **The Pleiades** (56.75, 24.12):
+  - select the cluster: rings on its member stars, solid ones for Prob ≥ 0.5;
+  - the card's counts (1,721 members, N highlighted);
+  - the rings stay in the Evidence view and clear when the selection is cleared.
+- **Frame time with animation on:** TRAPPIST-1's system at 1 h/s, the inner solar system at 1 mo/s with the full
+  SkyBoT cone, and a galaxy-frame view with the clock running. rAF mean and p95, and `scene.perf` ≤ 2 ms.
+- **Regression:**
+  - TRAPPIST-1, the Pleiades, Orion (83.82, −5.39), the Galactic Centre (266.417, −29.008), M31 (10.6847, 41.2690),
+    M87 (187.7059, 12.3911) with the flight into `cosmos`, and the LMC (80.894, −69.756) across 60/40 kpc;
+  - the Evidence view at each;
+  - the credits line and the time bar at 375, 768 and 1280 px (no overlap, no horizontal overflow).
+
+### 20.16 Open questions
+
+1. **The clock's range and the stars.**
+   - *Recommendation:* 1900–2100 (the server's `mjd` range), with stars fixed at their catalogue epoch. Barnard's star
+     is 20′ off at 1900; stars under 100 mas/yr are under 12″ off.
+   - Proper motion waits for Phase 6, which needs space motion anyway.
+   - Alternative: add pm and RV to the Gaia payload and move the stars in the shader now (a cache bump, cold cones
+     re-queried, a widening of this phase).
+2. **Beyond a source's valid range.**
+   - *Recommendation:* greyed in the normal view and hidden in the Evidence view (the placement is then an
+     extrapolation, illustrative by §3), counted as existing.
+   - Alternative: greyed with a warning in both views.
+3. **The small-body window and the re-query.**
+   - *Recommendation:* one window of ±1 yr of the SkyBoT epoch for every class (≤ 0.04° for all nine bodies measured),
+     and a re-query when the clock settles more than a day from the payload's epoch, inside SkyBoT's 1890–2060 range.
+   - Alternatives: per-class windows (TNOs and Centaurs ±10 yr, where the measured drift is ≤ 0.14°); or re-query only
+     when a body leaves its window (fewer SkyBoT calls, but the cone's population goes stale within days).
+4. **Member highlight scope.**
+   - *Recommendation:* clusters within 500 pc (695 clusters, 89,738 members, an estimated 2.5–3 MB on disk), every
+     member with its probability, drawn solid at Prob ≥ 0.5.
+   - Alternatives:
+     - 1 kpc (1,669 clusters, 193,208 members, about 6 MB);
+     - only Prob ≥ 0.5 members (for the Pleiades, 1,014 of 1,721);
+     - design (b), a backend side table for all 1.29 M (no static file, but the 2D page could not use it).
+5. **How illustrative motion stays visible.**
+   - *Recommendation:* orbit lines styled by evidence (solid, dashed, dotted), ◌ on the labels of illustrative moving
+     bodies, and the time bar's "Moving: …" line.
+   - Alternative: also draw illustrative bodies dimmer while the clock runs.
+6. **A selected small body's orbit (new scope).**
+   - *Recommendation:* yes: draw the osculating orbit of the selected asteroid or comet, dotted beyond its valid range.
+     It is cheap (one path from `osc`), and it shows the drift the check above looks for.
+   - Alternative: no small-body orbits in Phase 5.

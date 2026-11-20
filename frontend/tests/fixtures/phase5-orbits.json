@@ -1,0 +1,170 @@
+{
+ "generator": "make_phase5_fixtures.py",
+ "note": "records expanded from the committed tiles (quantity arrays -> {v, lo, hi, tier})",
+ "records": [
+  {
+   "id": "nea:TRAPPIST-1 b",
+   "kind": "exoplanet",
+   "name": "TRAPPIST-1 b",
+   "host": "gdr3:2635476908753563008",
+   "position": {
+    "model": "orbit",
+    "host_radec": [
+     346.6263919,
+     -5.0434618
+    ],
+    "tier": "illustrative",
+    "elements": {
+     "a_au": {
+      "v": 0.01154,
+      "tier": "catalogue",
+      "lo": 0.01144,
+      "hi": 0.01164
+     },
+     "e": {
+      "v": 0.00622,
+      "tier": "measured",
+      "lo": 0.00318,
+      "hi": 0.00926
+     },
+     "i_deg": {
+      "v": 89.728,
+      "tier": "measured",
+      "lo": 89.563,
+      "hi": 89.893
+     },
+     "node_deg": null,
+     "omega_deg": {
+      "v": 336.86,
+      "tier": "measured",
+      "lo": 302.62,
+      "hi": 371.1
+     },
+     "period_d": {
+      "v": 1.510826,
+      "tier": "measured",
+      "lo": 1.51082,
+      "hi": 1.510832
+     },
+     "t_conj_mjd": {
+      "v": 57322.014193,
+      "tier": "measured",
+      "lo": 57322.01419,
+      "hi": 57322.014196
+     },
+     "t_peri_mjd": null
+    }
+   },
+   "props": {
+    "disc_method": {
+     "v": "Transit"
+    }
+   }
+  },
+  {
+   "id": "bh:Gaia BH1",
+   "kind": "black_hole",
+   "name": "Gaia BH1",
+   "host": "gdr3:4373465352415301632",
+   "position": {
+    "model": "orbit",
+    "host_radec": [
+     262.1712073,
+     -0.581092
+    ],
+    "tier": "measured",
+    "elements": {
+     "a_au": {
+      "v": 1.4,
+      "tier": "measured",
+      "lo": 1.39,
+      "hi": 1.41
+     },
+     "e": {
+      "v": 0.451,
+      "tier": "measured",
+      "lo": 0.446,
+      "hi": 0.456
+     },
+     "i_deg": {
+      "v": 126.6,
+      "tier": "measured",
+      "lo": 126.2,
+      "hi": 127
+     },
+     "node_deg": {
+      "v": 277.8,
+      "tier": "measured",
+      "lo": 276.8,
+      "hi": 278.8
+     },
+     "omega_deg": {
+      "v": 12.8,
+      "tier": "measured",
+      "lo": 11.7,
+      "hi": 13.9
+     },
+     "period_d": {
+      "v": 185.59,
+      "tier": "measured",
+      "lo": 185.54,
+      "hi": 185.64
+     },
+     "t_conj_mjd": null,
+     "t_peri_mjd": {
+      "v": 57387.4,
+      "tier": "measured",
+      "lo": 57386.7,
+      "hi": 57388.1
+     }
+    }
+   },
+   "props": {}
+  },
+  {
+   "id": "bh:Cyg X-1",
+   "kind": "black_hole",
+   "name": "Cygnus X-1",
+   "host": "gdr3:2059383668236814720",
+   "position": {
+    "model": "orbit",
+    "host_radec": [
+     299.5902948,
+     35.2015788
+    ],
+    "tier": "illustrative",
+    "elements": {
+     "a_au": {
+      "v": 0.24399,
+      "tier": "inferred",
+      "lo": 0.23108,
+      "hi": 0.25638
+     },
+     "e": {
+      "v": 0.0189,
+      "tier": "measured",
+      "lo": 0.0163,
+      "hi": 0.0217
+     },
+     "i_deg": {
+      "v": 27.51,
+      "tier": "measured",
+      "lo": 26.94,
+      "hi": 28.28
+     },
+     "node_deg": null,
+     "omega_deg": null,
+     "period_d": {
+      "v": 5.599829,
+      "tier": "measured",
+      "lo": 5.599813,
+      "hi": 5.599845
+     },
+     "t_conj_mjd": null,
+     "t_peri_mjd": null
+    }
+   },
+   "props": {}
+  }
+ ]
+}

@@ -157,15 +157,16 @@ const P_SL = [
   [-47645, 11647, 2166, 3194, 679, 0, -244, -419, -2531, 48],
 ];
 
-const GK = 0.017202098950, SINEPS = 0.3977771559319137, COSEPS = 0.9174820620691818;
+export const GK = 0.017202098950;      // Gaussian gravitational constant, rad/day (eraPlan94's GK); mu of the Sun = GK^2 au^3/day^2
+const SINEPS = 0.3977771559319137, COSEPS = 0.9174820620691818;   // eraPlan94: sin and cos of the J2000 mean obliquity
 
 /**
- * Heliocentric position (au) of planet np (1 Mercury, 2 Venus, 3 Earth-Moon barycentre, 4 Mars, 5 Jupiter,
- * 6 Saturn, 7 Uranus, 8 Neptune) at TT Julian Day jd, in the J2000 mean equator and equinox (ICRS to 23 mas).
- * A port of ERFA eraPlan94 without the velocity and without its validity flag (it is used far beyond
- * 1000-3000 CE here on purpose; see the accuracy note at the top).
+ * plan94's elements at TT Julian Day jd for planet np, written into el: { a (au), e, i, node, peri (longitude of
+ * perihelion), L (mean longitude, periodic terms included, wrapped by fmod as plan94 does) }, angles in radians, in
+ * plan94's own reference: the mean ecliptic and equinox of J2000 (plan94 rotates by the obliquity afterwards).
+ * Shared by plan94 and planetElements so both run one computation.
  */
-export function plan94(jd, np) {
+function elements94(jd, np, el) {
   const i = np - 1, t = (jd - JD2000) / 365250;
   let da = P_A[i][0] + (P_A[i][1] + P_A[i][2] * t) * t;
   let dl = (3600 * P_DLM[i][0] + (P_DLM[i][1] + P_DLM[i][2] * t) * t) * AS2R;
@@ -185,21 +186,73 @@ export function plan94(jd, np) {
     const argl = P_KQ[i][k] * dmu;
     dl += t * (P_CL[i][k] * Math.cos(argl) + P_SL[i][k] * Math.sin(argl)) * 1e-7;
   }
-  dl = fmod(dl, TAU);
-  // Kepler's equation
-  const am = dl - dp;
+  el.a = da; el.e = de; el.i = di; el.node = dom; el.peri = dp; el.L = fmod(dl, TAU);
+  return el;
+}
+
+/** Eccentric anomaly from the mean anomaly am, as eraPlan94 solves it (Newton, at most 10 steps to 1e-12). */
+function kepler94(am, de) {
   let ae = am + de * Math.sin(am), dae = 1;
   for (let k = 0; k < 10 && Math.abs(dae) > 1e-12; k++) {
     dae = (am - ae + de * Math.sin(ae)) / (1 - de * Math.cos(ae));
     ae += dae;
   }
+  return ae;
+}
+
+/** The position at eccentric anomaly ae of the ellipse el (elements94), rotated to the J2000 mean equator: out = [x, y, z] au. */
+function place94(el, ae, out) {
+  const de = el.e, di = el.i, dom = el.node, dp = el.peri;
   const ae2 = ae / 2, at = 2 * Math.atan2(Math.sqrt((1 + de) / (1 - de)) * Math.sin(ae2), Math.cos(ae2));
-  const r = da * (1 - de * Math.cos(ae));
+  const r = el.a * (1 - de * Math.cos(ae));
   const si2 = Math.sin(di / 2), xq = si2 * Math.cos(dom), xp = si2 * Math.sin(dom);
   const tl = at + dp, xsw = Math.sin(tl), xcw = Math.cos(tl), xm2 = 2 * (xp * xcw - xq * xsw), ci2 = Math.cos(di / 2);
   const x = r * (xcw - xm2 * xp), y = r * (xsw + xm2 * xq), z = r * (-xm2 * ci2);
-  return [x, y * COSEPS - z * SINEPS, y * SINEPS + z * COSEPS];
+  out[0] = x; out[1] = y * COSEPS - z * SINEPS; out[2] = y * SINEPS + z * COSEPS;
+  return out;
 }
+
+const EL94 = { a: 0, e: 0, i: 0, node: 0, peri: 0, L: 0 };   // scratch for the allocation-free paths
+
+/** plan94's position into out (no allocation); see plan94. */
+function plan94Into(jd, np, out) {
+  const el = elements94(jd, np, EL94);
+  return place94(el, kepler94(el.L - el.peri, el.e), out);
+}
+
+/**
+ * Heliocentric position (au) of planet np (1 Mercury, 2 Venus, 3 Earth-Moon barycentre, 4 Mars, 5 Jupiter,
+ * 6 Saturn, 7 Uranus, 8 Neptune) at TT Julian Day jd, in the J2000 mean equator and equinox (ICRS to 23 mas).
+ * A port of ERFA eraPlan94 without the velocity and without its validity flag (it is used far beyond
+ * 1000-3000 CE here on purpose; see the accuracy note at the top).
+ */
+export function plan94(jd, np) { return plan94Into(jd, np, [0, 0, 0]); }
+
+/**
+ * plan94's mean elements of planet np at TT Julian Day jd (section 20.4.1): { a (au), e, i, node, peri (longitude of
+ * perihelion), L (mean longitude) }, angles in radians, relative to the mean ecliptic and equinox of J2000, which is
+ * the frame plan94 rotates into the equator from. They are the ellipse plan94 places the planet on at jd (periodic
+ * terms included in a and L), so planetOrbitPath draws exactly plan94's own orbit. np 3 is the Earth-Moon barycentre.
+ */
+export function planetElements(jd, np) { return { ...elements94(jd, np, { a: 0, e: 0, i: 0, node: 0, peri: 0, L: 0 }) }; }
+
+/**
+ * The closed ellipse of planetElements(jd, np), n + 1 points (the last repeats the first, uniform in eccentric anomaly)
+ * as x, y, z au in the J2000 mean equator (ICRS axes), into out (a Float64Array of at least 3 (n + 1), or a new one).
+ * A planet at eccentric anomaly E lands on plan94(jd, np) to rounding (tested at 1e-9 au).
+ */
+export function planetOrbitPath(jd, np, n = 128, out = new Float64Array(3 * (n + 1))) {
+  const el = elements94(jd, np, { a: 0, e: 0, i: 0, node: 0, peri: 0, L: 0 }), p = [0, 0, 0];
+  for (let k = 0; k <= n; k++) {
+    place94(el, (k === n ? 0 : k) / n * TAU, p);
+    out[3 * k] = p[0]; out[3 * k + 1] = p[1]; out[3 * k + 2] = p[2];
+  }
+  return out;
+}
+
+/** Planet ids of the object framework (section 20.4.1) -> plan94 np. Earth is not here: it comes from the barycentre (heliocentric); its orbit line uses np 3 (the Earth-Moon barycentre, EARTH_ORBIT_NP). */
+export const PLANET_IDS = { 'ss:mercury': 1, 'ss:venus': 2, 'ss:mars': 4, 'ss:jupiter': 5, 'ss:saturn': 6, 'ss:uranus': 7, 'ss:neptune': 8 };
+export const EARTH_ORBIT_NP = 3;
 
 // ------------------------------------------------------------------------------------- eraMoon98 tables
 // 60 terms: D, M, M', F, sum l (deg), sum r (m)
@@ -260,7 +313,8 @@ const FF = [93.2720950, 483202.0175233, -0.0036539, 1 / 3526000, 1 / 863310000];
  * Geocentric Moon at TT Julian Day jd in the mean ecliptic and equinox of date: { lon, lat (radians), r (au) }.
  * The series of ERFA eraMoon98 (Meeus 1998, ch. 47), without its final IAU 2006 precession.
  */
-export function moonEcliptic(jd) {
+export function moonEcliptic(jd) { return moonEclipticInto(jd, { lon: 0, lat: 0, r: 0 }); }
+function moonEclipticInto(jd, o) {
   const t = (jd - JD2000) / 36525;
   const elp = D2R * fmod(poly4(ELP, t), 360), d = D2R * fmod(poly4(DEL, t), 360), em = D2R * fmod(poly4(EM, t), 360);
   const emp = D2R * fmod(poly4(EMP, t), 360), f = D2R * fmod(poly4(FF, t), 360);
@@ -279,7 +333,8 @@ export function moonEcliptic(jd) {
     const k = n * 5, arg = M_TB[k] * d + M_TB[k + 1] * em + M_TB[k + 2] * emp + M_TB[k + 3] * f;
     vb += M_TB[k + 4] * Math.sin(arg) * ef(M_TB[k + 1]);
   }
-  return { lon: elp + D2R * vel, lat: vb * D2R, r: (vr + 385000560.0) / AU_M };
+  o.lon = elp + D2R * vel; o.lat = vb * D2R; o.r = (vr + 385000560.0) / AU_M;
+  return o;
 }
 
 // ------------------------------------------------------------------------------------- frames
@@ -354,4 +409,48 @@ export function moonTopocentric(moonP, sunP, zenith) {
   const p = sub(moonP, zenith.map((z) => z * EARTH_R_AU)), r = norm(p);
   const i = angle(sub(sunP, p), [-p[0], -p[1], -p[2]]);   // Sun-Moon-observer angle
   return { v: unit(p), r, phase: i, k: (1 + Math.cos(i * D2R)) / 2, radius: Math.asin(1737.4 / (r * AU_KM)) / D2R };
+}
+
+// ------------------------------------------------------------------------------------- heliocentric positions (section 20.4.1)
+/** DE440's Earth-Moon mass ratio (header.440, group 1041; checked 2026-11-20, docs/object-framework.md section 20.2). */
+export const EMRAT = 81.30056822149722;
+
+const MOON_SCR = { lon: 0, lat: 0, r: 0 }, EMB_SCR = [0, 0, 0], MOON_VEC = [0, 0, 0];
+let basisJd = NaN, basisCache = null;   // the ecliptic basis of date, recomputed only when jd changes (once per frame)
+/** moonGeocentric into out with no per-call allocation beyond a basis cached per jd. */
+function moonGeocentricInto(jd, out) {
+  if (jd !== basisJd) { basisCache = eclipticBasis(jyear(jd)); basisJd = jd; }
+  const m = moonEclipticInto(jd, MOON_SCR), cb = Math.cos(m.lat), lx = cb * Math.cos(m.lon), ly = cb * Math.sin(m.lon), lz = Math.sin(m.lat), B = basisCache;
+  for (let j = 0; j < 3; j++) out[j] = m.r * (lx * B[0][j] + ly * B[1][j] + lz * B[2][j]);
+  return out;
+}
+
+/**
+ * One body's heliocentric position into out (au, ICRS axes, geometric: no light time), with no per-call allocation
+ * beyond one ecliptic basis per distinct jd. body: 'mercury' ... 'neptune' (not 'earth'), 'earth' or 'moon'.
+ * Earth = plan94(EMB) - moonGeocentric / (1 + EMRAT); Moon = Earth + moonGeocentric, so Moon - Earth is exactly the moon98 vector.
+ */
+export function bodyHeliocentric(jd, body, out) {
+  if (body === 'earth' || body === 'moon') {
+    plan94Into(jd, 3, EMB_SCR); moonGeocentricInto(jd, MOON_VEC);
+    for (let j = 0; j < 3; j++) { const earth = EMB_SCR[j] - MOON_VEC[j] / (1 + EMRAT); out[j] = body === 'earth' ? earth : earth + MOON_VEC[j]; }
+    return out;
+  }
+  const np = BODY_NP[body];
+  if (!np) throw new Error(`unknown body ${body}`);
+  return plan94Into(jd, np, out);
+}
+const BODY_NP = { mercury: 1, venus: 2, mars: 4, jupiter: 5, saturn: 6, uranus: 7, neptune: 8 };
+
+/**
+ * Heliocentric positions at TT Julian Day jd (au, ICRS axes = plan94's J2000 mean equator and equinox, no light time):
+ * { earth, moon, planets: { mercury, venus, mars, jupiter, saturn, uranus, neptune } }, each [x, y, z].
+ * The planets are plan94; Earth is the Earth-Moon barycentre minus the Moon's share, with DE440's EMRAT (above).
+ * Earth differs from ERFA's epv00 by up to 6.5e3 km over 1900-2100 (the server uses epv00; the anchor of section 20.4.1
+ * removes the difference at the payload's epoch).
+ */
+export function heliocentric(jd) {
+  const planets = {};
+  for (const b of Object.keys(BODY_NP)) planets[b] = bodyHeliocentric(jd, b, [0, 0, 0]);
+  return { earth: bodyHeliocentric(jd, 'earth', [0, 0, 0]), moon: bodyHeliocentric(jd, 'moon', [0, 0, 0]), planets };
 }

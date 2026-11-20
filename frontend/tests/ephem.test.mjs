@@ -123,3 +123,99 @@ test('Delta T uncertainty grows to hours in the deep past', () => {
   assert.ok(T.deltaTSigma(-2999) / 3600 > 0.3 && T.deltaTSigma(-2999) / 3600 < 1);
   assert.ok(T.deltaTSigma(-9999) / 3600 > 2 && T.deltaTSigma(-9999) / 3600 < 4);
 });
+
+// ------------------------------------------------------------------------------------- Phase 5: heliocentric positions, plan94 elements (section 20.4.1)
+import { readFileSync } from 'node:fs';
+const ERFA5 = JSON.parse(readFileSync(new URL('./fixtures/phase5-erfa.json', import.meta.url), 'utf8'));   // fixtures/make_phase5_fixtures.py
+const KM = 149597870.7;
+const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const PLANET_NP = { mercury: 1, venus: 2, mars: 4, jupiter: 5, saturn: 6, uranus: 7, neptune: 8 };
+
+test('heliocentric(jd): the planets equal ERFA plan94 to 1e-12 au at five dates in 1900-2100', () => {
+  assert.equal(ERFA5.dates.length, 5);
+  for (const d of ERFA5.dates) {
+    const h = E.heliocentric(d.jd);
+    for (const [name, np] of Object.entries(PLANET_NP)) {
+      const ref = d.plan94[name];
+      assert.ok(np > 0 && ref, name);
+      for (let i = 0; i < 3; i++) assert.ok(Math.abs(h.planets[name][i] - ref[i]) < 1e-12, `${name} at ${d.jd}`);
+    }
+    assert.deepEqual(Object.keys(h.planets), ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']);
+  }
+});
+
+test('heliocentric(jd): Earth is within 7,000 km of ERFA epv00 (measured maximum 6,496 km over 1900-2100, section 20.2)', () => {
+  let worst = 0;
+  for (const d of ERFA5.dates) {
+    const km = Math.hypot(...vsub(E.heliocentric(d.jd).earth, d.epv00_earth_helio)) * KM;
+    worst = Math.max(worst, km);
+    assert.ok(km < 7000, `Earth ${km} km at ${d.jd}`);
+  }
+  for (const [jd, x, y, z] of ERFA5.epv00_earth_scan.rows) {
+    const km = Math.hypot(...vsub(E.heliocentric(jd).earth, [x, y, z])) * KM;
+    worst = Math.max(worst, km);
+    assert.ok(km < 7000, `Earth ${km} km at ${jd}`);
+  }
+  console.log(`# heliocentric Earth vs epv00 at the 5 fixture dates and 600 dates over 1900-2100: max ${worst.toFixed(0)} km`);
+});
+
+test('heliocentric(jd): Earth = plan94(EMB) - moon / (1 + EMRAT), and Moon - Earth is the ephem.js geocentric Moon (equal to ERFA moon98 within its precession model)', () => {
+  assert.equal(E.EMRAT, 81.30056822149722);
+  let worst = 0;
+  for (const d of ERFA5.dates) {
+    const h = E.heliocentric(d.jd), emb = E.plan94(d.jd, 3), m = E.moonGeocentric(d.jd);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(h.earth[i] - (emb[i] - m[i] / (1 + E.EMRAT))) < 1e-15);
+      assert.ok(Math.abs(h.moon[i] - h.earth[i] - m[i]) < 1e-15);
+    }
+    // moon98 in ERFA uses the IAU 2006 precession, ephem.js the Vondrak poles: they differ by arc seconds over a century at most (Moon distance 0.00257 au)
+    const dm = Math.hypot(...vsub(vsub(h.moon, h.earth), d.moon98_gcrs));
+    worst = Math.max(worst, dm);
+    assert.ok(dm < 2e-8, `Moon - Earth vs moon98 at ${d.jd}: ${dm} au`);
+  }
+  console.log(`# heliocentric Moon - Earth vs moon98: max ${(worst * KM).toFixed(2)} km`);
+});
+
+test('bodyHeliocentric writes into the given array and agrees with heliocentric', () => {
+  const out = [0, 0, 0], jd = 2461360, h = E.heliocentric(jd);
+  for (const [body, ref] of [['mercury', h.planets.mercury], ['neptune', h.planets.neptune], ['earth', h.earth], ['moon', h.moon]]) {
+    assert.equal(E.bodyHeliocentric(jd, body, out), out);
+    assert.deepEqual(out, ref);
+  }
+  assert.throws(() => E.bodyHeliocentric(jd, 'pluto', out));
+});
+
+test('plan94 is unchanged by the refactor: the 1e-12 ERFA comparison above plus bit-stable values at J2000', () => {
+  // values printed by the pre-refactor implementation (git 9863662) at JD 2451545.0
+  const ref = { 1: [-0.130091772797162, -0.400593024687803, -0.200488646056916], 5: [4.00156008330459, 2.7361034508087, 1.07543999535354] };
+  for (const [np, p] of Object.entries(ref)) { const q = E.plan94(2451545.0, +np); for (let i = 0; i < 3; i++) assert.ok(Math.abs(q[i] - p[i]) < 1e-14); }
+});
+
+test('planetElements / planetOrbitPath reproduce plan94: the planet at its eccentric anomaly lands on plan94(jd, np) to 1e-9 au', () => {
+  // each coordinate of the ellipse is C + A cos E + B sin E, so the four samples of an n = 4 path (E = 0, 90, 180, 270 deg) give it exactly at any E
+  let worst = 0;
+  for (const jd of [2415020.5, 2433812.5, 2451545.0, 2461360.0, 2488069.5]) for (const np of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const el = E.planetElements(jd, np);
+    assert.ok(el.a > 0.3 && el.e >= 0 && el.e < 0.3 && Math.abs(el.i) < 0.15);
+    const am = el.L - el.peri; let ae = am + el.e * Math.sin(am);          // Kepler's equation on the element set, as plan94 solves it
+    for (let k = 0; k < 50; k++) ae -= (ae - el.e * Math.sin(ae) - am) / (1 - el.e * Math.cos(ae));
+    const p = E.planetOrbitPath(jd, np, 4), want = E.plan94(jd, np);
+    for (let c = 0; c < 3; c++) {
+      const got = (p[c] + p[6 + c]) / 2 + (p[c] - p[6 + c]) / 2 * Math.cos(ae) + (p[3 + c] - p[9 + c]) / 2 * Math.sin(ae);
+      worst = Math.max(worst, Math.abs(got - want[c]));
+      assert.ok(Math.abs(got - want[c]) < 1e-9, `np ${np} jd ${jd} axis ${c}: ${got} vs ${want[c]}`);
+    }
+  }
+  console.log(`# planetOrbitPath vs plan94 at the true anomaly: max ${worst.toExponential(2)} au`);
+});
+
+test('planetOrbitPath: closed (the last point repeats the first), n + 1 points, the right size and a reusable output', () => {
+  const p = E.planetOrbitPath(2461360, 5), el = E.planetElements(2461360, 5);
+  assert.equal(p.length, 3 * 129); assert.ok(p instanceof Float64Array);
+  assert.deepEqual([...p.slice(0, 3)], [...p.slice(3 * 128)]);
+  for (let k = 0; k <= 128; k++) { const r = Math.hypot(p[3 * k], p[3 * k + 1], p[3 * k + 2]); assert.ok(r > el.a * (1 - el.e) - 1e-9 && r < el.a * (1 + el.e) + 1e-9); }
+  const out = new Float64Array(3 * 33);
+  assert.equal(E.planetOrbitPath(2461360, 5, 32, out), out);
+  assert.deepEqual(E.PLANET_IDS, { 'ss:mercury': 1, 'ss:venus': 2, 'ss:mars': 4, 'ss:jupiter': 5, 'ss:saturn': 6, 'ss:uranus': 7, 'ss:neptune': 8 });
+  assert.equal(E.EARTH_ORBIT_NP, 3);
+});

@@ -1,0 +1,69 @@
+{
+ "source": "https://ssp.imcce.fr/webservices/skybot/api/resolver.php",
+ "params": "-name=Ceres -ep=<jd> -mime=json -output=all -observer=500",
+ "fetched": "2026-11-20",
+ "answers": [
+  {
+   "requested_ep": 2461360,
+   "raw": [
+    {
+     "Num": 1,
+     "Name": "Ceres",
+     "RA (deg)": 115.89963224351965,
+     "DEC (deg)": 24.778023123479112,
+     "Class": "MB>Middle",
+     "VMag (mag)": 7.9,
+     "Err (arcsec)": 0.02,
+     "dRA (arcsec/h)": 8.6247,
+     "dDEC (arcsec/h)": 9.8653,
+     "dg (ua)": 2.01060746051,
+     "dh (ua)": 2.63959332776,
+     "Phase (deg)": 19.08,
+     "SunElong (deg)": 60.7,
+     "position (au)": {
+      "x": -0.198899814,
+      "y": 2.364697035,
+      "z": 1.155880309
+     },
+     "velocity (au/d)": {
+      "x": -0.010541406,
+      "y": -0.002215685,
+      "z": 0.001100778
+     },
+     "ref_epoch": 2461360
+    }
+   ]
+  },
+  {
+   "requested_ep": 2461720,
+   "raw": [
+    {
+     "Num": 1,
+     "Name": "Ceres",
+     "RA (deg)": 197.516466532654,
+     "DEC (deg)": 1.0897707425843195,
+     "Class": "MB>Middle",
+     "VMag (mag)": 8.7,
+     "Err (arcsec)": 0.075,
+     "dRA (arcsec/h)": 60.6151,
+     "dDEC (arcsec/h)": -23.7172,
+     "dg (ua)": 3.35097004143,
+     "dh (ua)": 2.57267984087,
+     "Phase (deg)": 11.97,
+     "SunElong (deg)": 147.39,
+     "position (au)": {
+      "x": -2.525586709,
+      "y": -0.338945036,
+      "z": 0.353907036
+     },
+     "velocity (au/d)": {
+      "x": 0.000241512,
+      "y": -0.010012857,
+      "z": -0.004773965
+     },
+     "ref_epoch": 2461720
+    }
+   ]
+  }
+ ]
+}

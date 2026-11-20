@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hashUnit, solveKepler, skyBasis, orbitPlacement, orbitPath, J2000_MJD } from '../js/blink/scene3d-orbits.js';
+import { hashUnit, solveKepler, skyBasis, orbitPlacement, orbitPath, J2000_MJD, compileOrbit, evalOrbit, phaseSigmaAt, orbitPathCompiled, orbitPathInto } from '../js/blink/scene3d-orbits.js';
+import { readFileSync } from 'node:fs';
 
 const q = (v, o = {}) => ({ v, src: 'test', tier: 'measured', ...o });
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -151,4 +152,110 @@ test('the assumed node and inclination are per host: one system shares its plane
   const nrm = (rec) => { const P = orbitPath(rec, 8), A = P[0], B = P[2]; const c = [A[1]*B[2]-A[2]*B[1], A[2]*B[0]-A[0]*B[2], A[0]*B[1]-A[1]*B[0]]; const l = len(c); return c.map((v) => v / l); };
   const n1 = nrm(bare('nea:S b', { e: q(0) }, {}, 'gdr3:7')), n2 = nrm(bare('nea:S c', { e: q(0), a_au: q(0.2) }, {}, 'gdr3:7'));
   assert.ok(Math.abs(Math.abs(dot(n1, n2)) - 1) < 1e-9);
+});
+
+// ------------------------------------------------------------------------------------- Phase 5: compiled orbits (section 20.4.3)
+const FIX = JSON.parse(readFileSync(new URL('./fixtures/phase5-orbits.json', import.meta.url), 'utf8')).records;   // fixtures/make_phase5_fixtures.py
+const byId = (id) => FIX.find((r) => r.id === id);
+
+/** The pre-Phase-5 orbitPlacement, kept here as an independent reference: Kepler solved per call with solveKepler, the true anomaly by atan2, the rotation per call. */
+function referencePlacement(rec, mjd) {
+  const el = rec.position.elements, fin = (x) => (x && Number.isFinite(x.v) ? x.v : null), P = fin(el.period_d), a = fin(el.a_au);
+  const e = Math.min(Math.max(fin(el.e) ?? 0, 0), 0.99), sys = rec.host || rec.id, method = rec.props.disc_method && rec.props.disc_method.v;
+  const tConj = fin(el.t_conj_mjd), tPeri = fin(el.t_peri_mjd);
+  const node = fin(el.node_deg) ?? 360 * hashUnit(sys, 'node'), incl = fin(el.i_deg) ?? (method === 'Transit' || tConj != null ? 90 : Math.acos(hashUnit(sys, 'incl')) / D2R);
+  const omega = fin(el.omega_deg) ?? (e > 0 ? 360 * hashUnit(rec.id, 'omega') : 0), w = omega * D2R, n = 2 * Math.PI / P;
+  let M;
+  if (tConj != null) { const nuC = Math.PI / 2 - w, Ec = 2 * Math.atan2(Math.sqrt(1 - e) * Math.sin(nuC / 2), Math.sqrt(1 + e) * Math.cos(nuC / 2)); M = Ec - e * Math.sin(Ec) + n * (mjd - tConj); }
+  else if (tPeri != null) M = n * (mjd - tPeri);
+  else M = 360 * hashUnit(rec.id, 'phase') * D2R + n * (mjd - J2000_MJD);
+  const E = solveKepler(M, e), nu = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2)), r = a * (1 - e * Math.cos(E));
+  const B = skyBasis(...rec.position.host_radec), u = w + nu, O = node * D2R, i = incl * D2R;
+  const xn = r * (Math.cos(O) * Math.cos(u) - Math.sin(O) * Math.sin(u) * Math.cos(i)), ye = r * (Math.sin(O) * Math.cos(u) + Math.cos(O) * Math.sin(u) * Math.cos(i)), z = r * Math.sin(u) * Math.sin(i);
+  return [0, 1, 2].map((k) => xn * B.N[k] + ye * B.E[k] + z * B.Z[k]);
+}
+
+test('the fixtures are the committed TRAPPIST-1 b, Gaia BH1 and Cyg X-1 records', () => {
+  assert.equal(FIX.length, 3);
+  const t = byId('nea:TRAPPIST-1 b'), b = byId('bh:Gaia BH1'), c = byId('bh:Cyg X-1');
+  assert.equal(t.position.elements.t_conj_mjd.v, 57322.014193); assert.equal(b.position.elements.t_peri_mjd.v, 57387.4);
+  assert.equal(c.position.elements.t_peri_mjd, null); assert.equal(c.position.elements.node_deg, null);
+});
+
+test('orbitPlacement equals the old per-call algorithm, and evalOrbit on a reused plan equals orbitPlacement, to 1e-12 AU at many dates', () => {
+  let worstRef = 0, worstEval = 0;
+  for (const rec of FIX) {
+    const plan = compileOrbit(rec), out = [0, 0, 0];
+    assert.ok(plan);
+    // dates across 1900-2100 (MJD 15020-88069), in a shuffled order so the warm start sees jumps forward and back, plus the epochs themselves
+    const dates = [];
+    for (let k = 0; k < 400; k++) dates.push(15020 + ((k * 7919) % 400) * 73049 / 400 + (k % 7) * 0.137);
+    dates.push(57322.014193, 57387.4, J2000_MJD, 60000);
+    for (const mjd of dates) {
+      const want = referencePlacement(rec, mjd), got = orbitPlacement(rec, mjd).xyzAu, warm = evalOrbit(plan, mjd, out);
+      assert.equal(warm, out);
+      for (let c = 0; c < 3; c++) { worstRef = Math.max(worstRef, Math.abs(got[c] - want[c])); worstEval = Math.max(worstEval, Math.abs(warm[c] - got[c])); }
+    }
+  }
+  assert.ok(worstRef < 1e-12, `orbitPlacement vs the old algorithm: ${worstRef}`);
+  assert.ok(worstEval < 1e-12, `evalOrbit (warm) vs orbitPlacement: ${worstEval}`);
+  console.log(`# orbit equivalence: orbitPlacement vs old algorithm max ${worstRef.toExponential(2)} AU, warm evalOrbit vs orbitPlacement max ${worstEval.toExponential(2)} AU`);
+});
+
+test('compileOrbit: plan fields, phase sources, assumed flags and null for unusable records', () => {
+  const t = compileOrbit(byId('nea:TRAPPIST-1 b')), b = compileOrbit(byId('bh:Gaia BH1')), c = compileOrbit(byId('bh:Cyg X-1'));
+  assert.equal(t.source, 'conjunction'); assert.equal(b.source, 'periastron'); assert.equal(c.source, 'assumed');
+  assert.deepEqual(t.assumed, { node: true, incl: false, omega: false, phase: false, ecc: false });
+  assert.deepEqual(b.assumed, { node: false, incl: false, omega: false, phase: false, ecc: false });
+  assert.equal(c.assumed.phase, true); assert.equal(c.phaseEpoch, null); assert.equal(c.P, 5.599829);
+  assert.equal(compileOrbit({ id: 'x', position: { model: 'orbit' } }), null);
+  assert.equal(compileOrbit(bare('nea:N b', { period_d: null })), null);
+  // P3 and Q3 are orthonormal (the orbit plane basis) and the plan stays consistent with orbitPlacement's `used`
+  for (const p of [t, b, c]) {
+    assert.ok(Math.abs(len(p.P3) - 1) < 1e-12 && Math.abs(len(p.Q3) - 1) < 1e-12 && Math.abs(dot(p.P3, p.Q3)) < 1e-12);
+  }
+  const used = orbitPlacement(byId('bh:Gaia BH1'), 60000).used;
+  assert.equal(used.node, 277.8); assert.equal(used.incl, 126.6); assert.equal(used.omega, 12.8);
+});
+
+test('phaseSigmaAt = 360 |t - T0| sigmaP / P^2 from the plan, equal to orbitPlacement.phaseSigmaDeg; null when assumed', () => {
+  const rec = byId('nea:TRAPPIST-1 b'), plan = compileOrbit(rec), sig = (rec.position.elements.period_d.hi - rec.position.elements.period_d.lo) / 2, P = rec.position.elements.period_d.v;
+  for (const mjd of [15020, 40000, 57322.014193, 60000, 88069]) {
+    assert.ok(Math.abs(phaseSigmaAt(plan, mjd) - 360 * Math.abs(mjd - 57322.014193) * sig / (P * P)) < 1e-9);
+    assert.equal(phaseSigmaAt(plan, mjd), orbitPlacement(rec, mjd).phaseSigmaDeg);
+  }
+  assert.ok(Math.abs(phaseSigmaAt(plan, 15020) - 40) < 2, 'TRAPPIST-1 b at 1900: about 40 degrees (section 20.15)');
+  assert.equal(phaseSigmaAt(compileOrbit(byId('bh:Cyg X-1')), 60000), null);
+  assert.equal(phaseSigmaAt(compileOrbit(trappist({ period_d: q(1.510826) })), 60000), null);
+});
+
+test('the phase-sigma demotion: a measured orbit with a wide period interval passes 90 degrees at the date the formula says', () => {
+  const rec = bare('nea:wide b', { period_d: q(10, { lo: 9.9, hi: 10.1 }), t_peri_mjd: q(58000) });     // sigmaP = 0.1 d -> 90 deg at |t - T0| = 90 P^2 / (360 sigmaP) = 250 d
+  const plan = compileOrbit(rec);
+  assert.ok(phaseSigmaAt(plan, 58000 + 249) < 90 && phaseSigmaAt(plan, 58000 + 251) > 90);
+  assert.ok(Math.abs(phaseSigmaAt(plan, 58000 + 250) - 90) < 1e-9);
+});
+
+test('evalOrbit does not allocate: it fills the given array (also a Float64Array) and warm-starts to the same answer as a cold plan', () => {
+  const rec = byId('bh:Gaia BH1'), plan = compileOrbit(rec), f64 = new Float64Array(3);
+  assert.equal(evalOrbit(plan, 60000, f64), f64);
+  const cold = evalOrbit(compileOrbit(rec), 60000.5, [0, 0, 0]);
+  evalOrbit(plan, 60000.4, f64); evalOrbit(plan, 60000.5, f64);
+  for (let c = 0; c < 3; c++) assert.ok(Math.abs(f64[c] - cold[c]) < 1e-13);
+  // a very eccentric orbit stepped through many periods in both directions stays on the Kepler solution
+  const hot = bare('nea:hot b', { e: q(0.95), t_peri_mjd: q(58000) }), hp = compileOrbit(hot);
+  for (const mjd of [58000, 58003, 57990, 59000, 58000.001, 70000, 40000]) {
+    const w = referencePlacement(hot, mjd), g = evalOrbit(hp, mjd, [0, 0, 0]);
+    for (let c = 0; c < 3; c++) assert.ok(Math.abs(g[c] - w[c]) < 1e-12, `e 0.95 at ${mjd}`);
+  }
+});
+
+test('orbitPathCompiled and orbitPathInto give orbitPath: same points, closed, and the placement lies on them', () => {
+  for (const rec of FIX) {
+    const plan = compileOrbit(rec), path = orbitPath(rec, 200), pc = orbitPathCompiled(plan, 200), flat = orbitPathInto(plan, 200, new Float64Array(603));
+    assert.deepEqual(pc, path); assert.equal(path.length, 201); assert.deepEqual(path[0], path[200]);
+    for (let i = 0; i <= 200; i++) for (let c = 0; c < 3; c++) assert.equal(flat[3 * i + c], path[i][c]);
+    const x = evalOrbit(plan, 60123.4, [0, 0, 0]), d = Math.min(...path.map((p) => len([p[0] - x[0], p[1] - x[1], p[2] - x[2]])));
+    assert.ok(d < 0.1 * plan.a, `${rec.id}: placement ${d} from the path`);
+  }
 });

@@ -13,10 +13,19 @@ docs/object-framework.md sections 16.9 and 16.18.
     uv run python backend/scripts/build_objects_hr23.py --local FILE   # build from a raw VizieR TSV download
     uv run python backend/scripts/build_objects_hr23.py --refresh      # download the pinned table, rewrite the snapshot
     uv run python backend/scripts/build_objects_hr23.py --refresh --local FILE   # ... from a file you downloaded
+    uv run python backend/scripts/build_objects_hr23.py --refresh-members        # only the members snapshot (network)
 
 `--refresh` tries the CDS server and then the CfA mirror (the mirror is intermittent and can return a truncated
 file), and rejects a download unless it has exactly 7,167 rows and the pinned sha256. `--check` exits 1 when the
 committed dataset differs from a fresh build, or fails `objects_static.verify_dataset`.
+
+Members (script_version 2, docs/object-framework.md 20.9): the VizieR members table `J/A+A/686/A42/members`
+(Hunt & Reffert 2024, table 2) is fetched for the clusters with `dist50 <= 500 pc` (ASU list constraints on `ID`, in
+batches, CDS then CfA then IDIA) and committed as `members-hr24-<date>.csv.gz` (`ID`, `GaiaDR3`, `Prob`, `inrt`).
+`--refresh-members` refuses the download unless every cluster's member count equals its `N` in the committed clusters
+snapshot. The build writes `members/<ID>.json` per cluster (membership probabilities truncated, not rounded, to
+integer thousandths, so a stored value of 500 or more means Prob >= 0.5 and `n_p50` counts exactly those), adds `assets.members` to those cluster records and a
+`members` map to the manifest, and fails when the member files exceed `MEMBERS_MAX_BYTES` (4 MB) on disk.
 
 Output: one `cluster` record per catalogue row, all kept. Evidence follows the mean-parallax signal to noise: at or
 above 5 the distance is `measured`; below it the maximum-likelihood distance is prior-dominated, so the distance is
@@ -38,7 +47,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +59,7 @@ DATASET = "hr23-clusters"
 OUT = ROOT / "frontend" / "data" / "objects" / DATASET
 SOURCES = ROOT / "backend" / "data" / "sources" / DATASET
 SCRIPT = "backend/scripts/build_objects_hr23.py"
-SCRIPT_VERSION = 1
+SCRIPT_VERSION = 2
 
 VIZIER_ID = "J/A+A/686/A42"
 TABLE = "J/A+A/686/A42/clusters"
@@ -59,6 +68,19 @@ MIRRORS = ("https://vizier.cds.unistra.fr/viz-bin/asu-tsv", "https://vizier.cfa.
 EXPECTED_ROWS = 7167
 EXPECTED_SHA256 = "0469c5baec7ccf0431aeb129fb0b06507eee55d499453717a759c8e0ab55d579"
 SNAPSHOT = "clusters-hr24-{date}.csv.gz"
+
+MEMBERS_TABLE = "J/A+A/686/A42/members"
+MEMBERS_SNAPSHOT = "members-hr24-{date}.csv.gz"
+MEMBERS_COLUMNS = ("ID", "GaiaDR3", "Prob", "inrt")
+MEMBERS_MIRRORS = ("https://vizier.cds.unistra.fr/viz-bin/asu-tsv", "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv",
+                   "https://vizier.idia.ac.za/viz-bin/asu-tsv")
+MEMBERS_QUERY = ("?-source=J/A%2BA/686/A42/members&-out=ID,GaiaDR3,Prob,inrt&-out.max=unlimited&ID=")
+MEMBERS_MAX_DIST_PC = 500
+MEMBERS_MAX_BYTES = 4_000_000     # 4 MB on disk: above it the build fails (docs/object-framework.md 20.17 item 4)
+MEMBERS_BATCH_IDS = 60            # clusters per ASU request
+MEMBERS_BATCH_ROWS = 15000        # members per ASU request (the sum of the clusters' N)
+MEMBERS_FORMAT = "space-maps.cluster-members/1"
+SRC_MEMBERS = "Hunt & Reffert 2024, table 2 (J/A+A/686/A42/members); probabilities truncated to thousandths"
 
 CATALOGUE = "Hunt & Reffert 2024 (open and globular clusters in Gaia DR3)"
 CITATION = ("Hunt & Reffert 2024, A&A 686, A42 (2024A&A...686A..42H), doi:10.26093/cds/vizier.36860042; "
@@ -354,13 +376,26 @@ def extract(rows: list[dict]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def load_snapshot(directory: Path) -> dict:
-    meta = json.loads((directory / "SOURCE.json").read_text(encoding="utf-8"))
-    f = meta["files"][0]
+def _entry(meta: dict, role: str) -> dict | None:
+    return next((f for f in meta["files"] if f.get("role") == role), None)
+
+
+def _read_pinned(directory: Path, f: dict) -> list[dict]:
     data = gzip.decompress((directory / f["file"]).read_bytes())
     if sha256(data) != f["sha256"]:
         raise SystemExit(f"{f['file']}: sha256 differs from SOURCE.json")
-    return {"meta": meta, "file": f, "rows": read_csv_bytes(data)}
+    return read_csv_bytes(data)
+
+
+def load_snapshot(directory: Path) -> dict:
+    """The committed snapshots: `rows`/`file` for the clusters table, `member_rows`/`members_file` for the members."""
+    meta = json.loads((directory / "SOURCE.json").read_text(encoding="utf-8"))
+    f = _entry(meta, "clusters")
+    if f is None:
+        raise SystemExit("SOURCE.json has no clusters entry")
+    mf = _entry(meta, "members")
+    return {"meta": meta, "file": f, "rows": _read_pinned(directory, f),
+            "members_file": mf, "member_rows": None if mf is None else _read_pinned(directory, mf)}
 
 
 def provenance_full(f: dict, *, version: str | None = None) -> dict:
@@ -373,16 +408,29 @@ def provenance_full(f: dict, *, version: str | None = None) -> dict:
             "credit": f"Hunt & Reffert 2024, from Gaia DR3 ({GAIA_CREDIT})"}
 
 
+def members_provenance(mf: dict) -> dict:
+    return {"table": MEMBERS_TABLE, "src": SRC_MEMBERS, "licence": LICENCE, "query_url": mf["query_url"],
+            "mirror": mf.get("mirror"), "retrieved": mf["retrieved"], "source_sha256": mf["source_sha256"],
+            "source_rows": mf["rows"], "snapshot_file": mf["file"], "snapshot_sha256": mf["sha256"],
+            "max_dist_pc": MEMBERS_MAX_DIST_PC,
+            "credit": f"Hunt & Reffert 2024, from Gaia DR3 ({GAIA_CREDIT}); Gaia data CC BY-NC 3.0 IGO"}
+
+
 def license_text(which: str) -> str:
     """The LICENSE.md of the sources folder (`which == "sources"`) or of the built dataset (`"dataset"`)."""
     if which == "sources":
         folder = "backend/data/sources/hr23-clusters/"
         covered = ("- `clusters-hr24-*.csv.gz`: the Hunt & Reffert 2024 cluster table from VizieR "
                    f"({VIZIER_ID}), columns selected;\n"
-                   "- `SOURCE.json`, the input's hash, URL and retrieval date;\n- this file.")
+                   "- `members-hr24-*.csv.gz`: the Hunt & Reffert 2024 members table (table 2, "
+                   f"`{MEMBERS_TABLE}`) from VizieR, for the clusters within {MEMBERS_MAX_DIST_PC} pc, "
+                   "columns ID, GaiaDR3, Prob, inrt;\n"
+                   "- `SOURCE.json`, the inputs' hashes, URLs and retrieval dates;\n- this file.")
     else:
         folder = "frontend/data/objects/hr23-clusters/"
-        covered = "- `manifest.json`;\n- `tiles/*.json`, the cluster records;\n- this file."
+        covered = ("- `manifest.json`;\n- `tiles/*.json`, the cluster records;\n"
+                   f"- `members/*.json`, the member stars of each cluster within {MEMBERS_MAX_DIST_PC} pc;\n"
+                   "- this file.")
     return f"""# Licence and credits: hr23-clusters data
 
 Applies to **every file in `{folder}`**:
@@ -400,6 +448,14 @@ Hunt & Reffert derived the cluster positions, distances, sizes and memberships f
 ({GAIA_CREDIT}). Nothing is relicensed here: the catalogue values keep VizieR's terms, and the underlying Gaia
 data keep ESA's.
 
+## The members folder
+
+The `members/` folder of the dataset (`frontend/data/objects/hr23-clusters/members/`) and the members snapshot hold
+Gaia-derived values: the Hunt & Reffert 2024 members table (table 2, `{MEMBERS_TABLE}`) lists, for each cluster
+within {MEMBERS_MAX_DIST_PC} pc, its member stars by Gaia DR3 source id with a membership probability and a
+tidal-radius flag. Credit: ESA/Gaia/DPAC. The Gaia data are available under CC BY-NC 3.0 IGO (non-commercial use),
+and the table keeps VizieR's terms of use ({LICENCE}), as for the clusters table.
+
 ## Code
 
 The code that builds these files (`backend/scripts/build_objects_hr23.py`) and the rest of the repository are
@@ -407,29 +463,174 @@ under the MIT licence (see the repository `LICENSE`).
 """
 
 
-def build_from(rows: list[dict], prov_full: dict, snapshot_date: str, out_dir: Path) -> dict:
+def member_clusters(rows: list[dict]) -> list[dict]:
+    """The cluster rows that get a member file: a position and a distance, `dist50` at most 500 pc, by numeric ID."""
+    out = []
+    for r in rows:
+        d50 = _d(r.get("dist50"))
+        if _d(r.get("RA_ICRS")) is None or _d(r.get("DE_ICRS")) is None or d50 is None:
+            continue
+        if d50 <= MEMBERS_MAX_DIST_PC:
+            out.append(r)
+    return sorted(out, key=lambda r: int(r["ID"]))
+
+
+def thousandths(prob: str) -> int:
+    """Prob truncated (floored) to integer thousandths, so stored >= 500 exactly when Prob >= 0.5."""
+    d = Decimal(prob)
+    if not Decimal(0) <= d <= Decimal(1):
+        raise SystemExit(f"membership probability {prob!r} is outside [0, 1]")
+    return int((d * 1000).quantize(Decimal(1), rounding=ROUND_FLOOR))   # exact decimal: "0.5" -> 500, "0.4999" -> 499
+
+
+def check_member_counts(clusters: list[dict], member_rows: list[dict]) -> None:
+    """Every cluster within 500 pc has exactly its `N` member rows, and no other cluster has any."""
+    have = Counter(r["ID"] for r in member_rows)
+    want = {r["ID"]: int(_d(r["N"])) for r in clusters}
+    bad = [f"{r['Name']} (ID {r['ID']}): {have.get(r['ID'], 0)} member rows, N = {want[r['ID']]}"
+           for r in clusters if have.get(r["ID"], 0) != want[r["ID"]]]
+    extra = sorted(set(have) - set(want), key=int)
+    if bad or extra:
+        raise SystemExit("the members table does not match the clusters table:\n  "
+                         + "\n  ".join(bad[:20] + ([f"{len(bad) - 20} more"] if len(bad) > 20 else [])
+                                       + ([f"member rows of clusters not within {MEMBERS_MAX_DIST_PC} pc: "
+                                           f"{extra[:10]}"] if extra else [])))
+
+
+def member_files(clusters: list[dict], member_rows: list[dict]) -> dict[str, bytes]:
+    """`{"<ID>.json": bytes}` for every cluster in `clusters`: compact JSON, members sorted by numeric Gaia id."""
+    check_member_counts(clusters, member_rows)
+    by_id: dict[str, list[tuple[int, int, int, bool]]] = {}
+    for r in member_rows:
+        by_id.setdefault(r["ID"], []).append((int(r["GaiaDR3"]), thousandths(r["Prob"]), int(r["inrt"]),
+                                              Decimal(r["Prob"]) >= Decimal("0.5")))
+    out = {}
+    for c in clusters:
+        ms = sorted(by_id[c["ID"]])
+        doc = {"format": MEMBERS_FORMAT, "cluster": f"hr23:{c['Name'].strip()}", "src": SRC_MEMBERS,
+               "n": len(ms), "n_p50": sum(1 for m in ms if m[3]),
+               "members": [[str(g), p, i] for g, p, i, _ in ms]}
+        out[f"{c['ID']}.json"] = (json.dumps(doc, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+    return out
+
+
+def members_report(files: dict[str, bytes], clusters: list[dict], member_rows: list[dict]) -> dict:
+    total = sum(len(v) for v in files.values())
+    gz = sum(len(gzip.compress(v, compresslevel=9, mtime=0)) for v in files.values())
+    big = max(files, key=lambda k: (len(files[k]), k)) if files else None
+    return {"clusters": len(files), "members": len(member_rows),
+            "members_p50": sum(json.loads(v)["n_p50"] for v in files.values()),
+            "bytes": total, "gzip_bytes": gz,
+            "largest": None if big is None else {"id": big.removesuffix(".json"), "bytes": len(files[big])}}
+
+
+def build_from(rows: list[dict], prov_full: dict, snapshot_date: str, out_dir: Path,
+               member_rows: list[dict] | None = None, members_prov: dict | None = None) -> dict:
+    if member_rows is None or members_prov is None:
+        raise SystemExit("no members snapshot: run --refresh-members")
     records, report = build_records(rows, snapshot_date)
+    clusters = [r for r in member_clusters(rows)]
+    files = member_files(clusters, member_rows)
+    mrep = members_report(files, clusters, member_rows)
+    if mrep["bytes"] > MEMBERS_MAX_BYTES:
+        raise SystemExit(f"the member files total {mrep['bytes']:,} bytes on disk ({mrep['gzip_bytes']:,} gzipped), "
+                         f"above the {MEMBERS_MAX_BYTES:,} byte cap: stop and ask before shipping them "
+                         f"(docs/object-framework.md 20.17 item 4)")
+    report["members"] = mrep
+    ids = {c["ID"]: c["Name"].strip() for c in clusters}
+    by_name = {f"hr23:{n}": i for i, n in ids.items()}
+    for rec in records:
+        if rec["id"] in by_name:
+            rec["assets"] = {"members": f"members/{by_name[rec['id']]}.json"}
+    out = Path(out_dir)
     m = objects_static.write_dataset(
-        records, out_dir, dataset=DATASET, kinds=["cluster"], provenance=prov_full,
+        records, out, dataset=DATASET, kinds=["cluster"], provenance=dict(prov_full, members=members_prov),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
         band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance(snapshot_date)}, compact=True)
-    (Path(out_dir) / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
+    mdir = out / "members"
+    mdir.mkdir(parents=True, exist_ok=True)
+    for old in mdir.iterdir():
+        if old.is_file():
+            old.unlink()
+    for name, data in files.items():
+        (mdir / name).write_bytes(data)
+    m["members"] = {"prob": "truncated to thousandths", "max_dist_pc": MEMBERS_MAX_DIST_PC, "count": len(files), "members": len(member_rows),
+                    "files": {name.removesuffix(".json"): {"n": json.loads(data)["n"], "sha256": sha256(data)}
+                              for name, data in files.items()}}
+    (out / objects_static.MANIFEST).write_bytes(objects_static._dumps(m).encode("utf-8"))
+    (out / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
     return m
 
 
+def verify_members(out: Path) -> list[str]:
+    """Problems with the member files of a built dataset: the manifest map against the folder, and the assets."""
+    try:
+        m = json.loads((out / objects_static.MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return [f"manifest unreadable: {e}"]
+    mm = m.get("members")
+    if not isinstance(mm, dict) or not isinstance(mm.get("files"), dict):
+        return ["manifest has no members map"]
+    problems = []
+    mdir = out / "members"
+    on_disk = {p.name for p in mdir.iterdir()} if mdir.is_dir() else set()
+    want = {f"{k}.json" for k in mm["files"]}
+    problems += [f"members/{n}: not in the manifest" for n in sorted(on_disk - want)]
+    problems += [f"members/{n}: listed in the manifest, missing on disk" for n in sorted(want - on_disk)]
+    rows = 0
+    for k, info in sorted(mm["files"].items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else -1):
+        p = mdir / f"{k}.json"
+        if not p.is_file():
+            continue
+        data = p.read_bytes()
+        if sha256(data) != info.get("sha256"):
+            problems.append(f"members/{k}.json: sha256 does not match the manifest")
+        try:
+            doc = json.loads(data)
+        except ValueError:
+            problems.append(f"members/{k}.json: not JSON")
+            continue
+        if doc.get("format") != MEMBERS_FORMAT or doc.get("n") != info.get("n") or len(doc.get("members", ())) != info.get("n"):
+            problems.append(f"members/{k}.json: format or count differs from the manifest")
+        rows += len(doc.get("members", ()))
+    if rows != mm.get("members") or len(mm["files"]) != mm.get("count"):
+        problems.append("manifest members count or rows differ from the files")
+    try:
+        ds = objects_static.load_dataset(out)
+    except objects_static.DatasetError as e:
+        return problems + [str(e)]
+    assets = {}
+    try:
+        for t in ds.manifest["tiles"]:
+            for r in objects_static._read_tile(ds, t):
+                if "assets" in r:
+                    assets[r["id"]] = r["assets"].get("members")
+    except objects_static.DatasetError as e:
+        return problems + [str(e)]
+    for rid, path in assets.items():
+        if path is None or path.removeprefix("members/").removesuffix(".json") not in mm["files"]:
+            problems.append(f"{rid}: assets.members {path!r} has no member file")
+    if len(assets) != len(mm["files"]):
+        problems.append(f"{len(assets)} records carry assets.members, the manifest lists {len(mm['files'])} files")
+    return problems
+
+
 def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> dict:
-    """Build the dataset into `out_dir` from the committed snapshot (or from a raw VizieR TSV)."""
+    """Build the dataset into `out_dir` from the committed snapshots (or the clusters from a raw VizieR TSV)."""
     snap = load_snapshot(sources)
     f = snap["file"]
+    mf = snap["members_file"]
+    mprov = None if mf is None else members_provenance(mf)
     if local is None:
-        return build_from(snap["rows"], provenance_full(f), f["retrieved"], out_dir)
+        return build_from(snap["rows"], provenance_full(f), f["retrieved"], out_dir, snap["member_rows"], mprov)
     raw = local.read_bytes()
     rows = check_raw(raw, pinned=False)
     stripped = sha256(strip_comments(raw))
     full = dict(provenance_full(f, version=f"{VIZIER_ID}, local file {local.name}"), retrieved=None,
                 query_url=None, mirror=None, source_sha256=stripped, source_rows=len(rows),
                 snapshot_file=None, snapshot_sha256=sha256(extract(rows)))
-    return build_from(read_csv_bytes(extract(rows)), full, f"local {stripped[:12]}", out_dir)
+    return build_from(read_csv_bytes(extract(rows)), full, f"local {stripped[:12]}", out_dir,
+                      snap["member_rows"], mprov)
 
 
 # --- downloading -----------------------------------------------------------------------------
@@ -482,18 +683,145 @@ def refresh(directory: Path, local: Path | None = None) -> None:
     data = extract(rows)
     name = SNAPSHOT.format(date=retrieved)
     directory.mkdir(parents=True, exist_ok=True)
-    for old in directory.glob("*"):
+    for old in directory.glob("clusters-hr24-*.csv.gz"):
         old.unlink()
     write_gz(directory / name, data)
-    meta = {"dataset": DATASET,
-            "note": "Pinned input of backend/scripts/build_objects_hr23.py. Regenerate with --refresh. `sha256` is "
-                    "of the uncompressed committed bytes (the columns used, rows sorted by ID); `source_sha256` is "
-                    "of the full original download with its # comment lines stripped.",
-            "files": [{"file": name, "role": "clusters", "sha256": sha256(data), "source_sha256": sha256(strip_comments(raw)),
-                       "source_bytes": len(raw), "retrieved": retrieved, "query_url": url, "mirror": mirror,
-                       "vizier_id": VIZIER_ID, "table": TABLE, "rows": len(rows), "columns": list(COLUMNS),
-                       "citation": CITATION, "licence": LICENCE}]}
-    (directory / "SOURCE.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    entry = {"file": name, "role": "clusters", "sha256": sha256(data), "source_sha256": sha256(strip_comments(raw)),
+             "source_bytes": len(raw), "retrieved": retrieved, "query_url": url, "mirror": mirror,
+             "vizier_id": VIZIER_ID, "table": TABLE, "rows": len(rows), "columns": list(COLUMNS),
+             "citation": CITATION, "licence": LICENCE}
+    _write_source(directory, "clusters", entry)
+
+
+SOURCE_NOTE = ("Pinned inputs of backend/scripts/build_objects_hr23.py. Regenerate with --refresh (both) or "
+               "--refresh-members. `sha256` is of the uncompressed committed bytes (the columns used, rows sorted by "
+               "ID, and for the members by GaiaDR3); `source_sha256` is of the full original download with its # "
+               "comment lines stripped (for the members: of the batches' downloads, each stripped, concatenated in "
+               "request order).")
+
+
+def _write_source(directory: Path, role: str, entry: dict) -> None:
+    """Put `entry` (a SOURCE.json files entry) in the role's place, keeping the other role's entry as it is."""
+    path = directory / "SOURCE.json"
+    old = json.loads(path.read_text(encoding="utf-8"))["files"] if path.is_file() else []
+    files = [f for f in old if f.get("role") != role] + [entry]
+    files.sort(key=lambda f: f["role"])
+    meta = {"dataset": DATASET, "note": SOURCE_NOTE, "files": files}
+    path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+# --- downloading the members -----------------------------------------------------------------
+
+def member_batches(clusters: list[dict]) -> list[list[dict]]:
+    """Consecutive clusters (by ID) grouped so that a request names few IDs and returns few rows."""
+    batches, cur, rows = [], [], 0
+    for c in clusters:
+        n = int(_d(c["N"]))
+        if cur and (len(cur) >= MEMBERS_BATCH_IDS or rows + n > MEMBERS_BATCH_ROWS):
+            batches.append(cur)
+            cur, rows = [], 0
+        cur.append(c)
+        rows += n
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def members_url(base: str, ids: list[str]) -> str:
+    """ASU list constraint: `ID==2,=3,=4` (the first `=` belongs to the query, the rest to the list)."""
+    return base + MEMBERS_QUERY + "=" + ",=".join(ids)
+
+
+def parse_members_raw(raw: bytes) -> list[dict]:
+    """Rows of one members download: header, units and dashes lines, then rows. SystemExit on anything else."""
+    # the units line is blank cells separated by tabs, so only truly empty lines are dropped
+    lines = [l for l in strip_comments(raw).decode("utf-8", "replace").splitlines() if l != ""]
+    if len(lines) < 3 or lines[0].split("\t") != list(MEMBERS_COLUMNS) or not lines[2].lstrip().startswith("-"):
+        raise SystemExit("not a members table download")
+    rows = []
+    for line in lines[3:]:
+        cells = [c.strip() for c in line.split("\t")]
+        if len(cells) != len(MEMBERS_COLUMNS) or not all(cells) or not cells[0].isdigit() or not cells[1].isdigit() \
+                or cells[3] not in ("0", "1"):
+            raise SystemExit(f"truncated or malformed row: {line[:80]!r}")
+        thousandths(cells[2])
+        rows.append(dict(zip(MEMBERS_COLUMNS, cells)))
+    return rows
+
+
+def download_members(clusters: list[dict], log=print) -> tuple[list[dict], bytes, str]:
+    """(rows, concatenated stripped downloads, mirrors used) for every cluster in `clusters`. A batch is accepted
+    only when each of its clusters has exactly its `N` rows; a mirror that fails is tried last afterwards."""
+    mirrors = list(MEMBERS_MIRRORS)
+    used: list[str] = []
+    rows: list[dict] = []
+    raws: list[bytes] = []
+    batches = member_batches(clusters)
+    for k, batch in enumerate(batches, 1):
+        ids = [c["ID"] for c in batch]
+        want = {c["ID"]: int(_d(c["N"])) for c in batch}
+        errors = []
+        for base in list(mirrors):
+            try:
+                raw = _http_get(members_url(base, ids), timeout=120.0)
+                got = parse_members_raw(raw)
+                have = Counter(r["ID"] for r in got)
+                if dict(have) != want:
+                    wrong = [f"ID {i}: {have.get(i, 0)} rows, N = {n}" for i, n in want.items() if have.get(i, 0) != n]
+                    raise SystemExit("member counts differ from the clusters table: " + "; ".join(wrong[:5])
+                                     + ("" if set(have) <= set(want) else f"; unexpected IDs {sorted(set(have) - set(want))[:5]}"))
+            except (RuntimeError, SystemExit) as e:
+                errors.append(f"{base}: {e}")
+                mirrors.remove(base)
+                mirrors.append(base)
+                continue
+            host = base.split("/viz-bin")[0].removeprefix("https://")
+            if host not in used:
+                used.append(host)
+            rows += got
+            raws.append(strip_comments(raw))
+            break
+        else:
+            raise SystemExit(f"refusing the members refresh; batch {k}/{len(batches)} (IDs {ids[0]}..{ids[-1]}) failed "
+                             "on every server:\n  " + "\n  ".join(errors))
+        if k % 5 == 0 or k == len(batches):
+            log(f"  members: batch {k}/{len(batches)}, {len(rows):,} rows so far ({', '.join(used)})")
+    return rows, b"".join(raws), ", ".join(used)
+
+
+def members_extract(rows: list[dict]) -> bytes:
+    """The committed members CSV: ID, GaiaDR3, Prob, inrt; rows sorted by numeric ID then numeric GaiaDR3."""
+    buf = io.StringIO(newline="")
+    w = csv.DictWriter(buf, fieldnames=list(MEMBERS_COLUMNS), lineterminator="\n")
+    w.writeheader()
+    w.writerows(sorted(rows, key=lambda r: (int(r["ID"]), int(r["GaiaDR3"]))))
+    return buf.getvalue().encode("utf-8")
+
+
+def refresh_members(directory: Path) -> None:
+    """Download the members of the clusters within 500 pc and write the snapshot and its SOURCE.json entry."""
+    snap = load_snapshot(directory)
+    clusters = member_clusters(snap["rows"])
+    rows, raw, mirror = download_members(clusters)
+    check_member_counts(clusters, rows)
+    keys = [(r["ID"], r["GaiaDR3"]) for r in rows]
+    if len(set(keys)) != len(keys):
+        raise SystemExit("refusing the members refresh: a (cluster, source) pair appears twice")
+    data = members_extract(rows)
+    retrieved = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    name = MEMBERS_SNAPSHOT.format(date=retrieved)
+    for old in directory.glob("members-hr24-*.csv.gz"):
+        old.unlink()
+    write_gz(directory / name, data)
+    entry = {"file": name, "role": "members", "sha256": sha256(data), "source_sha256": sha256(raw),
+             "source_bytes": len(raw), "retrieved": retrieved, "mirror": mirror,
+             "query_url": ("https://" + mirror.split(", ")[0] + "/viz-bin/asu-tsv" + MEMBERS_QUERY + "=<id>,=<id>,..."),
+             "query": (f"ASU list constraint on ID, in batches of up to {MEMBERS_BATCH_IDS} clusters or "
+                       f"{MEMBERS_BATCH_ROWS} members, for the {len(clusters)} clusters with dist50 <= "
+                       f"{MEMBERS_MAX_DIST_PC} pc in {snap['file']['file']}; every cluster's row count equals its N"),
+             "vizier_id": VIZIER_ID, "table": MEMBERS_TABLE, "rows": len(rows), "clusters": len(clusters),
+             "columns": list(MEMBERS_COLUMNS), "citation": CITATION, "licence": LICENCE}
+    _write_source(directory, "members", entry)
 
 
 # --- command line ----------------------------------------------------------------------------
@@ -508,6 +836,11 @@ def _print_report(m: dict) -> None:
           f"excluded {r['excluded'] or 'none'}")
     print(f"types {r['by_type']}; quality {r['by_quality']}; evidence {r['by_evidence']}")
     print(f"without age {r['without_age']}, extinction {r['without_extinction']}, mass {r['without_mass']}")
+    mr = r["members"]
+    print(f"members: {mr['clusters']} clusters within {MEMBERS_MAX_DIST_PC} pc, {mr['members']:,} members, "
+          f"{mr['members_p50']:,} with Prob >= 0.5; {mr['bytes']:,} bytes on disk "
+          f"(cap {MEMBERS_MAX_BYTES:,}), {mr['gzip_bytes']:,} gzipped (gzip -9 of each file, summed); "
+          f"largest members/{mr['largest']['id']}.json, {mr['largest']['bytes']:,} bytes")
 
 
 def main() -> int:
@@ -516,6 +849,9 @@ def main() -> int:
     ap.add_argument("--sources", type=Path, default=SOURCES, help="directory of the committed snapshot")
     ap.add_argument("--local", type=Path, help="a raw VizieR TSV download (build from it, or refresh from it)")
     ap.add_argument("--refresh", action="store_true", help="download the pinned table (network), rewrite the snapshot, build")
+    ap.add_argument("--refresh-members", action="store_true",
+                    help="download only the members table (network) for the committed clusters snapshot, rewrite "
+                         "its snapshot, build")
     ap.add_argument("--check", action="store_true",
                     help="rebuild into a temp dir, compare with --out and verify it; exit 1 on any difference")
     a = ap.parse_args()
@@ -523,6 +859,9 @@ def main() -> int:
         refresh(a.sources, a.local)
         print(f"snapshot written to {a.sources}")
         a.local = None
+    if a.refresh or a.refresh_members:
+        refresh_members(a.sources)
+        print(f"members snapshot written to {a.sources}")
     if a.check:
         with tempfile.TemporaryDirectory() as tmp:
             build(Path(tmp), a.sources, a.local)
@@ -531,7 +870,8 @@ def main() -> int:
         src_license = a.sources / "LICENSE.md"
         if not src_license.is_file() or src_license.read_text(encoding="utf-8") != license_text("sources"):
             diff.append(f"{a.sources}/LICENSE.md")
-        problems = objects_static.verify_dataset(a.out) if a.out.is_dir() else ["output directory missing"]
+        problems = (objects_static.verify_dataset(a.out) + verify_members(a.out)) if a.out.is_dir() \
+            else ["output directory missing"]
         if diff:
             print(f"{a.out} differs from a fresh build: {', '.join(diff[:10])}"
                   f"{' ...' if len(diff) > 10 else ''}", file=sys.stderr)

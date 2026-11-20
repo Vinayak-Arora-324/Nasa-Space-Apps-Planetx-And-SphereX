@@ -24,9 +24,15 @@ DATASETS = ("bh-curated", "galaxies", "hr23-clusters", "nea-exoplanets", "nebula
 # DATASET -> the commit whose /1 tiles it must still decode to (the last /1 commit). A dataset whose data changes
 # later in Phase 4 is removed from this dict in that very commit, so the format change and the data changes stay
 # separately provable.
-BASELINE = {name: "3d12c9c" for name in DATASETS if name not in ("nebulae", "galaxies", "smbh-curated")}
+BASELINE = {name: "3d12c9c" for name in DATASETS if name not in ("nebulae", "galaxies", "smbh-curated", "hr23-clusters")}
 # nebulae: data changed in Phase 4 (Shen HII distances)
 # galaxies, smbh-curated: data changed in Phase 4 (CF4 group distances)
+# hr23-clusters: data changed in Phase 5 (assets.members on the clusters within 500 pc, section 20.9)
+
+# Manifest keys a dataset build adds after write_dataset (hr23-clusters' member map, section 20.9), and the folders
+# beside tiles/ that are not tile data (the member files): the format round trip carries the first and ignores the second.
+EXTRA_MANIFEST_KEYS = ("members",)
+NON_TILE_DIRS = ("members",)
 
 
 def _records(path: Path) -> dict[str, dict]:
@@ -52,6 +58,11 @@ def _rewrite(path: Path, out: Path, compact: bool) -> None:
                      provenance=m["provenance"], build=m["build"], band_deg=m["tiling"]["band_deg"],
                      precedence=m["precedence"], src_table="src_table" in m,
                      record_defaults=m.get("record_defaults"), sky_ids=sky or None, compact=compact)
+    extra = {k: m[k] for k in EXTRA_MANIFEST_KEYS if k in m}
+    if extra:
+        fresh = json.loads((out / st.MANIFEST).read_text(encoding="utf-8"))
+        fresh.update(extra)
+        (out / st.MANIFEST).write_bytes(st._dumps(fresh).encode("utf-8"))
 
 
 @pytest.mark.parametrize("name", DATASETS)
@@ -74,7 +85,8 @@ def test_decoded_records_survive_a_format_1_rewrite(name, tmp_path):
 def test_decoded_records_re_encode_to_the_shipped_bytes(name, tmp_path):
     _rewrite(OBJECTS / name, tmp_path / "two", compact=True)
     shipped = {p.relative_to(OBJECTS / name): p.read_bytes()
-               for p in (OBJECTS / name).rglob("*.json")}
+               for p in (OBJECTS / name).rglob("*.json")
+               if p.relative_to(OBJECTS / name).parts[0] not in NON_TILE_DIRS}
     fresh = {p.relative_to(tmp_path / "two"): p.read_bytes() for p in (tmp_path / "two").rglob("*.json")}
     assert fresh.keys() == shipped.keys()
     assert [k for k in shipped if fresh[k] != shipped[k]] == []

@@ -47,7 +47,30 @@
       "source_sha256": "0469c5baec7ccf0431aeb129fb0b06507eee55d499453717a759c8e0ab55d579",
       "table": "J/A+A/686/A42/clusters",
       "vizier_id": "J/A+A/686/A42"
+    },
+    {
+      "citation": "Hunt & Reffert 2024, A&A 686, A42 (2024A&A...686A..42H), doi:10.26093/cds/vizier.36860042; Hunt & Reffert 2023, A&A 673, A114 (2023A&A...673A.114H) for the cluster census and the quality cut",
+      "clusters": 695,
+      "columns": [
+        "ID",
+        "GaiaDR3",
+        "Prob",
+        "inrt"
+      ],
+      "file": "members-hr24-2026-11-20.csv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu, vizier.idia.ac.za",
+      "query": "ASU list constraint on ID, in batches of up to 60 clusters or 15000 members, for the 695 clusters with dist50 <= 500 pc in clusters-hr24-2026-11-18.csv.gz; every cluster's row count equals its N",
+      "query_url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J/A%2BA/686/A42/members&-out=ID,GaiaDR3,Prob,inrt&-out.max=unlimited&ID==<id>,=<id>,...",
+      "retrieved": "2026-11-20",
+      "role": "members",
+      "rows": 89738,
+      "sha256": "db62e272de1018942289c9a6ac80a6d7abfbd243cab554417fd614f4f0803b8a",
+      "source_bytes": 4398189,
+      "source_sha256": "2c2e9b13feed6444e19c0c96c3b76ba25611a922820233bb71a1607f8ec1d196",
+      "table": "J/A+A/686/A42/members",
+      "vizier_id": "J/A+A/686/A42"
     }
   ],
-  "note": "Pinned input of backend/scripts/build_objects_hr23.py. Regenerate with --refresh. `sha256` is of the uncompressed committed bytes (the columns used, rows sorted by ID); `source_sha256` is of the full original download with its # comment lines stripped."
+  "note": "Pinned inputs of backend/scripts/build_objects_hr23.py. Regenerate with --refresh (both) or --refresh-members. `sha256` is of the uncompressed committed bytes (the columns used, rows sorted by ID, and for the members by GaiaDR3); `source_sha256` is of the full original download with its # comment lines stripped (for the members: of the batches' downloads, each stripped, concatenated in request order)."
 }

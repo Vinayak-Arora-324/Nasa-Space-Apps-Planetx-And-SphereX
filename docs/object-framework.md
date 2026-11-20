@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, awaiting approval.**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19 and approved 2026-11-20 (decisions in §19.14).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -3372,7 +3372,7 @@ Left rough:
 
 ## 19. Phase 4: fixes and data quality (design)
 
-Status: **design, awaiting approval** (open questions in §19.13). Sections of §1–§18 that Phase 4 changes will carry a
+Status: **approved 2026-11-20 with the decisions in §19.14**, which override anything in §19.1–§19.13 they contradict. Sections of §1–§18 that Phase 4 changes will carry a
 "Phase 4 change" note pointing here when it is implemented. Where this section and an earlier one disagree, this one
 wins.
 
@@ -3851,3 +3851,51 @@ current `main`) and after, on the same patches:
    the repository; the migration test covers each). The alternative is `galaxies` only.
 6. **The `online` marker.** *Recommendation:* implement it with the four live smoke tests of §19.3.2, which catch an
    upstream changing a pinned table. The alternative is to delete the README sentence.
+
+### 19.14 Decisions at approval (2026-11-20)
+
+The open questions of §19.13 were answered as follows. Where an earlier part of §19 says otherwise, this section wins.
+
+1. **Shen's maser rows: used**, `method: parallax`, `measured`, not Gaia-licensed; a VLBI maser parallax is the
+   better measurement, and it keeps Orion from taking the neighbouring single-star region.
+   - The `src` names the original maser-parallax paper when Shen's table or text gives one. **Shen's table gives no
+     per-row reference** (its `r_Line` column is the reference of the velocity line, not the distance), and its §3.2
+     says only that the maser parallaxes were "collected from the literature (e.g., Reid et al. 2019; VERA
+     Collaboration et al. 2020; Xu et al. 2023; Bian et al. 2024, and references therein)", Fig. 3 "primarily from
+     Reid et al. (2019)". So each maser `src` says: "VLBI maser parallax of the associated HMSFR, as adopted by Shen
+     et al. 2025 (table2 gives no per-row reference; §3.2: primarily Reid et al. 2019)".
+   - Licence labelling per row: Gaia-derived rows carry the Gaia credit (and count for the credits line and the
+     `Data` row); maser rows do not.
+2. **Evidence of a Shen distance: accepted.** Group I `measured`; Groups II and III `derived` (tier `inferred`),
+   compared with Russeil on precision through the ladder. **Why** (recorded in §19.4.3): the parallaxes are measured,
+   but tying a region to a single star is an inference; a Group I region has several stars with consistent
+   distances, and a planetary nebula's central star is unambiguous, which is why PNe stay `measured`. The build
+   report lists every nebula whose distance changes by more than 50 %, with its Shen group, for review.
+3. **The CF4 group rule: accepted as §19.5** (TF/FP-only galaxies, groups of 2 or more, the interval widened by the
+   rms projected radius, half the separation for pairs, the group winning on fractional error). The card note names
+   the group id and its size; the galaxy's own TF/FP distance is listed as "not used". The report counts the moves
+   from pairs and from groups of 3–4 separately. `smbh-curated` is rebuilt for NGC 4889\* and its test updated.
+4. **The sheet fix: accepted**, with conditions:
+   - **deterministic**: each offset comes from `hashUnit(id, 'los')`, so a galaxy sits in the same place on every load;
+   - **bounded**: a drawn position never leaves the record's own distance interval or the group radius, whichever is
+     smaller; the distribution (a smooth bell, the sum of two hashed uniforms, scaled to that bound) shows no shell
+     or edge;
+   - **Evidence view**: the exact group distance (the sheet);
+   - **card**: the adopted group distance and interval as today, plus the note "Drawn depth within its group is
+     illustrative; the distance above is its group's.";
+   - **hosted black holes follow their galaxy's drawn centre** (NGC 4889\* with NGC 4889); "Go there" and picking use
+     the drawn position;
+   - **tests**: determinism, the bounds, and the Evidence view at the exact distance.
+5. **Encoding on all six datasets: accepted.** Conditions:
+   - the server reads both `/1` and `/2` throughout;
+   - each dataset has a migration test: decoding its `/2` tiles gives exactly the records its `/1` tiles gave,
+     **before any data change of this phase**, so the format change and the data changes land in separate commits;
+   - `/api/objects` returns identical records for every regression patch before and after the format commit;
+   - every `--check` stays byte-identical;
+   - the sizes per dataset, raw and gzipped, before and after, are reported.
+6. **The `online` marker: implemented** with the four live smoke tests. They never run in the default `uv run pytest`,
+   in the autodeploy or in any deploy path; they are informational. Each names the host and the pinned table or hash
+   it checked and fails with a message saying what changed upstream. They stay small: no full re-downloads of large
+   files.
+
+Everything else in §19 is approved as written.

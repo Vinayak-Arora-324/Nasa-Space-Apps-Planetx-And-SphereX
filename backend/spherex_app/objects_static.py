@@ -41,6 +41,15 @@ Record defaults (`write_dataset(..., record_defaults={...})`): top-level keys th
 record (the compact `provenance` of a dataset) are stored once in `manifest["record_defaults"]` and left
 out of the tile records. `_read_tile` and `verify_dataset` put a missing key back (a copy of the default)
 before validating or caching, so served records are unchanged. Opt-in and generic: any top-level key.
+
+Compact tiles, format `space-maps.object-tiles/2` (docs/object-framework.md 19.7): `write_dataset(...,
+compact=True)` stores a Quantity as `[v, q]` or `[v, q, lo, hi]`, `q` indexing the manifest's
+`quantity_table` of `[src, tier, unit]` (src an index into `src_table`, or the string; unit a string or null for
+absent). A Quantity is compacted only when its keys are within v, lo, hi, unit, src, tier, lo and hi are both
+present or both absent, and unit is absent or a string; any other Quantity stays an object. Holders:
+position.dist, position.elements.*, alt_distances[].dist, size.radius, size.angular.*, props.*. The readers
+expand arrays back to the /1 objects before defaults, the string table and validation, so served records are
+identical. `load_dataset` reads /1 and /2; the default writer output is /1.
 """
 
 from __future__ import annotations
@@ -56,8 +65,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, Query, SkyRecord, Source, angsep_deg,
-                      angular_radius_deg, cone_contains, sky_position, validate_record)
+from .objects import (HOSTED_KINDS, KINDS, SCHEMA, TILE_FORMAT, TILE_FORMAT_2, TILE_FORMATS, Query,
+                      SkyRecord, Source, angsep_deg, angular_radius_deg, cone_contains, sky_position, validate_record)
 
 log = logging.getLogger(__name__)
 
@@ -172,8 +181,8 @@ def _check_manifest(m: object, where: str) -> dict:
     if not isinstance(m, dict):
         raise DatasetError(f"{where}: manifest must be a JSON object")
     problems = []
-    if m.get("format") != TILE_FORMAT:
-        problems.append(f"format must be {TILE_FORMAT!r}")
+    if m.get("format") not in TILE_FORMATS:
+        problems.append(f"format must be one of {', '.join(map(repr, TILE_FORMATS))}")
     if m.get("schema") != SCHEMA:
         problems.append(f"schema must be {SCHEMA!r} (this server reads schema 1 only)")
     if not (isinstance(m.get("dataset"), str) and m["dataset"]):
@@ -202,6 +211,12 @@ def _check_manifest(m: object, where: str) -> dict:
     tab = m.get("src_table")
     if tab is not None and not (isinstance(tab, list) and all(isinstance(x, str) for x in tab)):
         problems.append("src_table must be a list of strings")
+    qt = m.get("quantity_table")
+    if m.get("format") == TILE_FORMAT_2 or qt is not None:
+        if not (isinstance(qt, list) and all(
+                isinstance(e, list) and len(e) == 3 and (_is_index(e[0]) or isinstance(e[0], str))
+                and isinstance(e[1], str) and (e[2] is None or isinstance(e[2], str)) for e in qt)):
+            problems.append("quantity_table must be a list of [src, tier, unit]")
     tiles = m.get("tiles")
     sky = m.get("sky_tiles")
     if sky is not None and not (isinstance(sky, list) and sky and all(isinstance(x, str) for x in sky)
@@ -287,6 +302,99 @@ def _expand_src(rec: dict, table: list[str]) -> dict:
     return rec
 
 
+# --- compact Quantities (format /2) -----------------------------------------------------------
+
+_QUANTITY_KEYS = frozenset(("v", "lo", "hi", "unit", "src", "tier"))
+
+
+def _quantity_slots(rec: dict):
+    """(container, key) of every place that holds a Quantity: position.dist, position.elements.*,
+    alt_distances[].dist, size.radius, size.angular.*, props.*."""
+    pos = rec.get("position")
+    if isinstance(pos, dict):
+        if "dist" in pos:
+            yield pos, "dist"
+        if isinstance(pos.get("elements"), dict):
+            for k in pos["elements"]:
+                yield pos["elements"], k
+    alts = rec.get("alt_distances")
+    if isinstance(alts, list):
+        for a in alts:
+            if isinstance(a, dict) and "dist" in a:
+                yield a, "dist"
+    size = rec.get("size")
+    if isinstance(size, dict):
+        if "radius" in size:
+            yield size, "radius"
+        if isinstance(size.get("angular"), dict):
+            for k in size["angular"]:
+                yield size["angular"], k
+    if isinstance(rec.get("props"), dict):
+        for k in rec["props"]:
+            yield rec["props"], k
+
+
+def _compactable(q: object) -> bool:
+    if not (isinstance(q, dict) and "v" in q and isinstance(q.get("src"), str) and isinstance(q.get("tier"), str)):
+        return False
+    if not set(q) <= _QUANTITY_KEYS or ("lo" in q) != ("hi" in q):
+        return False
+    return "unit" not in q or isinstance(q["unit"], str)
+
+
+def _qkey(q: dict, index: dict[str, int]) -> tuple:
+    src = q["src"]
+    return (index.get(src, src), q["tier"], q.get("unit"))
+
+
+def _qsort(k: tuple) -> tuple:
+    src, tier, unit = k
+    return (isinstance(src, str), src if isinstance(src, str) else "", src if isinstance(src, int) else 0,
+            tier, unit is not None, unit or "")
+
+
+def _compact_record(rec: dict, qindex: dict[tuple, int], src_index: dict[str, int]) -> dict:
+    """A copy of `rec` with every compactable Quantity as `[v, q]` or `[v, q, lo, hi]`."""
+    out = copy.deepcopy(rec)
+    for box, key in _quantity_slots(out):
+        q = box[key]
+        if isinstance(q, list):
+            raise ValueError(f"{rec.get('id')}: a list where a Quantity belongs cannot be stored compactly")
+        if _compactable(q):
+            box[key] = ([q["v"], qindex[_qkey(q, src_index)]] if "lo" not in q
+                        else [q["v"], qindex[_qkey(q, src_index)], q["lo"], q["hi"]])
+    return out
+
+
+def _expand_quantities(rec: dict, manifest: dict) -> dict:
+    """Replace the compact arrays of `rec` (in place) by Quantity objects. An array that is not
+    `[v, q]` / `[v, q, lo, hi]`, or a `q` outside the quantity table, raises DatasetError."""
+    qt = manifest.get("quantity_table") or []
+    table = manifest.get("src_table") or []
+    for box, key in _quantity_slots(rec):
+        a = box[key]
+        if not isinstance(a, list):
+            continue
+        if len(a) not in (2, 4) or not _is_index(a[1]):
+            raise DatasetError(f"{rec.get('id')}: {key}: not a compact Quantity")
+        if not 0 <= a[1] < len(qt):
+            raise DatasetError(f"{rec.get('id')}: {key}: quantity index {a[1]} is outside the quantity "
+                               f"table ({len(qt)} entries)")
+        src, tier, unit = qt[a[1]]
+        if _is_index(src):
+            if not 0 <= src < len(table):
+                raise DatasetError(f"{rec.get('id')}: {key}: src index {src} is outside the string table "
+                                   f"({len(table)} entries)")
+            src = table[src]
+        q = {"src": src, "tier": tier, "v": a[0]}
+        if unit is not None:
+            q["unit"] = unit
+        if len(a) == 4:
+            q["lo"], q["hi"] = a[2], a[3]
+        box[key] = dict(sorted(q.items()))
+    return rec
+
+
 def _fill_defaults(rec: dict, defaults: dict) -> dict:
     """Put the manifest's `record_defaults` back into a tile record (in place) where a key is missing."""
     if not isinstance(rec, dict):
@@ -298,7 +406,9 @@ def _fill_defaults(rec: dict, defaults: dict) -> dict:
 
 
 def _expand(rec: dict, manifest: dict) -> dict:
-    """A tile record as stored -> the record as served (defaults and string table restored)."""
+    """A tile record as stored -> the record as served (compact Quantities, defaults and string table restored)."""
+    if manifest.get("format") == TILE_FORMAT_2 and isinstance(rec, dict):
+        _expand_quantities(rec, manifest)
     return _expand_src(_fill_defaults(rec, manifest.get("record_defaults") or {}),
                        manifest.get("src_table") or [])
 
@@ -317,7 +427,7 @@ def _read_tile(ds: Dataset, tile: str) -> list[dict]:
     try:
         doc = json.loads(tp.read_text(encoding="utf-8"))
         recs = doc["objects"]
-        if doc.get("format") != TILE_FORMAT or not isinstance(recs, list):
+        if doc.get("format") != ds.manifest["format"] or not isinstance(recs, list):
             raise ValueError("not a tile file")
         recs = [_expand(r, ds.manifest) for r in recs]
         if tile in (ds.manifest.get("sky_tiles") or ()):
@@ -354,7 +464,7 @@ def _dumps(obj: object) -> str:
 def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kinds: list[str],
                   provenance: dict, build: dict, band_deg: float = 10, precedence: int = 50,
                   src_table: bool = False, record_defaults: dict | None = None,
-                  sky_ids: Iterable[str] | None = None) -> dict:
+                  sky_ids: Iterable[str] | None = None, compact: bool = False) -> dict:
     """Write `records` as a tiled dataset under `out_dir` and return the manifest.
 
     Every record is validated and must be either a `fixed` position with `host: None`, or a record of
@@ -365,7 +475,9 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
     default is left out of the tile records and stored once in the manifest. Records whose id is in `sky_ids`
     go to the sky tile `tiles/sky.json` instead of a cone tile (see the module docstring); an id in
     `sky_ids` that is not among the records is an error. With `src_table=True` the distinct `src` strings go to
-    `manifest["src_table"]` and tiles hold their indices. Output is deterministic (sorted keys,
+    `manifest["src_table"]` and tiles hold their indices. With `compact=True` the output is format /2 (module
+    docstring): Quantities become arrays indexing `manifest["quantity_table"]`; the default writes /1 byte for
+    byte as before. Output is deterministic (sorted keys,
     records ordered by id, no timestamps)."""
     problems = []
     sky = set(sky_ids or ())
@@ -409,11 +521,20 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
         table = sorted({h["src"] for r in records for h in _src_holders(r)
                         if isinstance(h.get("src"), str)})
         index = {t: i for i, t in enumerate(table)}
+    qtable: list[list] = []
+    qindex: dict[tuple, int] = {}
+    if compact:
+        keys = {_qkey(q, index) for r in records for box, k in _quantity_slots(r)
+                if _compactable(q := box[k])}
+        qtable = [list(k) for k in sorted(keys, key=_qsort)]
+        qindex = {k: i for i, k in enumerate(map(tuple, qtable))}
+    fmt = TILE_FORMAT_2 if compact else TILE_FORMAT
     by_tile: dict[str, list[dict]] = {}
     for r in sorted(records, key=lambda r: r["id"]):
         ra, dec = sky_position(r)  # type: ignore[misc]  (validated above)
         name = SKY_TILE if r["id"] in sky else tile_of(ra, dec, band_deg)
-        out_rec = _compress_src(r, index) if src_table else r
+        out_rec = _compact_record(r, qindex, index) if compact else r
+        out_rec = _compress_src(out_rec, index) if src_table else out_rec
         if record_defaults:
             out_rec = {k: v for k, v in out_rec.items() if not (k in record_defaults and v == record_defaults[k])}
         by_tile.setdefault(name, []).append(out_rec)
@@ -425,11 +546,11 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
         old.unlink()
     tiles = {}
     for name in sorted(by_tile):
-        data = _dumps({"format": TILE_FORMAT, "objects": by_tile[name], "tile": name}).encode("utf-8")
+        data = _dumps({"format": fmt, "objects": by_tile[name], "tile": name}).encode("utf-8")
         (tdir / f"{name}.json").write_bytes(data)
         tiles[name] = {"count": len(by_tile[name]), "sha256": hashlib.sha256(data).hexdigest()}
     manifest = {
-        "format": TILE_FORMAT, "schema": SCHEMA, "dataset": dataset, "kinds": list(kinds),
+        "format": fmt, "schema": SCHEMA, "dataset": dataset, "kinds": list(kinds),
         "precedence": precedence, "tiling": {"scheme": SCHEME, "band_deg": band_deg},
         "max_extent_deg": max((angular_radius_deg(r) for r in records if r["id"] not in sky), default=0.0),
         "count": len(records), "provenance": provenance, "build": build, "tiles": tiles,
@@ -440,6 +561,8 @@ def write_dataset(records: list[dict], out_dir: str | Path, *, dataset: str, kin
         manifest["src_table"] = table
     if record_defaults:
         manifest["record_defaults"] = record_defaults
+    if compact:
+        manifest["quantity_table"] = qtable
     (out / MANIFEST).write_bytes(_dumps(manifest).encode("utf-8"))
     return manifest
 
@@ -516,14 +639,27 @@ def _static_source(root: Path) -> Source:
         return Source(sid, _raw_kinds(root / MANIFEST), 1000, broken,
                       {"source": sid, "dataset": root.name, "error": str(e)})
 
-    async def fetch(q: Query) -> list[dict]:
-        # reload per call: a changed manifest (mtime) is picked up without a restart
-        return await asyncio.to_thread(lambda: cone_query(load_dataset(root), q.ra, q.dec, q.radius))
+    def provenance_of(d: Dataset) -> dict:
+        return dict(d.manifest["provenance"], source=sid, dataset=d.name, build=d.manifest["build"],
+                    count=d.manifest["count"])
 
-    prov = dict(ds.manifest["provenance"], source=sid, dataset=ds.name, build=ds.manifest["build"],
-                count=ds.manifest["count"])
-    return Source(f"static:{ds.name}", tuple(ds.manifest["kinds"]), ds.manifest["precedence"],
-                  fetch, prov)
+    # One dict for the life of the source: `fetch` refreshes it in place when the manifest reloads, so the
+    # response being built reads the new credit (docs/object-framework.md 19.3.7).
+    prov = provenance_of(ds)
+    current = [ds]
+
+    def run(q: Query) -> list[dict]:
+        d = load_dataset(root)  # reload per call: a changed manifest (mtime) is picked up without a restart
+        if d is not current[0]:
+            current[0] = d
+            prov.clear()
+            prov.update(provenance_of(d))
+        return cone_query(d, q.ra, q.dec, q.radius)
+
+    async def fetch(q: Query) -> list[dict]:
+        return await asyncio.to_thread(run, q)
+
+    return Source(f"static:{ds.name}", tuple(ds.manifest["kinds"]), ds.manifest["precedence"], fetch, prov)
 
 
 def discover_sources(objects_dir: str | Path) -> list[Source]:

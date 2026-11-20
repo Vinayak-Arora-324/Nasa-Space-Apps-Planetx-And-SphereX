@@ -730,3 +730,202 @@ def test_responses_are_gzipped_when_the_client_accepts_it(monkeypatch):
     assert r.json()["schema"] == objects.SCHEMA
     r = c.get("/api/objects", params=params, headers={"Accept-Encoding": "identity"})
     assert "content-encoding" not in r.headers
+
+
+# --- compact tiles, format /2 (section 19.7) ---------------------------------------------------
+
+def _q(v, src="synthetic", tier="catalogue", unit=None, **extra):
+    q = {"v": v, "src": src, "tier": tier}
+    if unit is not None:
+        q["unit"] = unit
+    q.update(extra)
+    return q
+
+
+def _rich(i="a", ra=10.0, dec=5.0) -> dict:
+    """A record holding every Quantity shape: interval or not, string v, int and float, with and without a unit."""
+    r = _cluster(i, ra, dec, 2.0)
+    r["position"]["dist"] = _q(100, tier="illustrative", unit="pc", lo=90, hi=110)
+    r["size"]["radius"] = _q(1.5, unit="pc")
+    r["size"]["angular"]["minor"] = _q(0.5, src="other", tier="inferred", unit="deg", lo=0.25, hi=0.75)
+    r["props"] = {
+        "int_noint": _q(3), "float_unit": _q(2.5, unit="Gyr"), "string": _q("S0-a"),
+        "interval": _q(7.0, unit="Gyr", lo=6.5, hi=7.5), "one_sided": _q(2.0, unit="Gyr", hi=3.0),
+        "extra_key": _q(1.0, unit="mag", note="x"), "null_lo": _q(1.0, unit="mag", lo=None, hi=None),
+        "whole_float": _q(4.0, unit="mag"),
+    }
+    r["alt_distances"] = [{"method": "assumed", "reason": "r", "dist": _q(120, src="alt", tier="inferred",
+                                                                         unit="pc", lo=100, hi=140)}]
+    assert objects.validate_record(r) == []
+    return r
+
+
+def _write2(d: Path, recs: list[dict], compact=True, **kw) -> Path:
+    st.write_dataset(recs, d, dataset="t", kinds=["cluster"], provenance={"catalogue": "t"},
+                     build={"script": "x", "script_version": 1}, compact=compact, **kw)
+    return d
+
+
+def _canon(recs) -> str:
+    return json.dumps(recs, sort_keys=True)
+
+
+@pytest.mark.parametrize("src_table", [False, True])
+def test_compact_round_trip_for_every_quantity_shape(tmp_path, src_table):
+    recs = [_rich("a"), _rich("b", 10.5, 5.5)]
+    d = _write2(tmp_path / "c", recs, src_table=src_table)
+    m = json.loads((d / "manifest.json").read_text())
+    assert m["format"] == "space-maps.object-tiles/2" and m["quantity_table"]
+    assert all(isinstance(e, list) and len(e) == 3 for e in m["quantity_table"])
+    assert m["quantity_table"] == sorted(m["quantity_table"], key=st._qsort)
+    assert any(e[2] is None for e in m["quantity_table"])            # a Quantity without a unit
+    if src_table:
+        assert all(isinstance(e[0], int) for e in m["quantity_table"] if e[0] != "alt")
+    (tile,) = (d / "tiles").glob("*.json")
+    raw = json.loads(tile.read_text())
+    assert raw["format"] == "space-maps.object-tiles/2"
+    props = raw["objects"][0]["props"]
+    assert isinstance(props["int_noint"], list) and len(props["int_noint"]) == 2
+    assert isinstance(props["string"], list) and props["string"][0] == "S0-a"
+    assert isinstance(props["interval"], list) and len(props["interval"]) == 4
+    assert isinstance(props["one_sided"], dict)                       # lo without hi stays an object
+    assert isinstance(props["extra_key"], dict)                       # an extra key stays an object
+    assert isinstance(props["null_lo"], list) and props["null_lo"][2:] == [None, None]
+    assert isinstance(raw["objects"][0]["alt_distances"][0]["dist"], list)
+    got = {r["id"]: r for r in st.cone_query(st.load_dataset(d), 10.2, 5.2, 2.0)}
+    assert set(got) == {"test:a", "test:b"}
+    for r in recs:
+        assert got[r["id"]] == r and _canon(got[r["id"]]) == _canon(r)
+    assert type(got["test:a"]["props"]["whole_float"]["v"]) is float
+    assert type(got["test:a"]["props"]["int_noint"]["v"]) is int
+    assert st.verify_dataset(d) == []
+
+
+def test_compact_serves_the_same_records_as_format_1(tmp_path):
+    recs = [_rich("a"), _rich("b", 10.5, 5.5), _cluster("c", 200.0, -20.0, 1.0)]
+    one = st.load_dataset(_write2(tmp_path / "one", recs, compact=False, src_table=True))
+    two = st.load_dataset(_write2(tmp_path / "two", recs, compact=True, src_table=True))
+    assert one.manifest["format"] == "space-maps.object-tiles/1" and "quantity_table" not in one.manifest
+    for ra, dec in ((10.2, 5.2), (200.0, -20.0)):
+        a, b = st.cone_query(one, ra, dec, 3.0), st.cone_query(two, ra, dec, 3.0)
+        assert a and a == b and _canon(a) == _canon(b)
+
+
+def test_compact_false_is_byte_identical_to_the_committed_format_1_fixture(tmp_path):
+    ds = st.load_dataset(FIXTURE)
+    recs = [r for t in sorted(ds.manifest["tiles"]) for r in st._read_tile(ds, t)]
+    m = ds.manifest
+    d = tmp_path / "again"
+    st.write_dataset(recs, d, dataset=m["dataset"], kinds=m["kinds"], provenance=m["provenance"],
+                     build=m["build"], band_deg=m["tiling"]["band_deg"], precedence=m["precedence"],
+                     src_table="src_table" in m, record_defaults=m.get("record_defaults"))
+    assert (d / "manifest.json").read_bytes() == (FIXTURE / "manifest.json").read_bytes()
+    for t in m["tiles"]:
+        assert (d / "tiles" / f"{t}.json").read_bytes() == (FIXTURE / "tiles" / f"{t}.json").read_bytes()
+    explicit = _write2(tmp_path / "explicit", recs[:1], compact=False)
+    default = _write(tmp_path / "default", recs[:1])
+    assert (explicit / "manifest.json").read_bytes() == (default / "manifest.json").read_bytes()
+
+
+def test_compact_output_is_byte_deterministic(tmp_path):
+    recs = [_rich("b", 10.5, 5.5), _rich("a")]
+    _write2(tmp_path / "x", recs, src_table=True)
+    _write2(tmp_path / "y", list(reversed(recs)), src_table=True)
+    fx = {p.relative_to(tmp_path / "x"): p.read_bytes() for p in (tmp_path / "x").rglob("*.json")}
+    fy = {p.relative_to(tmp_path / "y"): p.read_bytes() for p in (tmp_path / "y").rglob("*.json")}
+    assert fx == fy
+
+
+def test_format_1_still_loads_and_an_unknown_format_fails(tmp_path):
+    d = _write(tmp_path / "one", [_cluster("a", 10.0, 5.0)])
+    assert st.load_dataset(d).manifest["format"] == "space-maps.object-tiles/1"
+    for fmt in ("space-maps.object-tiles/3", "space-maps.object-tiles/0", "other/2"):
+        m = json.loads((d / "manifest.json").read_text())
+        m["format"] = fmt
+        (d / "manifest.json").write_text(json.dumps(m))
+        import os
+        mp = d / "manifest.json"
+        os.utime(mp, ns=(mp.stat().st_atime_ns, mp.stat().st_mtime_ns + 10**9))
+        with pytest.raises(st.DatasetError, match="format must be"):
+            st.load_dataset(d)
+        assert any("format must be" in p for p in st.verify_dataset(d))
+
+
+def test_a_format_2_manifest_needs_a_quantity_table(tmp_path):
+    d = _write2(tmp_path / "c", [_rich()])
+    m = json.loads((d / "manifest.json").read_text())
+    del m["quantity_table"]
+    (d / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(st.DatasetError, match="quantity_table"):
+        st.load_dataset(d)
+
+
+def test_a_bad_quantity_index_is_a_dataset_error(tmp_path):
+    d = _write2(tmp_path / "c", [_rich()], src_table=True)
+    n = len(json.loads((d / "manifest.json").read_text())["quantity_table"])
+    (tp,) = (d / "tiles").glob("*.json")
+    for bad in (n, 10**6, -1):
+        doc = json.loads(tp.read_text())
+        doc["objects"][0]["props"]["int_noint"][1] = bad
+        tp.write_text(json.dumps(doc))
+        import os
+        os.utime(tp, ns=(tp.stat().st_atime_ns, tp.stat().st_mtime_ns + 10**9))
+        with pytest.raises(st.DatasetError, match="quantity"):
+            st.cone_query(st.load_dataset(d), 10.0, 5.0, 1.0)
+        assert any("quantity" in p for p in st.verify_dataset(d))
+    doc = json.loads(tp.read_text())
+    doc["objects"][0]["props"]["int_noint"] = [1, 0, 2]            # wrong length
+    tp.write_text(json.dumps(doc))
+    assert any("compact Quantity" in p for p in st.verify_dataset(d))
+
+
+def test_verify_dataset_checks_a_compact_dataset(tmp_path):
+    d = _write2(tmp_path / "c", [_rich()], src_table=True)
+    assert st.verify_dataset(d) == []
+    (tp,) = (d / "tiles").glob("*.json")
+    tp.write_text(tp.read_text().replace('"props"', '"props"', 1) + " ")
+    assert any("sha256" in p for p in st.verify_dataset(d))
+
+
+def test_a_list_where_a_quantity_belongs_cannot_be_written_compactly(tmp_path):
+    r = _rich()
+    r["props"]["bad"] = [1, 2]
+    with pytest.raises(ValueError):
+        _write2(tmp_path / "c", [r])
+
+
+def test_provenance_reloads_in_place_with_the_manifest(tmp_path):
+    import os
+    d = _write2(tmp_path / "t", [_cluster("a", 10.0, 5.0)], compact=False)
+    (src,) = st.discover_sources(tmp_path)
+    held = src.provenance
+    assert held["catalogue"] == "t" and held["count"] == 1
+    q = objects.Query(10.0, 5.0, 1.0, 60000.0, ("cluster",), 10)
+    asyncio.run(src.fetch(q))
+    assert src.provenance is held and held["count"] == 1
+    st.write_dataset([_cluster("a", 10.0, 5.0), _cluster("b", 10.5, 5.0)], d, dataset="t", kinds=["cluster"],
+                     provenance={"catalogue": "t2", "credit": "new credit"}, build={"script": "y", "script_version": 2})
+    mp = d / "manifest.json"
+    os.utime(mp, ns=(mp.stat().st_atime_ns, mp.stat().st_mtime_ns + 10**9))
+    assert held["catalogue"] == "t"                                   # nothing reloads before a fetch
+    recs = asyncio.run(src.fetch(q))
+    assert len(recs) == 2
+    assert src.provenance is held                                     # the same dict, refreshed in place
+    assert held["catalogue"] == "t2" and held["credit"] == "new credit" and held["count"] == 2
+    assert held["build"]["script"] == "y" and held["source"] == "static:t"
+
+
+def test_the_same_objects_response_carries_the_new_credit(tmp_path, monkeypatch):
+    import os
+    d = _write(tmp_path / "t", [_cluster("a", 10.0, 5.0)])
+    monkeypatch.setattr(config, "OBJECTS_DIR", tmp_path)
+    objects.reset_sources()
+    def row():
+        out = asyncio.run(objects.build_objects(10.0, 5.0, 1.0, 60000.0, ["cluster"], 10))
+        return next(s for s in out["sources"] if s["id"] == "static:t")["provenance"]
+    assert row()["catalogue"] == "t"
+    st.write_dataset([_cluster("a", 10.0, 5.0)], d, dataset="t", kinds=["cluster"],
+                     provenance={"catalogue": "t3"}, build={"script": "x", "script_version": 1})
+    mp = d / "manifest.json"
+    os.utime(mp, ns=(mp.stat().st_atime_ns, mp.stat().st_mtime_ns + 10**9))
+    assert row()["catalogue"] == "t3"

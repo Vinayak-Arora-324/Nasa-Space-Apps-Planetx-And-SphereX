@@ -279,7 +279,11 @@ def _drifted_galaxies(tmp_path: Path, host: str, factor: float) -> Path:
         hit = False
         for r in doc["objects"]:
             if r["id"] == host:
-                r["position"]["dist"]["v"] = round(r["position"]["dist"]["v"] * factor, 6)
+                d = r["position"]["dist"]
+                if isinstance(d, list):          # format /2: [v, q, ...]
+                    d[0] = round(d[0] * factor, 6)
+                else:
+                    d["v"] = round(d["v"] * factor, 6)
                 hit = True
         if hit:
             p.write_text(json.dumps(doc, sort_keys=True, separators=(",", ":")), encoding="utf-8")

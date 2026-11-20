@@ -388,6 +388,31 @@ def _src_holders(r):
         if isinstance(size.get("angular"), dict): yield from (q for q in size["angular"].values() if isinstance(q, dict))
     if isinstance(props, dict): yield from (q for q in props.values() if isinstance(q, dict))
 
+def _expand_quantities(r, man):
+    """Format /2 (docs/object-framework.md 19.7): compact Quantity arrays [v, q] / [v, q, lo, hi] back to objects."""
+    qt, table = man.get("quantity_table") or [], man.get("src_table") or []
+    def arr(box, key):
+        a = box[key]
+        if not isinstance(a, list): return
+        src, tier, unit = qt[a[1]]
+        q = {"src": table[src] if isinstance(src, int) else src, "tier": tier, "v": a[0]}
+        if unit is not None: q["unit"] = unit
+        if len(a) == 4: q["lo"], q["hi"] = a[2], a[3]
+        box[key] = q
+    pos, size = r.get("position"), r.get("size")
+    if isinstance(pos, dict):
+        if "dist" in pos: arr(pos, "dist")
+        if isinstance(pos.get("elements"), dict):
+            for k in list(pos["elements"]): arr(pos["elements"], k)
+    for a in r.get("alt_distances") or []:
+        if "dist" in a: arr(a, "dist")
+    if isinstance(size, dict):
+        if "radius" in size: arr(size, "radius")
+        if isinstance(size.get("angular"), dict):
+            for k in list(size["angular"]): arr(size["angular"], k)
+    if isinstance(r.get("props"), dict):
+        for k in list(r["props"]): arr(r["props"], k)
+
 def _static_dataset(name):
     """(provenance row, [(record, is_sky)]) for one committed dataset, or None when it is not built."""
     if name in _STATIC: return _STATIC[name]
@@ -399,6 +424,7 @@ def _static_dataset(name):
         for tile in list(man["tiles"]) + sorted(sky - set(man["tiles"])):
             with open(os.path.join(root, "tiles", tile + ".json"), encoding="utf-8") as fh: doc = json.load(fh)
             for r in doc["objects"]:
+                if man.get("format") == "space-maps.object-tiles/2": _expand_quantities(r, man)
                 for k, v in defaults.items(): r.setdefault(k, json.loads(json.dumps(v)))
                 for h in _src_holders(r):
                     if isinstance(h.get("src"), int) and not isinstance(h.get("src"), bool): h["src"] = table[h["src"]]

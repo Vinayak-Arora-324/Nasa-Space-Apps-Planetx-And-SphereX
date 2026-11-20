@@ -331,7 +331,7 @@ def build(out_dir: Path, sources: Path = SOURCES, galaxies: Path = GALAXIES) -> 
         records, out_dir, dataset=DATASET, kinds=["black_hole"], provenance=provenance_full(cur, cur_bytes, gm, hosts),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
         band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()},
-        sky_ids={r["id"] for r in records})
+        sky_ids={r["id"] for r in records}, compact=True)
     (Path(out_dir) / "LICENSE.md").write_text(LICENSE_MD, encoding="utf-8")
     return m
 

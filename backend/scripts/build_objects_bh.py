@@ -521,7 +521,7 @@ def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> 
         provenance=provenance_full(inp["cur"], meta, inp, local=local is not None),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
         band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()},
-        sky_ids=SKY_IDS)
+        sky_ids=SKY_IDS, compact=True)
     (Path(out_dir) / "LICENSE.md").write_text(LICENSE_MD, encoding="utf-8")
     return m
 

@@ -678,7 +678,7 @@ def build_from(rows: list[dict], dr2_rows: list[dict], pos_rows: list[dict], pro
     m = objects_static.write_dataset(
         records, out_dir, dataset=DATASET, kinds=["exoplanet", "star"], provenance=prov_full,
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
-        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance(snapshot_date)})
+        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance(snapshot_date)}, compact=True)
     (Path(out_dir) / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
     return m
 

@@ -43,6 +43,9 @@ log = logging.getLogger(__name__)
 
 SCHEMA = "space-maps.objects/1"
 TILE_FORMAT = "space-maps.object-tiles/1"
+# /2 stores Quantities as compact arrays (docs/object-framework.md 19.7); servers read both.
+TILE_FORMAT_2 = "space-maps.object-tiles/2"
+TILE_FORMATS = (TILE_FORMAT, TILE_FORMAT_2)
 
 # Output order of kinds (also the order of `kinds` in a response).
 KINDS = ("sun", "planet", "moon", "dwarf_planet", "asteroid", "comet", "star", "exoplanet",

@@ -938,7 +938,7 @@ def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> 
     manifest = objects_static.write_dataset(
         records, out_dir, dataset=DATASET, kinds=["nebula"], provenance=provenance_full(loaded["files"]),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
-        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()})
+        band_deg=10, precedence=50, src_table=True, record_defaults={"provenance": provenance()}, compact=True)
     (out_dir / "LICENSE.md").write_text(license_text("dataset"), encoding="utf-8")
     return manifest
 

@@ -1106,7 +1106,8 @@ def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None, bh_
     report["snapshot_bytes"] = dict(sorted(snap_bytes.items()))
     report["snapshot_bytes_total"] = sum(snap_bytes.values())
     kw = dict(dataset=DATASET, kinds=["galaxy"], provenance=provenance_full(loaded["files"]), band_deg=10,
-              precedence=50, src_table=True, record_defaults={"provenance": provenance(), "kind": "galaxy", "host": None, "parent": None}, sky_ids=context)
+              precedence=50, src_table=True, record_defaults={"provenance": provenance(), "kind": "galaxy", "host": None, "parent": None}, sky_ids=context,
+              compact=True)
     with tempfile.TemporaryDirectory() as tmp:     # tile sizes do not depend on the manifest's report
         m0 = objects_static.write_dataset(records, Path(tmp), build={"script": SCRIPT, "script_version": SCRIPT_VERSION,
                                                                     "report": {}}, **kw)

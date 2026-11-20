@@ -229,7 +229,7 @@ export function oscPath(m, n, maxAu = 50, out = new Float64Array(3 * (n + 1))) {
 
 // ------------------------------------------------------------------------------------- the time bar's "Moving: ..." line
 const SMALL_KINDS = new Set(['asteroid', 'comet', 'dwarf_planet']);
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 /**
  * "Moving: 8 planets and the Moon (ephemeris) · 214 small bodies (SkyBoT orbits, +-1 yr; 12 beyond their range) · 7 exoplanets ◌ (orbit orientation unknown) · 1 black hole ◌ (no phase epoch published)".
@@ -249,7 +249,7 @@ export function motionSummary(items) {
     else { fam.other.set(it.kind, (fam.other.get(it.kind) || 0) + 1); bad.other += off; ill.other += il; }
   }
   const counts = { planets: fam.planets, moon: fam.moon, smallBodies: fam.small, exoplanets: fam.exo, blackHoles: fam.bh, other: Object.fromEntries(fam.other), beyond, illustrative };
-  const parts = [], range = (k) => (bad[k] ? `${bad[k]} beyond their range` : '');
+  const parts = [], range = (k) => (bad[k] ? `${bad[k].toLocaleString('en-US')} beyond their range` : '');
   const paren = (...xs) => { const s = xs.filter(Boolean).join('; '); return s ? ` (${s})` : ''; };
   if (fam.planets || fam.moon) {
     const who = fam.planets && fam.moon ? `${plural(fam.planets, 'planet', 'planets')} and the Moon` : fam.planets ? plural(fam.planets, 'planet', 'planets') : 'the Moon';
@@ -259,7 +259,7 @@ export function motionSummary(items) {
   const orbitFamily = (n, noun, k, noteIll, noteMeasured) => {
     if (!n) return;
     const all = ill[k] === n, none = ill[k] === 0;
-    parts.push(`${plural(n, noun[0], noun[1])}${all ? ' ◌' : ''}${paren(all ? noteIll : none ? noteMeasured : `${ill[k]} ◌ ${noteIll}`, range(k))}`);
+    parts.push(`${plural(n, noun[0], noun[1])}${all ? ' ◌' : ''}${paren(all ? noteIll : none ? noteMeasured : `${ill[k].toLocaleString('en-US')} ◌ ${noteIll}`, range(k))}`);
   };
   orbitFamily(fam.exo, ['exoplanet', 'exoplanets'], 'exo', 'orbit orientation unknown', 'measured orbits');
   orbitFamily(fam.bh, ['black hole', 'black holes'], 'bh', 'no phase epoch published', 'measured orbits');

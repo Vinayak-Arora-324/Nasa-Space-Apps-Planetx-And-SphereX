@@ -508,7 +508,7 @@ function clusterCard(o, ctx) {
   const p = o.position || {}, d = p.dist, r = o.size && o.size.radius;
   const rows = [];
   rows.push(qtyRow('Distance (cluster parallax)', d, (q) => fq(q, 'pc'), 'measured'));
-  const n = prop(o, 'n_members'); rows.push(qtyRow('Members', n, (q) => fq(q), 'catalogue'));
+  const n = prop(o, 'n_members'); rows.push(qtyRow('Members', n, (q) => (Number.isInteger(q && q.v) ? q.v.toLocaleString('en-US') : fq(q)), 'catalogue'));   // a count: exact, as the member file's row beside it
   rows.push(qtyRow('Radius (r50)', r, (q) => fq(unitScaled(q, 'pc') || q, 'pc'), 'catalogue'));
   const age = prop(o, 'age'); rows.push(qtyRow('Age', age, (q) => (q.v < 0.1 ? fq(q, 'Myr', { scale: 1000 }) : fq(q, 'Gyr')), 'inferred'));
   const ext = prop(o, 'extinction'); rows.push(qtyRow('Extinction (A_V)', ext, (q) => fq(q, 'mag'), 'inferred'));

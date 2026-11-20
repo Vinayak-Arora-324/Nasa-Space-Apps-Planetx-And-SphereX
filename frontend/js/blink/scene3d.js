@@ -1815,13 +1815,16 @@ export class Scene3D {
     if (!kids.length) return null;
     const off = [...new Set(kids.map((o) => layerOf(o.kind)).filter((l) => l && this.layers[l] === false))];
     const ofGalaxy = kids.every((o) => o.parent && !o.host);      // a galaxy's black holes sit at its centre, a measured position: the Evidence view keeps their Go there
-    const go = (ofGalaxy || !this.evidence) && !off.length;
+    // section 20.8: in the Evidence view a hosted record is hidden when its own placement is illustrative (its evidence, or greyed beyond its valid range)
+    const hiddenHere = (o) => this.evidence && !ofGalaxy && (o.evidence === 'illustrative' || !!(this.store.placement(o.id) || {}).greyed);
+    const nHidden = kids.filter(hiddenHere).length;
     const groups = childGroups(kids, fmtNum).map((g) => ({ title: g.title, items: g.items.map((it) => ({ name: it.name, line: it.line, tier: it.tier,
       // a galaxy's black hole is drawn only once resolved (smbhVisible), so going to it selects it first: a selected one is always drawn
-      onGo: pinned && go ? () => { const s = { kind: it.o.kind, id: it.o.id }; if (it.o.parent && !it.o.host) this._select(s); this._go(s); } : null })) }));
+      onGo: pinned && !off.length && !hiddenHere(it.o) ? () => { const s = { kind: it.o.kind, id: it.o.id }; if (it.o.parent && !it.o.host) this._select(s); this._go(s); } : null })) }));
     const items = groups.flatMap((g) => g.items);
     const label = (id) => (layerDefs().find((l) => l.id === id) || { label: id }).label;
-    const note = this.evidence && !ofGalaxy ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
+    const note = nHidden === kids.length ? 'Their positions on their orbits are illustrative, so the Evidence view hides them.'
+      : nHidden ? `${nHidden} of them ${nHidden === 1 ? 'is' : 'are'} drawn at an illustrative position, so the Evidence view hides ${nHidden === 1 ? 'it' : 'them'}.`
       : off.length ? `The ${off.map(label).join(' and ')} layer is off, so they are not drawn.` : null;
     return { groups, items, total: kids.length, note };   // one heading per kind: 'Exoplanets · 7', 'Black holes · 1'
   }
@@ -1985,7 +1988,8 @@ export class Scene3D {
     return key && key !== SUN_HOST.key ? hostCountText(this.store, key, { evidence: this.evidence, layers: this.layers }) : '';
   }
   /** Visible object counts by kind in the unhosted frames ({} in a system), for the HUD's exoplanet, cluster and galaxy phrases; faded-out entries are not counted. */
-  _visCounts() { return F.isHosted(this.cam.frame) ? { counts: {}, direct: {} } : visibleCounts(this._vis.filter((e) => presenceOf(e) >= GALAXY_PICK_MIN)); }
+  // section 20.8: in the galaxy frame the groups add the hosted records the Evidence view does not draw one by one (they exist, on their stars)
+  _visCounts() { return F.isHosted(this.cam.frame) ? { counts: {}, direct: {} } : visibleCounts(this._vis.filter((e) => presenceOf(e) >= GALAXY_PICK_MIN), this.cam.frame === 'galaxy' ? this._groups : null); }
   _hudData() {
     const cam = this.cam, inSys = cam.frame === 'system', near = this._nearest(), near2 = this._nearBody(), vc = this._visCounts();
     return {

@@ -302,7 +302,7 @@ test('cluster card: distance with interval and method, members, r50, age, extinc
   const c = R.kindSpec('cluster').card(o, ctx());
   assert.equal(c.title, 'Pleiades'); assert.equal(c.subtitle, 'Star cluster');
   assert.deepEqual(rowOf(c, 'Distance (cluster parallax)'), ['Distance (cluster parallax)', '135.2 +1.4/−1.3 pc', 'measured', 'HR23']);
-  assert.deepEqual(rowOf(c, 'Members').slice(1, 3), ['1,250', 'catalogue']);
+  assert.deepEqual(rowOf(c, 'Members').slice(1, 3), ['1,245', 'catalogue']);
   assert.deepEqual(rowOf(c, 'Radius (r50)').slice(1, 3), ['3.1 pc', 'catalogue']);
   assert.deepEqual(rowOf(c, 'Age').slice(1, 3), ['50 Myr', 'inferred']);
   assert.deepEqual(rowOf(c, 'Extinction (A_V)').slice(1, 3), ['0.2 mag', 'inferred']);
@@ -868,7 +868,7 @@ test('cluster card: member rows from the member file, loading, error, and beyond
   assert.deepEqual(m.slice(0, 3), ['Members (HR24)', '1,721 · 1,014 with probability ≥ 0.5', 'catalogue']); assert.match(m[3], /J\/A\+A\/686\/A42\/members/); assert.match(m[3], /Credit: ESA\/Gaia\/DPAC/);
   assert.deepEqual(rowOf(loaded, 'In this view').slice(1, 3), ['612 highlighted', 'catalogue']);
   assert.ok(loaded.notes.includes('Members outside the star layer (beyond the cone, or fainter than its limit) are not drawn.'));
-  assert.match(rowOf(loaded, 'Data')[1], /Credit: ESA\/Gaia\/DPAC/); assert.equal(rowOf(loaded, 'Members')[1], '1,250', 'the catalogue count row stays');
+  assert.match(rowOf(loaded, 'Data')[1], /Credit: ESA\/Gaia\/DPAC/); assert.equal(rowOf(loaded, 'Members')[1], '1,245', 'the catalogue count row stays, exact');
   assert.equal(rowOf(C.card(within, ctx({ members: { loading: true } })), 'Members (HR24)')[1], 'loading…');
   assert.equal(rowOf(C.card(within, ctx()), 'Members (HR24)')[1], 'loading…', 'a cluster with a member file and no data yet is loading');
   assert.equal(rowOf(C.card(within, ctx({ members: { error: 'x' } })), 'Members (HR24)')[1], 'could not be loaded');

@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20 and approved 2026-11-20 (decisions in §20.17).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20, approved 2026-11-20 (decisions in §20.17) and implemented (§20.18).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -3177,14 +3177,14 @@ and SMBHs; (9) docs and mock server.
 - [ ] (Phase 7) True gravitational lensing of the background (§17.9).
 - [x] `EVIDENCE_HIDES_FEATURES` (Phase 4, §19.3.1).
 - [x] The README `online` marker (Phase 4, §19.3.2).
-- [ ] (Phase 5) The cluster member-star highlight (§16.12).
-- [ ] (Phase 5) Orbit animation over time.
+- [x] The cluster member-star highlight (§16.12; Phase 5, §20.9 and §20.18).
+- [x] Orbit animation over time (Phase 5, §20.3–§20.6 and §20.18).
 - [ ] (Phase 6) Migrating "Turn back the sky" onto the shared catalogues.
 - [ ] (Phase 6) Proper motion and space motion of the star layer (Gaia, XHIP context stars, curated star records), which Phase 5 leaves at the catalogue epoch (§20.7, §20.17 item 1).
-- [ ] (Phase 5) A general evidence rule for all hosted kinds (§17.15, approval condition 2).
+- [x] A general evidence rule for all hosted kinds (§17.15, approval condition 2; Phase 5, §20.8 and §20.18).
 - [x] Gaia-parallax-based HII-region distances (§17.4; Phase 4, §19.4: Shen et al. 2025).
 - [x] Whatever Q1 decides about the Gaia NC term and EDD's terms, applied repository-wide (Phase 4, §19.8).
-- [ ] (Phase 5) A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown.
+- [ ] (Phase 5, conditional, not built) A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown; nothing shows them yet (§20).
 - [x] Group-averaged CF4 distances (its `groups` table) as a third option for galaxies with only a TF/FP distance (Phase 4, §19.5).
 - [x] A Sun / "you came from here" marker in `cosmos` (Phase 4, §19.3.9).
 - [x] A compact Quantity encoding (or a per-tile column layout) to bring `galaxies` from 12.5 MB towards the 7 MB budget (§18.19; Phase 4, §19.7: `space-maps.object-tiles/2`).
@@ -4036,7 +4036,7 @@ Chromium on a real Wayland display with real-time rAF; 1280 × 800 unless stated
 
 ## 20. Phase 5: time and behaviour (design)
 
-Status: **designed and approved 2026-11-20** (decisions at approval in §20.17). Sections of §1–§19 that Phase 5 changes
+Status: **designed and approved 2026-11-20** (decisions at approval in §20.17), **implemented 2026-11-20** (implementation notes in §20.18). Sections of §1–§19 that Phase 5 changes
 will carry a "Phase 5 change" note pointing here. Where this section and an earlier one disagree, this one wins.
 
 Phase 5 is the second of the follow-up phases of §18.16: orbit animation over time, the general evidence rule for
@@ -4643,3 +4643,117 @@ earlier part of §20 says otherwise, this section wins.
      body is `measured`, so solid). Beyond it, the line is dotted, illustrative and greyed, and so hidden in the
      Evidence view (replacing §20.10's "drawn dotted").
    - The browser checks include one comet with a high eccentricity.
+
+### 20.18 Implementation notes (2026-11-20)
+
+Built in the slices of §20.14 (S, T1, M, T2, R, then fixes from the browser checks); after each slice both suites and
+`--check` on all six datasets were run. Final state: `uv run pytest` 1,064 passed, 20 skipped; `node --test` 385
+passed; every dataset's `--check` byte-identical.
+
+**What changed from the design**
+- **Member probabilities are truncated to thousandths**, not rounded, so a stored value ≥ 500 is exactly Prob ≥ 0.5 and
+  the drawn solid rings match the card's count (rounding put 56 members, 3 of them in the Pleiades, across the line).
+  Each member file also carries `n` and `n_p50`. The build gained `--refresh-members`; `--refresh` refreshes the clusters
+  and then the members; a refresh is refused unless every cluster's member count equals its `N`. Real sizes: 695
+  files, 89,738 members (71,237 at Prob ≥ 0.5), **2,836,324 bytes on disk, 1,123,645 bytes gzipped** (each file
+  `gzip -9`), the largest `members/4585.json` at 113,743 bytes; the snapshot `members-hr24-2026-11-20.csv.gz` is
+  1.43 MB. CDS answered 404 for the members query; CfA and IDIA served it (13 batches, about 68 s).
+- **Re-query day.** Re-queries use the settled date rounded to the nearest whole day (§20.17 item 3), not the hour.
+  The status line names the payload's calendar day.
+- **The Evidence-view HUD count** adds the records of grouped systems (`visibleCounts(visible, groups)`) as plain
+  counts; the "…, on their stars" wording of §20.8 was not added. Groups that the rule hides (hosts with an assumed
+  distance) add nothing: at the Galactic Centre the count goes from 112 exoplanets to 110 in the Evidence view.
+- **The host card's Evidence note** ("Their positions on their orbits are illustrative, so the Evidence view hides
+  them") was shown for every hosted child, Gaia BH1 included, since Phase 2. It now appears only for illustrative or
+  greyed children ("N of them …" when mixed), and "Go there" stays enabled for the measured and derived ones.
+- **The cluster card's catalogue "Members" row** is now the exact count (it showed 1,721 as "1,720" through the
+  three-significant-digit rule, next to the member file's 1,721).
+- **Greyed from ingest:** an orbit whose phase σ already exceeds 90° at the payload's date is greyed from the start.
+- **Star epoch row** only for payload Gaia stars ("Position epoch 2016.0 (Gaia DR3)"). XHIP context stars and archive
+  hosts get none, because no epoch for them is pinned in the code or data.
+- **The stars note shows today too:** the clock's 2026 is already more than a year from 2016.0, so "Stars shown at their
+  Gaia DR3 epoch (2016.0); proper motion not applied." is always in the time bar at present (§20.17 item 1 as written).
+- **The "Moving: …" line counts visible moving records**, so the Stars scene says "7 planets and the Moon" (Earth, the
+  viewpoint, is not drawn there) and the Solar system scene "8 planets".
+- **Line styles** dash by the fraction along each path (56 dashes or 120 dots per orbit), a 9-float line vertex
+  (`t`, `mode`), rather than by screen distance.
+- **The frame loop** feeds the clock a virtual wall clock that advances at most 100 ms a frame, so a background tab
+  does not jump on return. The selected small body's orbit is drawn with `oscPath` (256 segments, clipped at 50 AU).
+- **Tests and fixtures:** `phase5-erfa.json` (pyerfa 2.0.1.5; Earth from plan94(EMB) and moon98 is within **6,136 km**
+  of epv00 over the five dates and a 600-date scan, bound 7,000 km), `phase5-skybot-ceres.json` (Ceres's two-body
+  drift against SkyBoT's +360 d state: **1.380e-3 AU**, 0.0236°), `skybot_all_2026-11-20.json` (backend). The
+  migration test drops `hr23-clusters` from its format-1 baseline (its data changed in this phase) and ignores
+  `members/`; a Phase 4 test that popped a field from a cached tile record now copies it.
+
+**Browser checks (2026-11-20; this tree on :8011 and `41b78cf`, `main` before Phase 5, on :8012, sharing one cache;
+a headed Chromium on the real Wayland display, foreground tab, real-time rAF; 1280 × 800 unless stated)**
+- **TRAPPIST-1:** in its system at 1 h/s the seven planets move on dotted orbits with ◌ labels (b moved 0.0115 AU in
+  3 s); the time bar reads "Moving: 7 exoplanets ◌ (orbit orientation unknown)". b's card: "Phase from the 2016
+  transit time, ±3.8° at this date"; at 1900, ±40°. Evidence view: the planets and their orbits hidden in the system,
+  the host card lists 7; from the galaxy frame "TRAPPIST-1 · 7 exoplanets" shows, solid.
+- **Inner solar system** (cone 60°, +20°: 8 planets, the Moon, 2,000 asteroids and 2 comets): moving the clock 0.001 d
+  off the payload's epoch moves Earth 1.74e-5 AU (its orbital speed: no jump from the anchor); at 1 mo/s, 370 days in
+  12 s, the orbit lines rebuilt as plan94 ellipses, and every small body counted beyond its range after a year; at
+  1 d/s the Moon turns about Earth at 0.0026 AU; reverse runs back at −1 day/s; N returns to now.
+- **Small body far from its epoch:** 1167 Dubiago (V 14.9, SkyBoT state JD 2461360.0) greys 367 days later; its card
+  then begins "Position: extrapolated beyond its valid range (more than 1 year from its SkyBoT state of 15 Nov 2026
+  11:59 UT), illustrative", its label reads "(extrapolated)", and the Evidence view hides it. No request while playing.
+  Paused on 25 Jan 2029: the first re-query hit a cold SkyBoT cone, timed out at the server's 25 s, and the page kept
+  its payload and said "SkyBoT did not answer; …". Once the server's cache had filled, a settle on the same day
+  re-queried 1.5 s after the pause, ingested 0.5 s later, kept the selection (48639 1995 TL8, in both payloads) and
+  ungreyed it, and the time bar said "2,000 small bodies entered the cone and 2,001 left on 25 Jan 2029" for 5 s.
+  Scrubbing back to today and forward again made no request (the page cache). 2064: no request, "SkyBoT serves
+  1890–2060; …".
+- **High-eccentricity comet:** C/2014 OE4 (e 0.9995, q 6.27 AU, i 81.3°, from SkyBoT's state) draws its osculating
+  orbit while selected (the arc within 50 AU), and the orbit goes with the selection. 376P (e 0.514) is the other comet
+  in the cone.
+- **Gaia BH1 next to Cyg X-1:** BH1 moves (0.6 AU in 21 days) on a solid orbit that stays in the Evidence view; card
+  "Phase from the periastron time (2016), ±2.1° at this date" and "Relative orbit; the star is held still."; the time
+  bar "1 black hole (measured orbits)". Cyg X-1 moves on a dotted orbit; card "No published phase epoch: the motion runs
+  at the measured 5.6-day period from an assumed starting point; …"; hidden in the Evidence view inside its system,
+  and "HD 226868 · 1 black hole" shows, solid, from the galaxy frame.
+- **The Pleiades:** no member file is fetched on page load; selecting Melotte 22 fetches `members/4423.json` once; 580
+  member stars of the payload are ringed, solid at Prob ≥ 0.5; the card reads "Members (HR24): 1,721 · 1,014 with
+  probability ≥ 0.5", "580 highlighted", the Gaia credit on its Data row and the note on members outside the star
+  layer; the rings stay in the Evidence view and clear on deselection.
+- **Near 500 pc:** Theia 38 (498.9 pc, 1,108 members) fetched its file and showed "1,108 · 790 with probability ≥ 0.5",
+  but its Gaia cone failed at the archive ("Gaia TAP (ESA) tile … failed recently"), so nothing could be ringed.
+  NGC 1039 (M34, 489.7 pc; a cold Gaia cone, 9,615 stars once loaded): "1,095 · 589
+  with probability ≥ 0.5", 365 member stars ringed, 302 of them solid.
+- **Beyond 500 pc:** Theia 78 at Orion reads "Member stars: shown for clusters within 500 pc" and fetches nothing.
+- **Frame times** (rAF over 3 s; mean / p95 in ms; the display runs at 60 Hz, so any cost below a vsync is hidden, as
+  in Phase 4, and `scene.perf.motionMs` gives the motion cost itself):
+
+  | Patch | Before | After, paused | After, clock at 1 d/s | Motion (setTime + buffer refill), mean / p95 |
+  |---|---|---|---|---|
+  | TRAPPIST-1 | 16.67 / 16.8 | 16.67 / 16.8 | 16.67 / 16.7 | 1.04 / 1.4 |
+  | TRAPPIST-1 system at 1 h/s | — | — | 16.67 / 16.7 | 1.29 / 1.5 |
+  | Pleiades | 16.67 / 16.8 | 16.67 / 16.7 | 16.67 / 16.7 | 1.14 / 1.4 |
+  | Orion | 16.67 / 16.8 | 16.67 / 16.8 | 16.67 / 16.7 | 0.21 / 0.3 |
+  | Galactic Centre | 16.67 / 16.7 | 16.67 / 16.8 | 16.67 / 16.7 | 1.12 / 1.5 |
+  | M31 | 16.67 / 16.7 | 16.67 / 16.8 | 16.67 / 16.7 | 0.20 / 0.3 |
+  | M87 | 16.67 / 16.7 | 16.67 / 16.7 | 16.67 / 16.8 | 0.59 / 0.8 |
+  | M87 in `cosmos`, 1 yr/s | — | — | 16.67 / 16.8 | 0.99 / 1.5 |
+  | LMC | 16.67 / 16.8 | 16.67 / 16.7 | 16.67 / 16.8 | 0.13 / 0.2 |
+  | Inner solar system, 2,026 movers, 1 mo/s | — | 16.67 / 16.7 | 16.67 / 16.8 | 1.37 / 1.7 (max 4.0) |
+
+  The worst patch stays within the 2 ms budget on average; single frames reach 4 ms when many bodies cross their
+  window at once (each greyed flip rebuilds the buffers).
+- **Regression:** TRAPPIST-1, the Pleiades, Orion, the Galactic Centre, M31, M87 (the flight into `cosmos` ends there,
+  16.7 Mpc from the Sun) and the LMC (galaxy → `cosmos` at 62 kpc, back at 38 kpc, as in Phase 4), each in the Evidence
+  view as well; no page errors. The time bar and credits at 375, 768 and 1280 px: no overlap, no horizontal overflow; at
+  375 px the bar is compact (Now, play, rate, date, "⋯") and the credits scroll inside their box, as before.
+
+**Left rough**
+- The first re-query to a new day often meets a cold SkyBoT cone and times out at 25 s; the page keeps its payload and
+  says so, and only a later settle on that day (once the server's cache has filled) brings the new bodies. There is no
+  automatic retry.
+- At 1 yr/s many small bodies leave their window in the same frames; each greyed flip rebuilds the point and line
+  buffers (up to 4 ms a frame). A full 3 × 2,000-body cone was not seen (only asteroids reach the cap); by the measured
+  split (`setTime` 0.60 ms and refill 0.43 ms per 2,000 bodies) it would be about 2.7 ms, over budget. Culling
+  off-screen Kepler movers or a narrower position buffer would fix it.
+- SkyBoT's total magnitude for some comets is 0.0 (C/2014 OE4), shown as-is on the card since Phase 0.
+- The time bar's status line is long; at 375 px it is capped at three lines and scrolls.
+- `scene3d.js` and the time bar's DOM have no unit tests in node; their pure parts (`scene3d-requery.js`, the line
+  buffers, the time bar's text) do.
+- The dash counts (56 dashes, 120 dots per orbit) were chosen by eye.

@@ -59,7 +59,10 @@ project; see "Before any commercial use" below.
        Scientific Visualization Studio, Deep Star Maps 2020; "Gaia DR2:
        ESA/Gaia/DPAC");
      - frontend/data/objects/hr23-clusters/ and its sources hold Hunt &
-       Reffert's cluster values, derived from Gaia DR3;
+       Reffert's cluster values, derived from Gaia DR3, and their member
+       lists (frontend/data/objects/hr23-clusters/members/ and
+       backend/data/sources/hr23-clusters/members-hr24-*.csv.gz: Gaia DR3
+       source ids and membership probabilities, Hunt & Reffert 2024 table 2);
      - the live star layer of the 3D view, queried from Gaia archives at run
        time (not stored in this repository).
 
@@ -86,8 +89,9 @@ These would have to be removed, replaced or cleared first:
     Shen et al. 2025's Gaia DR3 HII-region distances; a rebuild without them
     leaves those 59 planetary nebulae direction-only and the HII regions at
     Russeil 2003's or Shen's maser-parallax distances, or direction-only;
-  - hr23-clusters: whether Hunt & Reffert's Gaia-derived values fall under
-    Gaia's non-commercial term;
+  - hr23-clusters, including its members/ folder (Gaia DR3 source ids and
+    membership probabilities): whether Hunt & Reffert's Gaia-derived values
+    fall under Gaia's non-commercial term;
   - galaxies and smbh-curated: the Cosmicflows-4 distances (EDD's "research and
     education" terms), to be cleared with their authors or replaced;
   - frontend/data/milkyway.webp, built from NASA SVS "Deep Star Maps 2020"

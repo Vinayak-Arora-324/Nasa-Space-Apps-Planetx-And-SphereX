@@ -167,6 +167,9 @@ Moving-object endpoints. They take the same parameters: `ra`, `dec`, `fov` (defa
   - Each source runs under its own deadline (`SPHEREX_OBJECTS_SOURCE_TIMEOUT`, 25 s). Failures are reported per kind in `kinds`, and the request itself does not fail.
   - Prebuilt static datasets are read from `SPHEREX_OBJECTS_DIR` (default `frontend/data/objects/`). Each dataset's `sources` row carries its manifest provenance; when it has a `credit` (and `licence_name`), the 3D view lists it in the credits line.
   - The schema, evidence rules, tile format and frontend registry are specified in `docs/object-framework.md`.
+  - SkyBoT bodies carry `position.osc`, SkyBoT's heliocentric equatorial state vector at its reference epoch (a whole
+    JD on a 10-day grid at or before the query), which the 3D view propagates as a two-body orbit (§20 of the framework
+    doc). The disk cache key is `skybot-4`.
 - `GET /api/system/{source_id}` returns stellar parameters with tiers and sources for a Gaia DR3 star, or `sun`.
 
 ## Frontend layout
@@ -196,6 +199,9 @@ The 3D fly-through (`frontend/scene3d.html`, controller `scene3d-main.js`) is bu
 - `scene3d-nebula.js`: direction-only objects (drawn at infinity, faded with the distance from the Sun like the Milky Way glow) and the projected-ellipse nebula billboard item.
 - `scene3d-orbits.js`: Keplerian orbits of exoplanets and hosted black holes, evaluated in the browser on the host's sky plane, with unknown orientation filled in deterministically and flagged as assumed.
 - `scene3d-format.js`: the one number rule every card follows (the digits an uncertainty supports, scientific notation for very large or small values).
+- `skyclock.js`: the shared sky clock (a TT Julian Day, a signed rate, play/pause, a range, scripted trips), with no DOM. Phase 6's "Turn back the sky" is to reuse it.
+- `scene3d-motion.js`: the motion layer: planets and the Moon from `ephem.js` anchored to the server's ephemeris, small bodies as two-body orbits from their SkyBoT state, exoplanets and binary black holes through compiled orbits; each source's valid range; the time bar's "Moving: …" line.
+- `timebar.js` and `scene3d-requery.js`: the time bar (Now, slower, play/pause, faster, the date; keys P, `,`, `.`, N and Shift+,) and the re-query policy (on settle more than a day from the payload's epoch, inside SkyBoT's 1890–2060 range; an 8-entry page cache by cone and day; at most one request per 5 s; the newest request cancels the one in flight).
 - `scene3d-physics.js`, `scene3d-nav.js`, `scene3d-math.js`, `scene3d-card.js`, `scene3d-gl.js` and `scene3d-shaders.js`.
 
 Adding a kind of object is one data source on the backend plus one `registerKind` call. See `docs/object-framework.md`.
@@ -305,7 +311,13 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
 - 97 clusters whose parallax S/N is under 5 have `derived` distances and hollow markers.
 - Cite Hunt & Reffert 2024, A&A 686, A42, and 2023, A&A 673, A114. VizieR licence:
   https://cds.unistra.fr/vizier-org/licences_vizier.html.
-- The members table (1.29 M rows) is not used; the member-star highlight is a follow-up.
+- Member lists (Phase 5, `script_version` 2): HR24's members table (`J/A+A/686/A42/members`) for the 695 clusters
+  with `dist50` ≤ 500 pc, 89,738 members (71,237 with probability ≥ 0.5). The committed snapshot is
+  `members-hr24-2026-11-20.csv.gz` (ID, GaiaDR3, Prob, inrt), fetched in ID-list batches from the CfA and IDIA
+  mirrors; a refresh is refused unless each cluster's member count equals its `N`. The build writes one
+  `members/<ID>.json` per cluster (`space-maps.cluster-members/1`: Gaia DR3 ids as strings, probabilities truncated to
+  thousandths, `inrt`), 2.84 MB on disk and 1.12 MB gzipped, and fails above 4 MB. The cluster records gain
+  `assets.members`; the 3D view fetches a file only when its cluster is selected. Gaia-derived: CC BY-NC 3.0 IGO.
 
 **`nebulae`** (`frontend/data/objects/nebulae/`, 0.5 MB in 151 tiles; **data licence CC BY-SA 4.0**, with Gaia-derived distances under CC BY-NC 3.0 IGO)
 - Sources: OpenNGC release v20260501, pinned to commit `36cb178a`; Sharpless 1959 (VizieR `VII/20`); Chornay &

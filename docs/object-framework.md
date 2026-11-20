@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20, awaiting approval.**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20 and approved 2026-11-20 (decisions in §20.17).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -3180,6 +3180,7 @@ and SMBHs; (9) docs and mock server.
 - [ ] (Phase 5) The cluster member-star highlight (§16.12).
 - [ ] (Phase 5) Orbit animation over time.
 - [ ] (Phase 6) Migrating "Turn back the sky" onto the shared catalogues.
+- [ ] (Phase 6) Proper motion and space motion of the star layer (Gaia, XHIP context stars, curated star records), which Phase 5 leaves at the catalogue epoch (§20.7, §20.17 item 1).
 - [ ] (Phase 5) A general evidence rule for all hosted kinds (§17.15, approval condition 2).
 - [x] Gaia-parallax-based HII-region distances (§17.4; Phase 4, §19.4: Shen et al. 2025).
 - [x] Whatever Q1 decides about the Gaia NC term and EDD's terms, applied repository-wide (Phase 4, §19.8).
@@ -4035,7 +4036,7 @@ Chromium on a real Wayland display with real-time rAF; 1280 × 800 unless stated
 
 ## 20. Phase 5: time and behaviour (design)
 
-Status: **designed 2026-11-20, awaiting approval** (open questions in §20.16). Sections of §1–§19 that Phase 5 changes
+Status: **designed and approved 2026-11-20** (decisions at approval in §20.17). Sections of §1–§19 that Phase 5 changes
 will carry a "Phase 5 change" note pointing here. Where this section and an earlier one disagree, this one wins.
 
 Phase 5 is the second of the follow-up phases of §18.16: orbit animation over time, the general evidence rule for
@@ -4581,3 +4582,64 @@ motion cost.
    - *Recommendation:* yes: draw the osculating orbit of the selected asteroid or comet, dotted beyond its valid range.
      It is cheap (one path from `osc`), and it shows the drift the check above looks for.
    - Alternative: no small-body orbits in Phase 5.
+
+### 20.17 Decisions at approval (2026-11-20)
+
+The open questions of §20.16 were answered as follows; everything else in §20 was approved as written. Where an
+earlier part of §20 says otherwise, this section wins.
+
+1. **Clock range and stars: accepted.** 1900–2100; stars stay at their catalogue epoch; proper motion is Phase 6.
+   - Whenever the clock is **more than one year from 2016.0**, the time bar's status line says "Stars shown at their
+     Gaia DR3 epoch (2016.0); proper motion not applied." (replacing §20.7's "> 10 yr" rule and its wording).
+   - Star cards state the epoch.
+   - §18.16 gains an explicit Phase 6 item: proper motion and space motion of the star layer.
+2. **Beyond a source's valid range: accepted.** Greyed in the normal view, hidden in the Evidence view, still counted
+   as existing (HUD, host cards).
+   - The card says "Position extrapolated beyond its valid range (\<reason\>), illustrative." (replacing §20.5's
+     "Drawn \<Δt\> beyond its valid range"). Reasons: "more than 1 year from its SkyBoT state of \<date\>" for small
+     bodies, "phase uncertainty \<σ\>° at this date" for orbits whose phase σ exceeds 90°.
+   - The time bar's "Moving: …" line counts the bodies beyond their range.
+   - **Greyed means only "beyond its valid range".** The greyed style is used for nothing else, in markers, points,
+     labels or lines.
+   - The rule is the same for every source: an orbit whose phase σ passes 90° is greyed like a small body past its
+     window.
+3. **Small-body window and re-query: accepted** (one ±1 yr window for every class; a re-query on settle more than a
+   day from the payload's epoch, inside SkyBoT's 1890–2060 range), with these conditions:
+   - **Settles** means paused (or rate 0, or a tween ended) with the date unchanged for **1.5 s**, the debounce
+     `SETTLE_MS` in `skyclock.js`. Nothing re-queries while the clock plays, while the date field or a scrub is being
+     edited, or while a tween runs.
+   - **Re-query date:** the settled date rounded to the nearest whole day (`mjd` integral, 0 h TT), and only when that
+     day differs from the payload's day. The propagated bodies cover the up to 12 h between the clock and that day.
+   - **Cache** in the page: payloads are kept by (cone, day) in a small LRU (8 entries), so scrubbing back and forth
+     re-ingests a cached payload without a request.
+   - **Cancel** an in-flight re-query (an `AbortController`) when a newer one starts.
+   - **Cap:** at most one re-query start per **5 s**; a settle inside the cap is deferred to the end of it, and only
+     the latest settle survives.
+   - **Outside 1890-02-12 to 2060-03-21 (SkyBoT's served range), or when SkyBoT fails** (its `sources` row is not
+     `ok`, or the request fails): keep the current payload, not the new one, so no body vanishes. Bodies grey out
+     beyond their window as in item 2, and the time bar says why ("SkyBoT serves 1890–2060; small bodies are the ones
+     from \<date\>, moved along their orbits" or "SkyBoT did not answer; …").
+   - **Population changes are announced.** When a re-queried payload adds or removes small bodies from the cone, the
+     time bar says so for a few seconds ("27 small bodies entered the cone and 31 left on \<date\>"), from the id sets
+     before and after.
+4. **Member highlight scope: accepted.** Clusters within 500 pc, every member with its probability, drawn solid at
+   Prob ≥ 0.5 and faint below it. Conditions:
+   - **Lazy:** the member file is fetched only when a cluster is selected, never on page load (one file per cluster,
+     cached in the page).
+   - **Size:** the build report gives the real size on disk and gzipped; the build **fails above 4 MB** on disk for the
+     member files, and in that case the work stops and asks.
+   - **Credit:** the members are Gaia-derived (Hunt & Reffert 2024), so the card's Data row carries "Credit:
+     ESA/Gaia/DPAC" and CC BY-NC 3.0 IGO, and the "Before any commercial use" list names the `hr23-clusters` members
+     folder along with the dataset.
+   - **Card** beyond 500 pc: "Member stars shown for clusters within 500 pc" (replacing §20.9's wording).
+   - **Checks:** the Pleiades (1,721 members, 1,014 at Prob ≥ 0.5) and one cluster near 500 pc.
+5. **Keeping illustrative motion visible: the recommendation, without dimming.** Orbit line styles (solid measured,
+   dashed derived, dotted illustrative), ◌ on the labels of illustrative moving bodies, and the "Moving: …" line.
+   - The time bar carries a small legend of the three line styles.
+   - Illustrative bodies are **not** dimmed: greyed already means "beyond valid range" (item 2).
+6. **A selected small body's orbit: accepted as new scope.**
+   - Only the selected asteroid, comet or dwarf planet gets its osculating orbit; deselecting removes it.
+   - While the clock is within the body's valid range, the line takes the record's evidence and its style (a SkyBoT
+     body is `measured`, so solid). Beyond it, the line is dotted, illustrative and greyed, and so hidden in the
+     Evidence view (replacing §20.10's "drawn dotted").
+   - The browser checks include one comet with a high eccentricity.

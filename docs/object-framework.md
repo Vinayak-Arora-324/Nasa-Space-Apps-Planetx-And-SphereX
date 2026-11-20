@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18 and approved 2026-11-19 (decisions in §18.18).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, awaiting approval.**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -3160,6 +3160,17 @@ and SMBHs; (9) docs and mock server.
 
 ### 18.16 Phase 4 checklist
 
+**Split into Phases 4–7 (2026-11-20, §19):** the follow-ups below are divided as
+- **Phase 4, fixes and data (§19):** `EVIDENCE_HIDES_FEATURES`; the README `online` marker; the Gaia-parallax HII
+  distances; Q1's licensing applied repository-wide; group-averaged CF4 distances; the "you came from here" marker in
+  `cosmos`; the compact tile encoding; the cited radii of the four clusters; and §18.19's "Left rough" list;
+- **Phase 5, time and behaviour:** orbit animation over time; the general evidence rule for hosted kinds; the cluster
+  member-star highlight; a per-galaxy `kpc` frame, if resolved stars of other galaxies are ever shown;
+- **Phase 6:** migrating "Turn back the sky" onto the shared catalogues;
+- **Phase 7, lensing and real images:** true gravitational lensing of the background; real image billboards,
+  preferring tiled sky surveys.
+
+
 - [ ] Real image billboards (§17.6.4), preferring tiled sky surveys with proper sky alignment over press images, licence permitting.
 - [ ] True gravitational lensing of the background (§17.9).
 - [ ] `EVIDENCE_HIDES_FEATURES`.
@@ -3358,3 +3369,485 @@ Left rough:
 - `smbhVisible` counts an SMBH whose galaxy is behind the camera as visible (harmless on screen).
 - These checks drove frames by hand in a background tab (no real-time rAF), so timings and smoothness by eye still
   need a pass on a real display.
+
+## 19. Phase 4: fixes and data quality (design)
+
+Status: **design, awaiting approval** (open questions in §19.13). Sections of §1–§18 that Phase 4 changes will carry a
+"Phase 4 change" note pointing here when it is implemented. Where this section and an earlier one disagree, this one
+wins.
+
+Phase 4 is the first of the four follow-up phases recorded in §18.16: fixes and data (this section), then time and
+behaviour (5), the "Turn back the sky" migration (6), and lensing and real images (7). Nothing of Phases 5–7 is in
+scope here.
+
+Every external fact below was checked live on **2026-11-20**:
+- VizieR through the CfA mirror (`vizier.cfa.harvard.edu`), with IDIA (`vizier.idia.ac.za`) answering the same
+  metadata; CDS (`vizier.cds.unistra.fr`) served a "Page unavailable" page, and the VizieR licence page
+  (`cds.unistra.fr/vizier-org/licences_vizier.html`) answered 404 again, as in earlier phases;
+- arXiv full texts (Shen et al. 2025, Reiprich & Böhringer 2002, Fadda et al. 1996) and the arXiv API for journal
+  references;
+- ESA's Gaia licence page ("Gaia data are distributed under the CC BY-NC 3.0 IGO license");
+- NASA SVS item 4851 (the Deep Star Maps behind the Milky Way glow) and its credit line;
+- EDD's terms page did **not** answer (connection failed); the terms quoted in §18.2 (version 2026-10-29, read
+  2026-11-19) stand, and nothing here changes how CF4 is used.
+
+Research numbers below come from scripts run on the committed snapshots plus the live tables; the build reports give
+the final ones.
+
+### 19.1 Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| `EVIDENCE_HIDES_FEATURES` | **`true`.** In the Evidence view Jupiter and Saturn lose their bands, Saturn its ring, Earth and Venus their atmosphere halo. Discs keep their shading and display colour (§19.3.1). |
+| README `online` marker | Never implemented (§13, §16.16, §17.15). **Implement it**: a registered `online` marker, skipped unless `--online` (or `SPHEREX_ONLINE=1`), plus a few live smoke tests of the upstreams the builds pin. The README also gets the right frontend test command (§19.3.2). Q6. |
+| M31\*/M32\* rings from the Sun | An SMBH's lensing look is capped to a twentieth of its galaxy's drawn semi-major axis (the look's outer radius to a fifth); below 1.5 px it is drawn as a marker only. The card still gives the enlargement, now of what is drawn (§19.3.3). |
+| The Virgo sheet | Records placed at a group or cluster distance get an **illustrative line-of-sight spread** within their group's radius in the normal view, and sit at the exact group distance in the Evidence view; the card says so (§19.3.4). Q4. |
+| Elliptical banding | Dither the additive glow shaders by ±½ of an 8-bit step (§19.3.5). |
+| HUD speed blip | Reproduce it on scripted trips, fix the cause; acceptance in §19.3.6. |
+| Credits read at start | A static source's provenance reloads with its manifest's mtime, like its records (§19.3.7). |
+| `smbhVisible` behind the camera | A parent galaxy's item counts only when it is in front of the camera (or `inside`) (§19.3.8). |
+| Smoothness | Foreground-tab, real-time rAF frame times before and after, on a real display (§19.12). |
+| "You came from here" | Two markers in `cosmos` (and in the galaxy frame beyond 20 kpc): **the Sun** and **the Milky Way's centre**, labelled, merged into one label when closer than 30 px (§19.3.9). |
+| Licensing, repository-wide | Every card whose record carries Gaia, CF4/EDD or OpenNGC values ends in a `Data` row derived from the record; the credits line adds the Milky Way glow (NASA SVS, from Gaia DR2); the 2D Space Maps page and the analysis page show the Gaia credit and licence; the README states the non-commercial stance and points to `LICENSE` (§19.8). |
+| HII distances | **Shen et al. 2025** (A&A 696, A67; VizieR `J/A+A/696/A67`): Gaia DR3 (Bailer-Jones) distances of the exciting stars of 459 HII regions; 55 of its 459 rows take a literature value (33 Méndez-Delgado et al. 2022, 22 maser parallaxes). Evaluated against Méndez-Delgado et al. 2022 and the Villafranca catalogue (§19.4.1). Adopted through the §18.4.2 ladder; Russeil moves to "not used". Research run: **76 Russeil distances replaced** (median change −14 %, median \|change\| 23 %; 45 by more than 20 %, 13 by more than 50 %) and **70 direction-only nebulae placed**. Q1, Q2. |
+| CF4 group distances | A galaxy whose only distances are CF4 Tully–Fisher or fundamental plane gets its CF4 group's distance as a candidate (`group-member`, `derived`), widened by the group's projected radius; **the group wins when its fractional error is smaller** (the ladder). Research run: **1,655 galaxies** move, median \|change\| 12 % (§19.5). Q3. |
+| Four more clusters | Centaurus, Abell 1367, Hercules and Hydra join `clusters.json`: radii from Reiprich & Böhringer 2002 (Table 4, r200), dispersions from Fadda et al. 1996 (Tables 2, 4, 5) (§19.6). |
+| Tile encoding | **`space-maps.object-tiles/2`**: a manifest `quantity_table` of `[src, tier, unit]` and Quantities stored as `[v, q]` or `[v, q, lo, hi]`. Lossless, with object-form fallback. Readers accept /1 and /2. `galaxies` goes from **12.47 MB to about 7.0 MB** (tiles 11.57 → 5.82 MB; gzipped tiles 1.21 → 1.05 MB). Applied to all six datasets, since it is one flag on `write_dataset` (§19.7). Q5. |
+
+### 19.2 Sources, pins and licences (checked 2026-11-20)
+
+| Input | Where | Pin | Licence and credit |
+|---|---|---|---|
+| `shen2025-table2.tsv.gz` | `backend/data/sources/nebulae/` | VizieR `J/A+A/696/A67/table2`, "HII regions with parallax distances based on Gaia DR3", **459 rows**, one per region (`Remarks`: 407 blank, 30 `M22`, 19 `maser`, 3 `maser,M22`). sha256 of the stripped TSV, as in Phases 1–3. | VizieR terms with the citation "Shen, Hou, Liu & Gao 2025, A&A 696, A67 (arXiv:2503.01551), doi:10.1051/0004-6361/202452712". The Gaia-derived rows are CC BY-NC 3.0 IGO, "Credit: ESA/Gaia/DPAC" (§19.8). |
+| `shen2025-tablea1.tsv.gz` | same | `J/A+A/696/A67/tablea1`, "Information of exciting stars", **1,382 rows** (Gaia DR3 ids, parallaxes and Bailer-Jones distances per star). Not used for values; the build reads it only to name the exciting stars on the card and in the report. | as above |
+| `shen_overrides.json` | same | hand-written: `[{nebula, wise \| null, reason}]`, seeded empty; the report lists every pair so reviewers extend the table, not the code (as §17.3). | — |
+| `cf4-table2.tsv.gz` | `backend/data/sources/galaxies/` | **Re-snapshot** of `J/ApJ/944/94/table2` with the column `1PGC` ("PGC ID, dominant galaxy in the group") added to the Phase 3 columns. New sha256 in the script and `SOURCE.json`. 55,877 rows as before. | as §18.2 |
+| `cf4-groups.tsv.gz` | same | **Re-snapshot** of `J/ApJ/944/94/groups` with `RAJ2000`, `DEJ2000` added (the group position). 38,053 rows as before. | as §18.2 |
+| `clusters.json` | same | four entries added (§19.6), every number with `src`/`where`. | — |
+
+`--refresh` follows the Phase 2/3 mirrors (CfA, IDIA, CDS). Build reports, `SOURCE.json`, `--local` and byte-identical
+`--check` are unchanged in kind.
+
+### 19.3 Fixes
+
+#### 19.3.1 `EVIDENCE_HIDES_FEATURES = true`
+
+Bands, atmospheres and rings are drawn from no data: the registry tags them `illustrative` (§3, `FEATURE_TIER`). The
+Evidence view hides every other illustrative appearance (galaxy and nebula glows, the lensing look, the Milky Way
+billboard), so the planets are the one exception left. With the constant on, `sphereOf(o, { evidence: true })`
+returns `features: { ring: 0, band: 0, atm: 0 }`:
+
+| Body | Normal view | Evidence view today | Evidence view after |
+|---|---|---|---|
+| Jupiter | bands | bands | plain shaded disc |
+| Saturn | bands, ring (quad 2.4×) | bands, ring clipped by the 1.1× quad | plain shaded disc |
+| Earth, Venus | atmosphere halo | halo | plain shaded disc |
+| Others | plain | plain | unchanged |
+
+The disc's display colour (`PLANET_RGB`) stays: a disc must be drawn in some colour, and markers keep theirs too. The
+§3 sentence "Today the ring is clipped by the quad extent while bands and atmosphere still show" becomes history, and
+the Phase 0 registry test that pins `false` is changed.
+
+#### 19.3.2 The `online` pytest marker
+
+The README has said since 2026-11-15 that "live-network integration tests marked `online` are skipped by default"; no
+such marker exists and every test is offline. Implemented as:
+- `pyproject.toml`: `markers = ["online: needs the network; run with --online"]`;
+- `backend/tests/conftest.py` (new): an `--online` option; without it (and without `SPHEREX_ONLINE=1`) every `online`
+  test is skipped with that reason;
+- `backend/tests/test_online.py` (new), each test with a 60 s budget and a clear failure message naming the host:
+  1. every VizieR table a build pins returns its pinned row count from at least one mirror (Phases 1–4, read from the
+     scripts' pin tables, not a copy);
+  2. Sesame resolves "M31" through at least one of the three hosts of §17.17;
+  3. SkyBoT answers a small cone at a fixed epoch;
+  4. the pinned OpenNGC commit's two raw files hash to the pins.
+- README "Running Tests": `uv run pytest` (offline), `uv run pytest --online` (live), and the frontend command
+  `node --test frontend/tests/*.test.mjs` (the listed three files are out of date).
+
+#### 19.3.3 Enlarged SMBH rings on their galaxies
+
+From the Sun, M31\* and M32\* are in the M31 cone, so Phase 2's rule draws them with the enlarged lensing look: a
+9 px shadow in a 36 px quad on a galaxy whose drawn semi-major axis is about 20 px. `lensingItems` gains the
+billboard items of the frame (`{ items }`) and, for a supermassive black hole whose parent galaxy has an item that is
+**not** `inside` (the camera is outside that galaxy):
+- `capPx = 0.05 × parent.semiMajorPx`, and `px = min(max(truePx, LENS_MIN_PX), capPx)`, so the whole look (radius
+  `4·px`) stays within a fifth of the galaxy's drawn radius;
+- when `px < LENS_FLOOR_PX = 1.5`, no lensing item is made; the black hole is a marker (the in-cone rule still makes
+  it pickable);
+- `factor` becomes `px / truePx` of what is drawn (or `null` when only a marker is drawn), and the card says
+  "Drawn enlarged ×N" or "Too small to draw against M31 from here: shown as a marker; its shadow would be 1e-7 px".
+
+Seen from the Sun M31\* and M32\* become two markers; the look appears once M31 is about 180 px in semi-major axis
+(`9 / 0.05`), well before "Go there" arrives at 3 radii. Sgr A\* near the Sun is unchanged: the camera is inside the
+Milky Way, so its parent item is `inside` and no cap applies. Stellar-mass black holes have no galaxy parent and are
+unchanged.
+
+#### 19.3.4 The sheet of group members
+
+178 galaxies sit at one of four CF4 cluster distances, and §19.5 adds about 1,655 at group distances. Seen from
+inside or beside a cluster, each group is a flat sheet facing the Sun, which reads as structure that is not there.
+The data cannot say where along the line of sight a member is; the record's interval already includes the group's
+depth. So:
+- each record placed at a group distance carries **`props.group_radius`** (Mpc, `inferred` for the computed ones of
+  §19.5, `catalogue` for the cited cluster radii of §18.4.6 and §19.6), with its `src`;
+- the renderer places such a record at `D + δ` along its direction, with `δ = group_radius × t`, `t` from
+  `hashUnit(id, 'los')` mapped to a triangular distribution on (−1, 1), so members crowd the centre the way a
+  cluster does;
+- **in the Evidence view `δ = 0`**: the drawn point is the catalogue group distance, nothing else;
+- the card's distance row is unchanged (the group distance with its interval) and a note says "Drawn at an
+  illustrative depth within its group (±1.3 Mpc), because its own distance along the line of sight is unknown; the
+  Evidence view draws it at the group's distance". "From you" uses the drawn position.
+
+The offset is inside the stated interval, so the placement claims nothing the record does not. Records with UNGC's own
+`mem` distances have no `group_radius` and are not spread.
+
+#### 19.3.5 Banding in elliptical glows
+
+The galaxy and nebula fragment shaders add `(h(gl_FragCoord.xy) − 0.5) / 255` to the colour they write, with `h` a
+cheap interleaved-gradient hash, before the additive blend into the 8-bit target. One line per shader, no new pass.
+Checked on a large elliptical (M87 at 3 radii, NGC 4472) with and without.
+
+#### 19.3.6 The HUD speed blip
+
+§18.19 saw "0.0000000068 AU/s" for a frame or two mid-trip. `_trackSpeed` smooths the world-pc speed with a 0.1 s time
+constant, so a reading that small means the camera held still for about 3 s, or a frame read a stale world position.
+The fix starts from a reproduction: a scripted trip harness (node, using the pure `Autopilot`, `stepFrame` and
+`worldPc`) over Sun → M87, Sun → TRAPPIST-1 e and LMC → SMC, recording `speedPc` per frame. Acceptance: on those trips
+the HUD never shows a moving speed below 1e-6 of the trip's peak, except at rest or in the turn phase, where it reads
+"turning". If the cause is in `scene3d.js` and not in a pure module, the harness becomes a browser check.
+
+#### 19.3.7 Credits reload by mtime
+
+`_static_source` copies the manifest provenance into `Source.provenance` once at start-up; records already reload by
+mtime. The source keeps a reference to one dict, and `fetch` refreshes it in place (`clear()` + `update()`) whenever
+`load_dataset` returns a new manifest. `build_objects` reads `source.provenance` after the fetch, so the same response
+carries the new credit. A dataset that appears or disappears still needs a restart (stated in `technical-reference.md`).
+
+#### 19.3.8 `smbhVisible` and the camera's back
+
+The parent galaxy's item counts only when `it.inside`, or when its centre projects in front of the camera
+(`it.screen` set and the centre's view-space depth positive). Today an item behind the camera can still report a large
+`semiMajorPx`. Harmless on screen (nothing behind is drawn), but it made the SMBH count and picks wrong.
+
+#### 19.3.9 "You came from here"
+
+`homeMarkers(cam, { project, galaxyFade, store })`, pure, in `scene3d-objects.js`:
+- **the Sun** at the galaxy-frame origin, label "Sun · you started here", picking opens the Sun's card;
+- **the Milky Way's centre** at `gal:milky_way`'s placed position (Sgr A\*'s, §18.7), label "Milky Way centre ·
+  Sgr A\*", picking opens the Milky Way card;
+- shown in `cosmos`, and in the galaxy frame with alpha `1 − galaxyFade` (so they appear between 20 and 40 kpc, as the
+  stars fade);
+- closer than 30 px on screen, the two merge into one marker, "Milky Way · the Sun is here"; from Virgo the Sun and the
+  Galactic Centre are 8.3 kpc apart at 16.8 Mpc, about 0.4 px;
+- label priority ahead of galaxies; kept in the Evidence view (both placements are measured: the Sun by definition,
+  the centre from GRAVITY 2022 via Sgr A\*).
+
+### 19.4 HII-region distances from Gaia
+
+#### 19.4.1 Candidates evaluated (2026-11-20)
+
+| | **Shen et al. 2025** (adopted) | Méndez-Delgado et al. 2022 | Villafranca II (Maíz Apellániz et al. 2022) |
+|---|---|---|---|
+| Paper | A&A 696, A67, arXiv:2503.01551, "Parallax-based Distances to Galactic HII Regions: Nearby Spiral Structure" | MNRAS 510, 4436, arXiv:2112.12600 | A&A 657, A131, arXiv:2110.01464 |
+| Content | 459 HII regions (WISE catalogue ids, Anderson et al. 2014) with Gaia DR3 distances of their O–B2 exciting stars; 55 rows carry a literature value (`Remarks`); per-region distance with asymmetric errors (kpc, 2 decimals), a robustness `Group`, and a `tablea1` of 1,382 exciting-star rows with Gaia DR3 ids. | 42 HII regions, Gaia EDR3 parallaxes of ionising stars. | 26 OB groups (16 + 10) with Gaia EDR3 distances. |
+| VizieR | `J/A+A/696/A67` (`table2`, `tablea1`) | no table found | `J/A+A/657/A131` exists, but its metadata did not return today |
+| Overlap with our 697 nebulae (research run) | **146 nebulae** under the rule of §19.4.2 | its distances are already in Shen's table (`Remarks: M22`, 33 rows) | a few groups; no table to pin |
+| Verdict | adopted | superseded by Shen, which reuses it | rejected: small, not pinnable today |
+
+**How Shen et al. derive a distance** (§3.2 of the paper): "If an H ii region has at least two associated stars, we
+calculated the mean value of stellar distances, which is taken as the H ii region distance." The stellar distances are
+Bailer-Jones et al. 2021's geometric or photogeometric posteriors (the `tablea1` note: `rgeo` when marked, else the
+photogeometric median), which include "a zero-point offset for the parallaxes" (Shen §2). Groups: "(1) Group I: the H
+ii region has more than one associated star and all the stars present consistent distances. Therefore, the estimated
+distances of these 160 H ii regions in Group I ought to be reliable. (2) Group II: the H ii region originally has two
+or more associated stars, but only one is left after the above criteria. (3) Group III: the H ii region has only one
+associated star." The `Remarks` column marks rows whose distance is not their own Gaia value: "maser = the distance is
+determined from the associated HMSFR maser", "M22 = the distance was given by Méndez-Delgado et al., 2022, based on
+Gaia DR3" (VizieR notes).
+
+#### 19.4.2 Linking a Shen region to a nebula record
+
+- **Eligible records:** the types Russeil applies to (§17.4): Sharpless-only regions and merged records of types HII,
+  EmN, Neb and Cl+N. Never SNR, PN, RfN or DrkN. Records with `major ≥ 120′` are excluded (40 in the research run:
+  Barnard's Loop, the Cygnus region and similar complexes that hold many WISE regions at different distances).
+- **Candidates:** Shen regions W whose centre lies within `s ≤ max(r_N, R_W)`, with `r_N` half the record's major axis
+  and `R_W` Shen's (WISE) radius.
+- **Best:** the lowest `s / max(r_N, R_W)`; one Shen region may serve several records (the Rosette's NGC 2237, 2238,
+  2239 and 2246 all take G206.316−02.103), since it gives a distance, not an identity.
+- **Overrides** (`shen_overrides.json`) win over the rule; `wise: null` forbids a link.
+- **Report:** every link with its score, the other candidates and their distances, the old and new distance, and a list
+  of the changes beyond 50 %, for review.
+
+#### 19.4.3 The Shen distance as a candidate
+
+| Shen row | `method` | `dist.tier` | Evidence | Licence |
+|---|---|---|---|---|
+| Group I, Gaia (blank or `M22` remark) | `bailer-jones` | `measured` | measured | Gaia (CC BY-NC 3.0 IGO) |
+| Group II or III, Gaia | `bailer-jones` | `inferred` | derived | Gaia |
+| `maser` remark (22 rows) | `parallax` | `measured` | measured | VizieR terms (not Gaia) |
+
+(Q2 for the Group rule, Q1 for the maser rows.) `Dist − e_Dist` and `Dist + E_Dist` (kpc → pc) give `lo`/`hi`; where
+the table prints an error of 0.00 kpc (Orion), the Quantity carries no interval and its `src` says "uncertainty below
+the table's 0.01 kpc precision". The src names the region and the group: "Shen et al. 2025, A&A 696, A67, table2:
+G209.037−19.377 (Group I), maser parallax of the associated HMSFR (as adopted there)" or "… G005.987−01.191
+(Group I): mean Gaia DR3 (Bailer-Jones et al. 2021) distance of its exciting stars".
+
+**Choosing** uses the §18.4.2 ladder unchanged: evidence class (a measured Shen distance beats Russeil's derived one),
+then "has an uncertainty", then the smaller fractional uncertainty (a Group II/III Shen distance and Russeil's are both
+derived; the more precise wins), then catalogue order (Shen, then Russeil). The loser goes to `alt_distances` with its
+reason, and the nebula card gains the "Other distances · not used" rows the galaxy card already has. A PN parallax
+(Chornay & Walton) still wins over both, and the types never overlap.
+
+**Expected** (research run, with the maser rows):
+
+| Nebula | Today (Russeil) | Shen region | After |
+|---|---|---|---|
+| Orion Nebula (M42) | 400 (360–440) pc, derived | G209.037−19.377, Group I, maser | **390 pc**, measured (`parallax`) |
+| Lagoon Nebula (M8) | 1,600 pc, derived | G005.987−01.191, Group I, M22 | **1,220 ± 20 pc**, measured |
+| Rosette Nebula (NGC 2237) | 1,900 pc, derived | G206.316−02.103, Group I | **1,360 −20/+40 pc**, measured |
+| Trifid Nebula (M20) | 2,700 pc | G007.015−00.271, Group I, M22 | 1,240 −30/+40 pc |
+| Eagle Nebula (NGC 6611) | 2,000 pc | G016.993+00.873, Group I, M22 | 1,720 ± 10 pc |
+| Sh2-289 | 8,500 pc | G218.808−04.558, Group III | 450 ± 40 pc, derived (listed for review) |
+
+Counts: 146 nebulae take a Shen distance (Group I 76, II 10, III 60); 76 of them replace a Russeil distance, 70 were
+direction-only. Of the 76: median change −14 %, median |change| 23 %, 45 change by more than 20 % and 13 by more than
+50 %. Without the maser rows (Q1), Orion would take the 360 pc Group III region G208.367−19.124 next door, which is
+why the maser rows are recommended.
+
+**Licence** (as §18.18 item 1): the Gaia-derived Shen values are CC BY-NC 3.0 IGO inside the CC BY-SA `nebulae`
+files. Both nebula `LICENSE.md` files say which values that covers; the manifest `credit` becomes "… ; PN distances
+(Chornay & Walton 2021, Gaia EDR3) and HII-region distances (Shen et al. 2025, Gaia DR3): Credit: ESA/Gaia/DPAC";
+`LICENSE` item 2 and "Before any commercial use" name them (a commercial build drops the Gaia rows, leaving Russeil's
+or no distance). The maser rows are not Gaia values.
+
+### 19.5 Group-averaged CF4 distances
+
+**Who:** a galaxy whose distance candidates are only CF4 `DMtf` and/or `DMfp` (and the Hubble flow), with a CF4 group
+(`1PGC` from table2) of `Ngal ≥ 2` in the groups table. Galaxies with any measured distance, SN Ia, SN II, UNGC or
+McConnachie candidate are never touched.
+
+**The candidate:** `method: group-member`, tier `inferred`, evidence `derived`; `D` from the group's `DMzp ± e_DMzp`
+("Group, weighted average distance modulus, TRGB, cepheid and maser calibrators") with the §18.4.1 conversion, using
+the group's `V3k` for the `1/(1+z)` step; the interval widened in quadrature by the group radius:
+- for the eight rich clusters (§18.4.6, §19.6), the cited radius;
+- otherwise **`group_radius` = the rms angular distance of the group's CF4 members from the group position (groups
+  table `RAJ2000`, `DEJ2000`), times `D`**, `inferred`, src "rms projected distance of the N Cosmicflows-4 members from
+  the group centre, at the group distance (Space Maps)". For a pair it is half the separation.
+
+**When it wins:** the §18.4.2 ladder. Both are derived and have uncertainties, so the smaller fractional uncertainty
+wins: the group when `√((0.4605·e_DMzp)² + (group_radius/D)²) < σ_own/D`. The galaxy's own TF/FP distance goes to
+`alt_distances` ("not used: larger uncertainty than its group's distance"). The card note: "Placed at the distance of
+its group (Cosmicflows-4 group 1PGC 36487, 121 galaxies), whose average is more precise than its own Tully–Fisher
+distance."
+
+**Expected** (research run): of the TF/FP-only OpenNGC galaxies, 1,655 are in CF4 groups with `Ngal ≥ 2` (406 pairs,
+366 of 3–4, 302 of 5–9, 581 of 10 or more) and the group wins for every one of them, even with the widening (median own
+fractional error 20 %, median group error 8 %). Median change +1.9 %, median |change| 12 %; 422 change by more than
+20 % and 42 by more than 50 %. 1,476 TF/FP galaxies are alone in their CF4 "group" and keep their own distance.
+
+**Knock-on:** NGC 4889 has only an FP distance and is in Coma (group 44715), so it and NGC 4889\* move to the Coma group
+distance; `build_objects_smbh.py` is rebuilt and its rescale factor changes (still `inferred`, `derived`). The galaxy
+manifest's report counts every move by group size and lists the >50 % ones.
+
+### 19.6 Cited radii for Centaurus, Abell 1367, Hercules and Hydra
+
+Radii from **Reiprich & Böhringer 2002** (ApJ 567, 716, astro-ph/0111285; HIFLUGCS), Table 4 column (8), r200 "the
+radius within which the mean gravitational mass density ⟨ρtot⟩ = 200 ρc" (§4), in h50⁻¹ Mpc with "H0 = 50 h50
+km s⁻¹ Mpc⁻¹, h50 = 1, Ωm = 1" (§1). Velocity dispersions from **Fadda et al. 1996** (ApJ 473, 670,
+astro-ph/9606098). CF4 groups from the committed groups snapshot.
+
+| Cluster | Centre | CF4 group (1PGC, Ngal, DMzp) | σ (km/s) | r200 (h50⁻¹ Mpc) | Radius on the sky |
+|---|---|---|---|---|---|
+| Hydra (A1060) | NGC 3311 | 31478, 67, 33.673 ± 0.046 | 610 +52/−43 (Table 2) | 1.95 +0.08/−0.08 | 1.667° |
+| Abell 1367 | NGC 3842 | 36487, 121, 34.796 ± 0.036 | 798 +75/−68 (Table 4, multipeaked, whole cluster) | 2.14 +0.08/−0.07 | 0.983° |
+| Centaurus (A3526) | NGC 4696 | 43296, 49, 33.027 ± 0.048 | 447 +56/−36 (Table 5, the A3526a peak = Cen 30) | 1.87 +0.04/−0.03 | 1.766° |
+| Hercules (A2151) | NGC 6041 | 56962, 278, 36.004 ± 0.028 | 751 +91/−69 (Table 2) | 1.61 +0.03/−0.04 (`A2151w`) | 0.444° |
+
+- **Radius on the sky** is r200 over the angular-diameter distance of the cluster's Table 3 redshift in the paper's own
+  cosmology (z = 0.0114, 0.0216, 0.0103, 0.0369): `D_A = (2c/H0)(1 − 1/√(1+z))/(1+z)` with H0 = 50, Ωm = 1, which
+  does not depend on H0. The `where` says "Space Maps arithmetic", as for Fornax and Perseus.
+- **`radius_mpc`** (the line-of-sight term) is r200 × 50/74.6 (r200 ∝ h⁻¹, moved to the CF4 scale): 1.31, 1.43, 1.25
+  and 1.08 Mpc.
+- **Centaurus is two groups in CF4**: Cen 30 (NGC 4696, group 43296) and Cen 45 (NGC 4709, group 43423, Vh 4058). The
+  CF4 group used is Cen 30's, so its σ is the Cen 30 peak's (Fadda Table 5, A3526a), not the whole bimodal cluster's
+  791. Cen 45 galaxies inside 1.766° and within 3σ of Cen 30's Vh = 3602 km/s would join it; the report lists them.
+- **Hercules:** HIFLUGCS's `A2151w` is centred at (241.1465°, 17.7252°), on NGC 6041 (OpenNGC `GPair`, PGC 56962,
+  whose CF4 group has 278 galaxies).
+- The rule of §18.4.6 is unchanged; existing clusters are byte-identical. The research run counted 13 Hubble-flow
+  candidates near Centaurus, 13 near Abell 1367 and Hercules each and 6 near Hydra; the build report gives the members.
+
+### 19.7 Compact tile encoding (`space-maps.object-tiles/2`)
+
+**What makes `galaxies` large** (2026-11-20 snapshot): of 11.57 MB of tiles, `props` is 4.63 MB, `size` 2.98 MB and
+`position` 2.20 MB, almost all of it the keys of Quantity objects: `{"src":4291,"tier":"catalogue","unit":"mag","v":14.1}`
+is 52 bytes for one number.
+
+**Format /2** (only additive to /1):
+- manifest `format: "space-maps.object-tiles/2"` and a **`quantity_table`**: a list of `[src, tier, unit]`, where `src`
+  is an index into `src_table` (or the string itself when the dataset has no `src_table`) and `unit` is a string or
+  `null` for "no unit";
+- a **compact Quantity** is a JSON array: `[v, q]` or `[v, q, lo, hi]`, `q` an index into `quantity_table`;
+- a Quantity is compacted only when its keys are a subset of `v, lo, hi, unit, src, tier`, `lo` and `hi` are both
+  present or both absent, and `unit` is absent or a string. Anything else (nea's 288 one-sided limits, any extra key)
+  stays an object, so the encoding is lossless by construction;
+- where: `position.dist`, `position.elements.*`, `alt_distances[].dist`, `size.radius`, `size.angular.*`, `props.*`;
+- tiles carry `format: "space-maps.object-tiles/2"`; records are otherwise unchanged (sorted keys, id order).
+
+**Readers.** `_read_tile` and `verify_dataset` expand arrays back to objects (keys in sorted order, the integers and
+floats exactly as stored) before `record_defaults`, the `src_table` and validation, so records in memory and in
+`/api/objects` are identical to /1's. `load_dataset` accepts /1 and /2; an unknown format is a `DatasetError`. Readers
+of /1 are migrated in the same change: `objects_static.py`, `frontend/dev/mock_server.py` (which expands tiles
+itself), `build_objects_smbh.py` (reads the galaxy tiles through `load_dataset`) and the tests that read tile JSON
+directly. Nothing in the browser reads tiles.
+
+**Writer.** `write_dataset(..., compact=True)` writes /2; the default stays /1, so the Phase 0 fixture keeps exercising
+the /1 path. All six build scripts pass `compact=True`: the same code, one argument each.
+
+**Migration proof.** A test loads every dataset from the last /1 commit (`git show`) and from the /2 rebuild and asserts
+equal record lists, and equal `/api/objects` JSON for the seven regression cones.
+
+**Sizes** (prototype on the committed data; the build reports print the real ones):
+
+| Dataset | Manifest | Tiles before → after | Tiles gzipped before → after |
+|---|---|---|---|
+| `galaxies` | 0.90 MB (+ 0.27 MB `quantity_table`) | 11.57 → 5.82 MB | 1.21 → 1.05 MB |
+| `nea-exoplanets` | 0.14 MB (+ 0.27 MB) | 11.50 → 7.37 MB | 1.64 → 1.48 MB |
+| `hr23-clusters` | 0.03 MB | 9.00 → 5.29 MB | 1.34 → 1.24 MB |
+| `nebulae` | 0.05 MB | 0.45 → 0.31 MB | 0.097 → 0.088 MB |
+| `bh-curated`, `smbh-curated` | 0.02 MB each | 0.019 → 0.013, 0.008 → 0.006 MB | small |
+
+`galaxies` lands at about **7.0 MB** (12.47 before). §19.5 and §19.6 add a few hundred `group_radius` and alternative
+distances; the build's size cap drops from 13 MB to 8 MB. The served JSON (and its gzip) is unchanged.
+
+### 19.8 Licensing, applied repository-wide (§18.18 item 1)
+
+**Where users see the values, and what each place shows:**
+
+| Place | Gaia | CF4/EDD | OpenNGC | Change |
+|---|---|---|---|---|
+| 3D credits line | star layer, `nea`, `bh-curated`, `hr23`, nebula PN/HII distances | `galaxies`, `smbh-curated` | `nebulae`, `galaxies`, `smbh-curated` | adds the Milky Way glow: "Milky Way glow: NASA/GSFC Scientific Visualization Studio · Gaia DR2: ESA/Gaia/DPAC" (SVS's own credit line), while the `mw` layer is on and the glow visible |
+| 3D cards | star cards (Gaia row) | galaxy cards | nebula and galaxy cards | **one `dataRow(o)`** in the registry, built from `o.provenance.dataset` and the `src` of the values the card shows, appended by every card: cluster ("Hunt & Reffert 2024, from Gaia DR3 · Credit: ESA/Gaia/DPAC"), exoplanet (NASA Exoplanet Archive; the host's Gaia row stays on the host card), nebula (adds the Gaia credit when its distance is Chornay & Walton's or a Gaia Shen row), SMBH ("Placed at its galaxy: OpenNGC (CC BY-SA 4.0); Cosmicflows-4 (EDD terms)"), stellar black hole (its companion's paper; Gaia when a Gaia value is shown) |
+| 2D Space Maps page (`index.html`) | the fitted sources' Gaia DR3 priors and the hover card's "Catalogue: Gaia DR3" | — | — | a small credits footer: "Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO" with a link to `LICENSE` |
+| Analysis page | Gaia DR3 overlay | — | — | the footer's "Gaia DR3 (ESA)" becomes "Gaia DR3 (Credit: ESA/Gaia/DPAC, CC BY-NC 3.0 IGO)" |
+| "Turn back the sky" | — (XHIP, d3-celestial) | — | — | none |
+
+A registry test walks every kind's card over the example fixtures and asserts a `Data` row naming each credit whose
+values the card shows.
+
+**README:** a "Data and licences" section above "License": the code is MIT; Gaia values are CC BY-NC 3.0 IGO, CF4
+values follow EDD's research-and-education terms, OpenNGC-derived files are CC BY-SA 4.0; Space Maps is run as a
+non-commercial, educational project; see `LICENSE` for exactly which files, and its "Before any commercial use" list.
+
+**`LICENSE`:** item 2 adds the Shen HII distances and the Milky Way glow image (`frontend/data/milkyway.webp`, NASA SVS
+from Gaia DR2); "Before any commercial use" adds both.
+
+### 19.9 Evidence and tiers of every new field
+
+| Field | Tier | Record evidence |
+|---|---|---|
+| Shen distance, Group I (Gaia or M22) | `measured` | `measured` |
+| Shen distance, Group II or III | `inferred` | `derived` |
+| Shen distance, maser row | `measured` | `measured` |
+| Russeil distance when not used | `inferred` (in `alt_distances`) | — |
+| CF4 group distance (`group-member`) | `inferred` | `derived` |
+| `props.group_radius`, computed | `inferred` | — |
+| `props.group_radius`, cited cluster radius | `catalogue` | — |
+| the line-of-sight spread `δ` | illustrative; zero in the Evidence view; a card note | unchanged |
+| the four clusters' σ and radii | `catalogue` (in `clusters.json`, with `src`/`where`) | — |
+| home markers | — (the Sun by definition; the centre from Sgr A\*'s `measured` record) | shown in the Evidence view |
+| the capped lensing look | illustrative | unchanged |
+| planet bands, atmospheres, rings | illustrative | hidden in the Evidence view |
+
+### 19.10 Test plan
+
+**Backend** (`uv run pytest`, offline):
+- `test_objects_static.py`: /2 round trip (every Quantity shape: with and without interval, string `v`, int and float,
+  no unit, one-sided interval stays an object, an extra key stays an object); a /1 dataset still loads; an unknown
+  format fails; `verify_dataset` on /2; the `quantity_table` index out of range fails; `compact=False` output is
+  byte-identical to today's; the provenance of a static source changes after its manifest changes (mtime), in the same
+  response.
+- `test_objects_migration.py` (new): every dataset, /1 (`git show` of the last /1 commit) against /2: equal records and
+  equal `/api/objects` JSON for the seven regression cones.
+- `test_build_nebulae.py`: Shen parsing (kpc → pc, asymmetric errors, 0.00 errors → no interval, `Remarks`, `Group`);
+  the link rule (eligible types, the 120′ guard, score, one region serving the four Rosette records, overrides);
+  evidence per group and remark; the ladder against Russeil (class, then fractional error) with Russeil in
+  `alt_distances`; the expected table of §19.4.3 (Orion 390 pc measured `parallax`, M8 1,220 pc, the Rosette 1,360 pc);
+  the Crab and PNe unchanged; the licence text and `credit`; the report's counts; `--check`.
+- `test_build_galaxies.py`: the `1PGC` join; `group_radius` (rms, pairs, the cited radii for the eight clusters); the
+  candidate only for TF/FP-only galaxies; the win condition both ways; measured or SN Ia galaxies untouched; the four new
+  clusters (σ, radius, membership on synthetic rows and counts on the snapshot); the size budget (≤ 8 MB); `--check`.
+- `test_build_smbh.py`: NGC 4889\* follows its host's new distance; the rescale factor; `--check`.
+- `test_online.py` (marked `online`, skipped here); `conftest.py`: skipped without `--online`, run with it.
+- `test_objects_api.py`: `--check` on all six datasets; the Orion and M8 cones return the new distances; a Coma cone
+  returns NGC 4889 at the group distance.
+
+**Frontend** (`node --test frontend/tests/*.test.mjs`):
+- `scene3d-registry.test.mjs`: `EVIDENCE_HIDES_FEATURES` true and the sphere features per planet in both views;
+  `dataRow` for every kind over the fixtures; the nebula card's "not used" rows and Shen notes; the group-member note
+  with the depth sentence; the SMBH card's "too small to draw" text.
+- `scene3d-objects.test.mjs`: `lensingItems` cap (M31\* from the Sun: marker only; at 200 px semi-major: drawn, factor
+  of the drawn size; Sgr A\* inside the Milky Way: uncapped); `smbhVisible` with the parent behind the camera;
+  the line-of-sight spread (deterministic, within ±`group_radius`, zero in the Evidence view, no spread without
+  `group_radius`); `homeMarkers` (cosmos, the galaxy-frame fade, the 30 px merge, the Evidence view).
+- `scene3d-speed.test.mjs` (new): the scripted trips of §19.3.6.
+
+### 19.11 Work split
+
+`scene3d.js` has one owner: slice R.
+
+| Slice | Model | Files (exclusive) | Depends on |
+|---|---|---|---|
+| A. Tile format /2, provenance reload | Sonnet | `objects.py` (format constants), `objects_static.py`, `frontend/dev/mock_server.py` (tile expansion), the one `compact=True` argument in all six build scripts, all six `frontend/data/objects/*/` rebuilds, `test_objects_static.py`, `test_objects_migration.py` (new), tests that read tile JSON | this section |
+| O. `online` marker | Sonnet, in parallel with A | `pyproject.toml` (markers), `backend/tests/conftest.py`, `backend/tests/test_online.py` | — |
+| N. HII distances | Sonnet, after A | `build_objects_nebulae.py`, `backend/data/sources/nebulae/**`, `frontend/data/objects/nebulae/**`, `test_build_nebulae.py`, nebula fixtures | A |
+| G. Group distances, four clusters, SMBH rebuild | Sonnet, after A, in parallel with N | `build_objects_galaxies.py`, `backend/data/sources/galaxies/**` (I write the four `clusters.json` entries), `frontend/data/objects/galaxies/**`, `build_objects_smbh.py`, `frontend/data/objects/smbh-curated/**`, `test_build_galaxies.py`, `test_build_smbh.py`, galaxy fixtures | A |
+| F. Frontend pure modules | Sonnet, in parallel with A, N, G | `scene3d-registry.js`, `scene3d-objects.js`, `scene3d-nav.js` (if the speed fix lands there), their tests, `scene3d-speed.test.mjs` | this section |
+| R. Renderer and pages | Sonnet, after F | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d-card.js`, `scene3d.html`, `scene3d.css`, `index.html`, `analysis.html` and their CSS | F; N's and G's data for the checks |
+| D. Docs, licences, integration, review | me | this doc, `docs/technical-reference.md`, `README.md`, `LICENSE`, `test_objects_api.py` | all |
+
+Haiku runs both suites and `--check` on all six datasets after each slice.
+
+Commits: (1) this design; (2) tile format /2 and the six rebuilds; (3) the `online` marker; (4) HII distances;
+(5) group distances, the four clusters and the SMBH rebuild; (6) frontend pure modules; (7) renderer and pages;
+(8) docs, README and `LICENSE`.
+
+### 19.12 Browser checks
+
+On a fresh backend (or `--reload`), the real app in a foreground tab with real-time rAF; frame times before (the
+current `main`) and after, on the same patches:
+- **M31 rings from the Sun** (10.6847, 41.2690): two markers on M31, no rings; flying in, the look appears at about
+  180 px semi-major; the M31\* card's text.
+- **Virgo up close** (M87, then 2 Mpc out sideways): group members spread in depth, not a sheet; the Evidence view
+  shows the sheet at the group distance; a member's card note.
+- **An elliptical glow close up** (M87 at 3 radii): no visible banding.
+- **The frame switch HUD** (Sun → M87, Sun → TRAPPIST-1 e): no tiny speed values mid-trip.
+- **The Sun marker in `cosmos`**: from Virgo one "Milky Way · the Sun is here" marker; at 100 kpc the two markers and
+  labels; picking each.
+- **The Evidence view on Jupiter and Saturn**: plain discs, no ring.
+- **Orion (83.82, −5.39) and M8 (270.9, −24.38)**: the new distances, measured, with Russeil as not used; the Data row
+  with the Gaia credit (M8).
+- **One Centaurus-cluster galaxy**: at the Cen 30 group distance with the cited radius, derived, with the note.
+- **Regression:** TRAPPIST-1, the Pleiades, Orion, the Galactic Centre, M31, M87 (including the flight into
+  `cosmos`), the LMC across the 60/40 kpc boundary; the Evidence view at each; the credits line at 375, 768 and 1280
+  px, and the 2D page's and analysis page's credits.
+
+### 19.13 Open questions
+
+1. **Shen's maser rows.** 22 of Shen's 459 rows take their distance from a VLBI maser parallax "as adopted there", not
+   from Gaia. *Recommendation:* use them (`parallax`, `measured`, not Gaia-licensed), because they are the
+   catalogue's own adopted value and the better measurement; without them Orion would take a single-star region next
+   door at 360 pc. The alternative is Gaia rows only, with Orion staying at Russeil's 400 pc.
+2. **Evidence of a Shen distance.** *Recommendation:* Group I (several exciting stars with consistent distances, "ought
+   to be reliable") `measured`; Groups II and III (one star carries the placement) `derived`, which also lets the
+   ladder compare them with Russeil on precision. Alternatives: all `measured` (as the PN central stars), or all
+   `derived`.
+3. **The CF4 group rule.** *Recommendation:* as §19.5: TF/FP-only galaxies, groups of `Ngal ≥ 2`, interval widened by
+   the rms projected member radius, the group wins on fractional error (1,655 galaxies). Alternatives: `Ngal ≥ 5`
+   (about 880), or no widening (understates the error).
+4. **The sheet fix.** *Recommendation:* the illustrative line-of-sight spread within `group_radius` in the normal view,
+   exact group distance in the Evidence view, a card note (§19.3.4). The alternative is to keep the sheet and add only
+   the note, which leaves 1,800 records drawn as flat planes.
+5. **Encoding scope.** *Recommendation:* `compact=True` on all six datasets (one argument each; about 15 MB saved in
+   the repository; the migration test covers each). The alternative is `galaxies` only.
+6. **The `online` marker.** *Recommendation:* implement it with the four live smoke tests of §19.3.2, which catch an
+   upstream changing a pinned table. The alternative is to delete the README sentence.

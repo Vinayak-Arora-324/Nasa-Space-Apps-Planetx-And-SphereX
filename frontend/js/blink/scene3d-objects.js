@@ -151,6 +151,27 @@
 //       item 'Milky Way · the Sun is here' when they are under HOME_MERGE_PX (30) apart on screen. Labels and picks are the renderer's to draw.
 //   card ctx.lensing  { enlarged, factor, truePx, markerOnly?, parentName? } (scene3d-registry.js documents the notes); ctx.parentName as before
 //
+// PHASE 5 (docs/object-framework.md section 20, decisions 20.17)
+//   store.mjd                       the drawn date (TT MJD): query.mjd after ingest (J2000 without one), then whatever setTime was given
+//   store.setTime(mjd, { hosts }) -> bool   re-draws every mover in place (rec.sysAu / rec.galPc keep their array identity; rec.orbit is updated): hosts is a Set or array of
+//       host keys, the Sun always; other hosts keep their last state and are brought to the current date when they are passed. Earth is evaluated first; a Sun-hosted galPc is
+//       (sysAu - drawn Earth) / AU_PER_PC, the Sun's own marker included. setTime(query.mjd) after ingest changes nothing. true when anything moved
+//   store.mover(id) -> mover | null (scene3d-motion.js; .elements for a SkyBoT body, for oscPath and the card);  store.validity(id, mjd = store.mjd) -> moverValidity | { ok: true, reason: null }
+//   store.motionItems(visible) -> [{ kind, model, illustrative, valid }]   feed for motionSummary (re-exported here); illustrative: record evidence illustrative or invalid, an assumed phase, or beyond its range
+//   store.placement(id).greyed      the record is beyond its valid range (rec.greyed is moverOk, the allocation-free moverValidity(...).ok)
+//   GREYED     visibleObjects: such an entry has entry.greyed = true in the normal view and is NOT in the list in the Evidence view (it still counts: groupState's `extra`,
+//              visibleCounts). entry.motion = 'ephem' | 'kepler' | 'orbit' and entry.illustrative = true (record evidence illustrative or an assumed phase) mark a moving record.
+//              markerPoints draws a greyed marker at GREY_ALPHA (0.35) of its alpha with greyRgb(colour) (the points are floats, so the style is in the data);
+//              labelCandidates: a greyed entry's text ends ' (extrapolated)' (no glyph) and the item has greyed: true; a moving illustrative one (not greyed) ends ' ◌';
+//              pickObjects: the candidate has greyed: true. Greyed means beyond the valid range and nothing else.
+//   groupState(store, visible, cam, pxPerRad, GROUP_PX = 8, { layers, evidence }?)   section 20.8: built from EVERY layer-on record of the host (store.recs; opts.layers, else the
+//       layers of the last visibleObjects call, else all on; opts.evidence, else store.evidence), whatever its evidence or validity; the spread is rec.orbitAu = a (1 + e) for an orbit
+//       record, the drawn |r| for a state record. Each group also has { evidence, hollow, hidden, extra }: evidence is the host star record's (else measured: a Gaia or XHIP
+//       star, the Sun); hollow when derived; hidden in the Evidence view when illustrative. markerPoints draws a grouped host solid or hollow and not at all when hidden;
+//       labelCandidates and pickObjects skip a hidden group (its members stay undrawn). extra = { kind: n } the records the HUD must still count (see visibleCounts)
+//   visibleCounts(visible, groups = null)   with the groups, adds each group's `extra` (a grouped system's records the Evidence view does not draw one by one, and greyed records
+//       the Evidence view hides): "7 exoplanets, on their stars"; the renderer passes this._groups
+//
 // STAR CARDS (section 16.8)
 //   mergeStarSystem(system, rec) -> system'   the star model's `system` input for a star that has an archive star record (rec) and
 //       maybe a Gaia /api/system payload. Per row (teff_k, radius_rsun, lum_lsun, mass_msun, age_gyr, spectral_type) the value with
@@ -203,13 +224,25 @@
 import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance, preferredFields, isSupermassive, isMilkyWay, GAIA_CREDIT } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
 import { radecToXyz, smoothstep, KM_PER_AU } from './scene3d-math.js';
-import { orbitPlacement, J2000_MJD, hashUnit } from './scene3d-orbits.js';
+import { orbitPlacement, J2000_MJD, hashUnit, phaseSigmaAt } from './scene3d-orbits.js';
+import { compileMover, evalMover, moverValidity, motionSummary, WINDOW_DAYS, PHASE_SIGMA_MAX_DEG } from './scene3d-motion.js';
 import { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, relOfEntry, nebulaItem, projectAxes } from './scene3d-nebula.js';
 import { galaxyItem, milkyWayItem, galaxyFade, galacticAxes } from './scene3d-galaxy.js';
+export { motionSummary };
 export { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, nebulaItem, projectAxes, galaxyItem, milkyWayItem, galaxyFade, preferredStarDistance };
 
 const { AU_PER_PC } = F;
-const SUN = 'ss:sun', EARTH = 'ss:earth';
+const SUN = 'ss:sun', EARTH = 'ss:earth', MJD0 = 2400000.5, D2R = Math.PI / 180;
+export const GREY_ALPHA = 0.35;   // a greyed (extrapolated) marker is drawn at this share of its alpha, desaturated (section 20.5, 20.17 item 2)
+/** The desaturated colour of a greyed marker: 80 % of the way to its own luma. */
+export const greyRgb = (c) => { const l = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]; return [c[0] * 0.2 + l * 0.8, c[1] * 0.2 + l * 0.8, c[2] * 0.2 + l * 0.8]; };
+const trueAnomaly = (E, e) => 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2));
+/** moverValidity(m, mjd).ok without the allocation (the per-frame path); a test keeps the two equal. */
+function moverOk(m, mjd) {
+  if (m.model === 'kepler') return Math.abs(mjd + MJD0 - m.epochJd) <= WINDOW_DAYS;
+  if (m.model === 'orbit') { if (m.plan.source === 'assumed') return true; const s = phaseSigmaAt(m.plan, mjd); return s === null || s <= PHASE_SIGMA_MAX_DEG; }
+  return true;
+}
 const kindOrder = () => new Map(kinds().map((s, i) => [s.kind, i]));
 const hasXyz = (p) => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite);
 
@@ -237,10 +270,71 @@ export class ObjectStore {
   _clear() {
     this.byId = new Map(); this.byKind = new Map(); this.recs = []; this._place = new Map(); this.stars = new Map();
     this.earth = null; this.query = null; this.kindStatus = {}; this.skipped = 0; this._earthAu = [0, 0, 0]; this._idx = null;
+    this.mjd = null; this._movers = []; this._sunRecs = []; this._earthRec = null; this._scr = [0, 0, 0]; this._layers = null;
   }
   get hasSolar() { return !!this.earth; }
   get(id) { return this.byId.get(id) || null; }
-  placement(id) { const r = this._place.get(id); return r ? { sysAu: r.sysAu, galPc: r.galPc, dir: r.dir, orbit: r.orbit, losPc: r.galPcSpread && !this._evidence ? r.losPc : 0 } : null; }
+  placement(id) { const r = this._place.get(id); return r ? { sysAu: r.sysAu, galPc: r.galPc, dir: r.dir, orbit: r.orbit, losPc: r.galPcSpread && !this._evidence ? r.losPc : 0, greyed: r.greyed } : null; }
+  /** The record's mover (scene3d-motion.js: model 'ephem' | 'kepler' | 'orbit', and .elements for a kepler one), or null when it does not move. */
+  mover(id) { const r = this._place.get(id); return r ? r.mover : null; }
+  /** moverValidity of the record at mjd (default: the drawn date); { ok: true, reason: null } for a record without a mover. */
+  validity(id, mjd = this.mjd) { const r = this._place.get(id); return r && r.mover && Number.isFinite(mjd) ? moverValidity(r.mover, mjd) : { ok: true, reason: null }; }
+  /** The items motionSummary wants, from visibleObjects entries: [{ kind, model, illustrative, valid }] for the entries that move. */
+  motionItems(visible) {
+    const out = [];
+    for (const e of visible) {
+      const r = this._place.get(e.id);
+      if (!r || !r.mover) continue;
+      out.push({ kind: r.kind, model: r.mover.model, illustrative: r.o.evidence === 'illustrative' || r.o.evidence === 'invalid' || !!r.mover.assumed || r.greyed, valid: !r.greyed });
+    }
+    return out;
+  }
+  /**
+   * Draws every mover at mjd (TT MJD), in place: rec.sysAu and rec.galPc keep their array identity, rec.orbit is updated, rec.greyed follows the validity. Only records
+   * whose host is in `hosts` (a Set or an array of host keys; the Sun always) are evaluated; the others keep their last state and are evaluated at the then-current date
+   * the next time their host is passed. Earth is evaluated first and a Sun-hosted galPc is (sysAu - Earth's drawn sysAu) / AU_PER_PC (the Sun's own marker included).
+   * setTime(query.mjd) after ingest changes nothing. Returns true when anything moved. store.mjd is the drawn date afterwards.
+   */
+  setTime(mjd, { hosts = null } = {}) {
+    if (!Number.isFinite(mjd)) return false;
+    const want = hosts instanceof Set ? hosts : Array.isArray(hosts) ? new Set(hosts) : null;
+    let moved = false, earthMoved = false;
+    const E = this._earthRec;
+    if (E && E.mover && E.evalMjd !== mjd) { this._evalRec(E, mjd); earthMoved = moved = true; }
+    for (const r of this._movers) {
+      if (r === E || r.evalMjd === mjd) continue;
+      if (r.host !== SUN && !(want && (want.has(r.host) || want.has(r.rawHost)))) continue;
+      this._evalRec(r, mjd); moved = true;
+    }
+    if (earthMoved) for (const r of this._sunRecs) this._galSun(r);
+    this.mjd = mjd;
+    return moved;
+  }
+  _galSun(r) {
+    const e = this._earthAu, s = r.sysAu; if (!s) return;
+    const g = r.galPc || (r.galPc = [0, 0, 0]);
+    g[0] = (s[0] - e[0]) / AU_PER_PC; g[1] = (s[1] - e[1]) / AU_PER_PC; g[2] = (s[2] - e[2]) / AU_PER_PC;
+  }
+  _evalRec(r, mjd) {
+    const m = r.mover;
+    if (m.model === 'orbit' && r.orbit) { this._updateOrbit(r, mjd); }
+    else if (r.sysAu) { const S = evalMover(m, mjd, this._scr), a = r.sysAu; a[0] = S[0]; a[1] = S[1]; a[2] = S[2]; }
+    if (r.sysAu) {
+      if (r.host === SUN) this._galSun(r);
+      else { const h = r.host ? this.hostPc(r.host) : null; if (h) { const g = r.galPc || (r.galPc = [0, 0, 0]); g[0] = h[0] + r.sysAu[0] / AU_PER_PC; g[1] = h[1] + r.sysAu[1] / AU_PER_PC; g[2] = h[2] + r.sysAu[2] / AU_PER_PC; } }
+    }
+    r.evalMjd = mjd; r.greyed = !moverOk(m, mjd);
+  }
+  _orbitFromMover(r, mjd) {   // the orbitPlacement-shaped object, built from the compiled plan
+    const plan = r.mover.plan, xyz = evalMover(r.mover, mjd, [0, 0, 0]), E = plan.E, e = plan.e;
+    r.orbit = { xyzAu: xyz, assumed: { ...plan.assumed }, phaseSource: plan.source, phaseSigmaDeg: phaseSigmaAt(plan, mjd),
+      used: { ...plan.used, trueAnomaly: trueAnomaly(E, e) / D2R, r: plan.a * (1 - e * Math.cos(E)) } };
+  }
+  _updateOrbit(r, mjd) {
+    const plan = r.mover.plan, o = r.orbit, S = evalMover(r.mover, mjd, o.xyzAu), E = plan.E, e = plan.e;
+    r.sysAu[0] = S[0]; r.sysAu[1] = S[1]; r.sysAu[2] = S[2];
+    o.phaseSigmaDeg = phaseSigmaAt(plan, mjd); o.used.trueAnomaly = trueAnomaly(E, e) / D2R; o.used.r = plan.a * (1 - e * Math.cos(E));
+  }
   /**
    * The Evidence view flag of the placements (section 19.3.4): records placed at a group distance with props.group_radius (and the black holes of such a galaxy)
    * are drawn at D + losOffsetPc in the normal view and at the exact distance D when `on`. Re-points every spread record's galPc (cheap; a no-op when the flag
@@ -271,7 +365,7 @@ export class ObjectStore {
     for (const rec of this.recs) {
       if (!rec.rawHost || rec.rawHost === SUN) continue;
       rec.host = this.resolveHost(rec.rawHost); rec.parent = this.resolveHost(rec.o.parent || rec.rawHost);
-      rec.galPc = null; this._placeRecord(rec, this._earthAu);
+      this._placeRecord(rec, this._earthAu);
     }
   }
   _index() {   // children by resolved parent and star records by resolved key, rebuilt after ingest and setHostResolver
@@ -299,6 +393,8 @@ export class ObjectStore {
     const m = payload && typeof payload.schema === 'string' ? /^space-maps\.objects\/(\d+)/.exec(payload.schema) : null;
     if (!m || Number(m[1]) !== SCHEMA_MAJOR) return { ok: false, error: 'Objects need a newer page; reload' };
     this.query = payload.query || null; this.kindStatus = payload.kinds || {};
+    const payloadMjd = this.query && Number.isFinite(this.query.mjd) ? this.query.mjd : null;
+    this.mjd = payloadMjd === null ? J2000_MJD : payloadMjd;
     let unknownKinds = 0;
     const accepted = [];
     for (const o of Array.isArray(payload.objects) ? payload.objects : []) {
@@ -315,10 +411,20 @@ export class ObjectStore {
     const e = this._earthAu = this.earth && hasXyz(this.earth.position.xyz_au) ? this.earth.position.xyz_au : [0, 0, 0];
     for (const o of accepted) {
       const rec = { o, id: o.id, kind: o.kind, rawHost: o.host || null, host: this.resolveHost(o.host), parent: this.resolveHost(o.parent || o.host),
-        spec: kindSpec(o.kind), sysAu: null, galPc: null, dir: null, orbit: null };
+        spec: kindSpec(o.kind), sysAu: null, galPc: null, dir: null, orbit: null, mover: null, evalMjd: null, greyed: false, orbitAu: null };
+      try { rec.mover = compileMover(o, { payloadMjd }); } catch (_) { rec.mover = null; }
       this._placeRecord(rec, e);
+      if (rec.mover) {   // evaluated where ingest put it: the payload's epoch (a state record: the epoch its mover was anchored at)
+        rec.evalMjd = rec.mover.model === 'orbit' ? this.mjd : rec.mover.payloadMjd;
+        rec.greyed = !moverOk(rec.mover, rec.evalMjd);
+        if (rec.mover.model === 'orbit') rec.orbitAu = rec.mover.plan.a * (1 + rec.mover.plan.e);
+        this._movers.push(rec);
+      }
+      if (rec.host === SUN) this._sunRecs.push(rec);
       this.recs.push(rec); this._place.set(o.id, rec);
     }
+    this._earthRec = this._place.get(EARTH) || null;
+    if (this._earthRec && this._earthRec.sysAu) this._earthAu = this._earthRec.sysAu;   // moves in place with setTime
     this._spread();
     return { ok: true, unknownKinds };
   }
@@ -329,14 +435,18 @@ export class ObjectStore {
       if (rec.host === SUN) rec.galPc = [(p.xyz_au[0] - earthAu[0]) / AU_PER_PC, (p.xyz_au[1] - earthAu[1]) / AU_PER_PC, (p.xyz_au[2] - earthAu[2]) / AU_PER_PC];
       else {
         const h = rec.host ? this.hostPc(rec.host) : null;
-        if (h) rec.galPc = [h[0] + p.xyz_au[0] / AU_PER_PC, h[1] + p.xyz_au[1] / AU_PER_PC, h[2] + p.xyz_au[2] / AU_PER_PC];
+        if (h) rec.galPc = [h[0] + p.xyz_au[0] / AU_PER_PC, h[1] + p.xyz_au[1] / AU_PER_PC, h[2] + p.xyz_au[2] / AU_PER_PC]; else rec.galPc = null;
       }
     } else if (p.model === 'orbit') {
-      if (rec.orbit === null) rec.orbit = orbitPlacement(rec.o, this.query && Number.isFinite(this.query.mjd) ? this.query.mjd : J2000_MJD);
+      if (rec.orbit === null) {
+        if (rec.mover && rec.mover.model === 'orbit') this._orbitFromMover(rec, this.mjd);
+        else rec.orbit = orbitPlacement(rec.o, this.mjd);
+      }
       if (!rec.orbit) return;
-      rec.sysAu = rec.orbit.xyzAu.slice(0, 3);
+      rec.sysAu = rec.sysAu || [0, 0, 0];
+      rec.sysAu[0] = rec.orbit.xyzAu[0]; rec.sysAu[1] = rec.orbit.xyzAu[1]; rec.sysAu[2] = rec.orbit.xyzAu[2];
       const h = rec.host ? this.hostPc(rec.host) : null;
-      if (h) rec.galPc = [h[0] + rec.sysAu[0] / AU_PER_PC, h[1] + rec.sysAu[1] / AU_PER_PC, h[2] + rec.sysAu[2] / AU_PER_PC];
+      if (h) { const g = rec.galPc || (rec.galPc = [0, 0, 0]); g[0] = h[0] + rec.sysAu[0] / AU_PER_PC; g[1] = h[1] + rec.sysAu[1] / AU_PER_PC; g[2] = h[2] + rec.sysAu[2] / AU_PER_PC; } else rec.galPc = null;
     } else if (p.model === 'fixed' && Number.isFinite(p.ra) && Number.isFinite(p.dec)) {
       const d = p.dist ? toPc(p.dist) : null;
       if (Number.isFinite(d)) rec.galPc = radecToXyz(p.ra, p.dec, d);
@@ -391,12 +501,14 @@ export const presenceOf = (e) => (e.galaxyFade != null ? e.galaxyFade : e.mwFade
 export function visibleObjects(store, ctx) {
   if (typeof store.setEvidence === 'function') store.setEvidence(!!ctx.evidence);   // the group-member line-of-sight spread is off in the Evidence view
   const out = [], layers = ctx.layers || {}, ev = { evidence: !!ctx.evidence, layers };
+  store._layers = layers;   // groupState reads the layers the last visibleObjects call used when it is not given its own
   const gf = ctx.galaxyFade != null ? ctx.galaxyFade : ctx.cam ? galaxyFade(ctx.cam) : null, hostedFrame = F.isHosted(ctx.frame);
   for (const r of store.recs) {
     const spec = r.spec, renderer = rendererOf(spec, ctx.frame, r.o);
     if (!renderer) continue;
     if (spec.layer && layers[spec.layer] === false) continue;
     if (!spec.visible(r.o, ev)) continue;
+    if (r.greyed && ev.evidence) continue;   // beyond its valid range: an extrapolation, illustrative, so not in the Evidence view (section 20.17 item 2)
     const hasCosmos = !hostedFrame && !!rendererOf(spec, 'cosmos', r.o);
     if (hostedFrame) {
       if (!r.sysAu || !ctx.inHost(r.host)) continue;
@@ -406,6 +518,8 @@ export function visibleObjects(store, ctx) {
       if (spec.galaxyScope === 'cone' && r.o.in_cone !== true && !hasCosmos) continue;   // a record with a cosmos renderer (an SMBH) comes from a sky tile: smbhVisible decides
     }
     const entry = { o: r.o, spec, renderer, id: r.id, kind: r.kind, host: r.host, sysAu: r.sysAu, galPc: r.galPc, dir: r.dir };
+    if (r.greyed) entry.greyed = true;
+    if (r.mover) { entry.motion = r.mover.model; if (r.o.evidence === 'illustrative' || r.mover.assumed) entry.illustrative = true; }
     if (!r.galPc && r.dir && !hostedFrame) entry.atInfinity = true;
     if (ctx.frame === 'galaxy' && gf != null) {   // section 18.5.4
       if (!hasCosmos) entry.galaxyFade = gf;
@@ -456,33 +570,51 @@ export function framePos(entry, cam) {
 export const fromYouFor = (entry, rel, fmt) => (!entry || entry.atInfinity || !rel ? null : fmt(rel));
 
 /** Counts of the visible entries by kind: { counts: {kind: n}, direct: {kind: n of them direction only} } for the HUD (galaxy frame). */
-export function visibleCounts(visible) {
+export function visibleCounts(visible, groups = null) {
   const counts = {}, direct = {};
   for (const e of visible) { counts[e.kind] = (counts[e.kind] || 0) + 1; if (e.atInfinity) direct[e.kind] = (direct[e.kind] || 0) + 1; }
+  // section 20.8: the records of a grouped system the Evidence view does not draw one by one still exist ("7 exoplanets, on their stars"), and a greyed record
+  // hidden in the Evidence view is counted too (groupState's `extra`)
+  if (groups) for (const g of Object.values(groups)) if (g.extra) for (const [k, n] of Object.entries(g.extra)) counts[k] = (counts[k] || 0) + n;
   return { counts, direct };
 }
 
-export function groupState(store, visible, cam, pxPerRad, GROUP_PX = 8) {
+export function groupState(store, visible, cam, pxPerRad, GROUP_PX = 8, opts = {}) {
   if (cam.frame !== 'galaxy') return {};
-  const by = new Map();
-  for (const e of visible) {
-    if (e.atInfinity || !e.host || !e.sysAu) continue;   // direction-only entries have no host
-    if (!by.has(e.host)) by.set(e.host, []);
-    by.get(e.host).push(e);
+  const layers = opts.layers || store._layers || {}, evidence = opts.evidence != null ? !!opts.evidence : !!store.evidence;
+  const seen = new Set(visible.map((e) => e.id)), by = new Map();
+  // section 20.8: a group is built from EVERY record of the host whose layer is on, whatever its evidence or validity (existence is measured)
+  for (const r of store.recs) {
+    if (!r.host || !r.sysAu || r.id === EARTH) continue;
+    const spec = r.spec;
+    if (!rendererOf(spec, 'galaxy', r.o) || (spec.layer && layers[spec.layer] === false)) continue;
+    if (spec.galaxyScope === 'cone' && r.o.in_cone !== true && !rendererOf(spec, 'cosmos', r.o)) continue;
+    if (!by.has(r.host)) by.set(r.host, []);
+    by.get(r.host).push(r);
   }
   const out = {}, w = F.worldPc(cam);
   for (const [host, list] of by) {
     const pcPos = store.hostPc(host);
     if (!pcPos) continue;
     let maxR = 0; const byKind = {};
-    for (const e of list) { maxR = Math.max(maxR, Math.hypot(e.sysAu[0], e.sysAu[1], e.sysAu[2])); byKind[e.kind] = (byKind[e.kind] || 0) + 1; }
+    // the spread is the ORBIT SIZE, a (1 + e), for an orbit record and the drawn |r| for a state record, so a system groups at the same distance whatever the date or phase
+    for (const r of list) { maxR = Math.max(maxR, r.orbitAu != null ? r.orbitAu : Math.hypot(r.sysAu[0], r.sysAu[1], r.sysAu[2])); byKind[r.kind] = (byKind[r.kind] || 0) + 1; }
     const dist = Math.hypot(pcPos[0] - w[0], pcPos[1] - w[1], pcPos[2] - w[2]) * AU_PER_PC;
     const name = host === SUN ? 'Solar system' : store.hostName(host), kk = Object.keys(byKind);
     const kind = kk.length === 1 ? kk[0] : null, spec = kind && kindSpec(kind), noun = spec ? spec.noun : null;
     const label = host !== SUN && noun ? `${name} · ${list.length} ${noun[list.length === 1 ? 0 : 1]}` : `${name} · ${list.length}`;
+    // the marker takes the host's evidence: its star record's, else measured (a Gaia or Hipparcos star, the Sun)
+    const star = host === SUN ? null : store.starRecord(host), ev = (star && star.evidence) || 'measured';
+    const grouped = list.length >= (host === SUN ? 2 : 1) && dist > 0 && (maxR / dist) * pxPerRad < GROUP_PX, hidden = evidence && ev === 'illustrative';
+    let extra = null;
+    if (!hidden) for (const r of list) {
+      if (seen.has(r.id) || !(grouped || r.greyed)) continue;   // grouped: all of them are on the marker; resolved: only a greyed record the Evidence view hides
+      if (!extra) extra = {};
+      extra[r.kind] = (extra[r.kind] || 0) + 1;
+    }
     out[host] = {
-      grouped: list.length >= (host === SUN ? 2 : 1) && dist > 0 && (maxR / dist) * pxPerRad < GROUP_PX,
-      count: list.length, byKind, pcPos: pcPos.slice(), name, kind: host === SUN ? null : kind, noun: host === SUN ? null : noun, label,
+      grouped, count: list.length, byKind, pcPos: pcPos.slice(), name, kind: host === SUN ? null : kind, noun: host === SUN ? null : noun, label,
+      evidence: ev, hollow: ev === 'derived', hidden, extra,
     };
   }
   return out;
@@ -517,10 +649,10 @@ export function pickObjects(visible, groups, px, py, maxPx, { project, framePos:
     if (isGrouped(groups, e) || (e.atInfinity && !infinityPickable(skyOf(sky, e))) || presenceOf(e) < GALAXY_PICK_MIN) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
-    if (d <= Math.max(maxPx, reach(e) || 0)) cands.push({ sel: { kind: e.kind, id: e.id }, priority: pickPriority(e), d });
+    if (d <= Math.max(maxPx, reach(e) || 0)) { const c = { sel: { kind: e.kind, id: e.id }, priority: pickPriority(e), d }; if (e.greyed) c.greyed = true; cands.push(c); }
   }
   for (const [host, g] of Object.entries(groups)) {
-    if (!g.grouped || gfade < GALAXY_PICK_MIN) continue;
+    if (!g.grouped || g.hidden || gfade < GALAXY_PICK_MIN) continue;
     const rel = pos({ galPc: g.pcPos, host, group: true }), q = rel && project(rel); if (!q) continue;
     const d = Math.hypot(q[0] - px, q[1] - py);
     if (d <= maxPx) cands.push({ sel: { kind: 'group', id: 'group:' + host }, priority: 10, d });
@@ -534,7 +666,9 @@ export function labelCandidates(visible, groups, { project, framePos: pos, discP
     const L = e.spec.label; if (!L || isGrouped(groups, e) || (e.atInfinity && !infinityPickable(skyOf(sky, e))) || presenceOf(e) < GALAXY_PICK_MIN) continue;
     const rel = pos(e), q = rel && project(rel); if (!q) continue;
     if (L.hideOverDiscPx != null && discPx(e) > L.hideOverDiscPx) continue;
-    const item = { x: q[0], y: q[1], key: L.key(e.o), text: e.o.name };
+    // section 20.4.4, 20.5: a greyed record says so and carries no glyph; a moving record whose placement is illustrative ends in the illustrative glyph
+    const item = { x: q[0], y: q[1], key: L.key(e.o), text: e.greyed ? `${e.o.name} (extrapolated)` : e.motion && e.illustrative ? `${e.o.name} ◌` : e.o.name };
+    if (e.greyed) item.greyed = true;
     const alpha = (e.atInfinity ? skyOf(sky, e) : 1) * presenceOf(e);
     if (e.atInfinity || alpha < 1) item.alpha = alpha;
     if (L.max == null) { out.push(item); continue; }
@@ -544,7 +678,7 @@ export function labelCandidates(visible, groups, { project, framePos: pos, discP
   }
   for (const { max, items } of pools.values()) out.push(...items.sort((a, b) => a.key - b.key).slice(0, max));
   for (const [host, g] of Object.entries(groups)) {
-    if (!g.grouped || gfade < GALAXY_PICK_MIN) continue;
+    if (!g.grouped || g.hidden || gfade < GALAXY_PICK_MIN) continue;
     const rel = pos({ galPc: g.pcPos, host, group: true }), q = rel && project(rel); if (!q) continue;
     const gl = { x: q[0], y: q[1], key: 5, text: g.label || `${g.name} · ${g.count}` };
     if (gfade < 1) gl.alpha = gfade;
@@ -637,7 +771,10 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
     if ((e.renderer !== 'marker' && e.renderer !== 'lensing') || (e.host && groups[e.host] && groups[e.host].grouped)) continue;   // a lensing look keeps its marker (the Evidence view shows only that)
     const rel = framePos(e, cam);
     const pres = presenceOf(e);
-    if (rel && pres > 0) { const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o); put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), pres, e.spec.color(e.o)); }
+    if (rel && pres > 0) {
+      const h = e.spec.markerStyle(e.o) === 'hollow', px = e.spec.markerPx(e.o), c = e.spec.color(e.o);
+      put(rel, markerSize(h ? Math.max(px, HOLLOW_MIN_PX) : px, h), e.greyed ? pres * GREY_ALPHA : pres, e.greyed ? greyRgb(c) : c);   // greyed: beyond its valid range
+    }
   }
   if (items.length) {
     const by = new Map(visible.map((e) => [e.id, e]));
@@ -648,9 +785,9 @@ export function markerPoints(visible, groups, cam, items = [], { groupPx = 8, gr
     }
   }
   for (const [host, g] of Object.entries(groups)) {
-    if (!g.grouped) continue;
+    if (!g.grouped || g.hidden) continue;
     const rel = framePos({ galPc: g.pcPos, host, group: true }, cam), gfa = galaxyFade(cam);
-    if (rel && gfa > 0) put(rel, groupPx, gfa, groupRgb);
+    if (rel && gfa > 0) put(rel, g.hollow ? markerSize(Math.max(groupPx, HOLLOW_MIN_PX), true) : groupPx, gfa, groupRgb);   // a derived host: hollow
   }
   return new Float32Array(out);
 }

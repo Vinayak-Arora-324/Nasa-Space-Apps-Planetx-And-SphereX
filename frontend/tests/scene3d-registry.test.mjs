@@ -770,3 +770,116 @@ test('dataRow (section 19.8): one Data row per card, naming each credit whose va
   // a card never gets two Data rows: the cluster card of a record whose own card already adds one
   assert.equal(R.kindSpec('cluster').card(read('cluster.json'), ctx()).rows.filter((r) => r[0] === 'Data').length, 1);
 });
+
+// ------------------------------------------------------------------ Phase 5 (section 20): the drawn date, validity, phase sources, member stars
+import { compileMover } from '../js/blink/scene3d-motion.js';
+import { GK } from '../js/blink/ephem.js';
+const T0 = 61000, rows = (c) => c.rows.map((r) => r[0]), allText = (c) => [...c.rows.map((r) => `${r[0]} ${r[1]}`), ...(c.notes || [])].join('\n');
+const placeAt = (o, mjd) => { const orb = orbitPlacement(o, mjd); return { sysAu: orb.xyzAu, galPc: null, dir: null, orbit: orb }; };
+
+test('a planet card states the drawn date; off the payload epoch its position is the browser ephemeris anchored to the server, and its distance follows the drawn position', () => {
+  const mars = planet('Mars', { position: { model: 'state', mjd: T0, xyz_au: [1.2, -0.5, -0.27], tier: 'measured', src: 'astropy built-in ephemeris', geo: { ra: 1, dec: 2, dist_au: 1.9 } } });
+  const P = R.kindSpec('planet'), none = P.card(mars, ctx());
+  assert.equal(none.rows.some((r) => r[0] === 'Drawn at'), false, 'no ctx.mjd: the old card');
+  const at = rowOf(P.card(mars, ctx({ mjd: T0 })), 'Drawn at');
+  assert.deepEqual([at[1], at[2], at[3]], [F.fmtDrawnDate(T0), 'measured', 'astropy built-in ephemeris']);
+  const off = P.card(mars, ctx({ mjd: T0 + 100, place: { sysAu: [2, 0, 0] } })), row = rowOf(off, 'Drawn at');
+  assert.equal(row[1], F.fmtDrawnDate(T0 + 100)); assert.equal(row[2], 'measured');
+  assert.equal(row[3], `ERFA plan94/moon98 in the browser (ephem.js), anchored to the server ephemeris at ${F.fmtDrawnDate(T0)}`);
+  assert.deepEqual(rowOf(off, 'Distance from Sun').slice(1, 3), ['2 AU', 'measured']);
+  assert.equal(rowOf(P.card(mars, ctx({ mjd: T0, place: { sysAu: [2, 0, 0] } })), 'Distance from Sun')[1], '1.36 AU', 'at the payload epoch the record\'s own value');
+  assert.equal(R.kindSpec('moon').card({ ...mars, kind: 'moon', name: 'Moon' }, ctx({ mjd: T0 + 1 })).rows[0][0], 'Drawn at');
+});
+
+const GAP = 2400000.5, osc = { epoch_jd: T0 + GAP - 0.5, xyz_au: [2.49, 0.09, 0.02], vxyz_au_d: [0, GK / Math.sqrt(2.5), 0.0005], frame: 'icrf-heliocentric', src: 'IMCCE SkyBoT state vector at its reference epoch', tier: 'catalogue' };
+const skybody = () => small('mp:7', 'asteroid', 'Seven', {}, { position: { model: 'state', mjd: T0, xyz_au: [2.5, 0.1, 0.02], method: 'orbit-propagation', tier: 'catalogue', src: 'SkyBoT', osc }, provenance: { source: 'skybot' } });
+
+test('a small body card: osculating elements from the SkyBoT state (catalogue), the drawn date, and the extrapolation warning first beyond its range (illustrative)', () => {
+  const o = skybody(), mover = compileMover(o, { payloadMjd: T0 }), A = R.kindSpec('asteroid');
+  const c = A.card(o, ctx({ mjd: T0 + 10, mover, validity: { ok: true }, place: { sysAu: [2.4, 0.5, 0.1] } }));
+  assert.equal(c.rows[0][0], 'Drawn at'); assert.equal(c.rows[0][2], 'catalogue'); assert.match(c.rows[0][3], /^two-body propagation of SkyBoT's state vector/);
+  const el = rowOf(c, 'Osculating elements');
+  assert.equal(el[1], `from SkyBoT's state at JD ${osc.epoch_jd.toFixed(1)}`); assert.equal(el[2], 'catalogue'); assert.equal(el[3], osc.src);
+  assert.deepEqual(['a', 'e', 'i', 'Ω', 'ω', 'q', 'Period'].map((l) => !!rowOf(c, l)), [true, true, true, true, true, true, true]);
+  for (const l of ['a', 'e', 'i', 'Ω', 'ω', 'q', 'Period']) assert.equal(rowOf(c, l)[2], 'catalogue');
+  assert.ok(Math.abs(parseFloat(rowOf(c, 'a')[1]) - mover.elements.a) < 0.01);
+  assert.match(rowOf(c, 'Distance from Sun')[1], /^2\.\d+ AU$/); assert.equal(rowOf(c, 'Distance from Sun')[2], 'catalogue');
+  assert.ok(c.rows.some((r) => /^Visual mag \(at /.test(r[0])), 'the magnitude is the payload epoch\'s and says so');
+  assert.equal(c.notes, null); assert.equal(rows(c).includes('Position'), false);
+  // beyond the window
+  const bad = A.card(o, ctx({ mjd: T0 + 500, mover, validity: { ok: false, reason: 'osc-epoch' }, place: { sysAu: [2.4, 0.5, 0.1] } }));
+  assert.deepEqual(bad.rows[0].slice(0, 3), ['Position', `extrapolated beyond its valid range (more than 1 year from its SkyBoT state of ${F.fmtDrawnDate(osc.epoch_jd - GAP)}), illustrative`, 'illustrative']);
+  assert.equal(rowOf(bad, 'Drawn at')[2], 'illustrative'); assert.equal(rowOf(bad, 'Distance from Sun')[2], 'illustrative'); assert.equal(rowOf(bad, 'Osculating elements')[2], 'catalogue');
+  // the Evidence view drops every illustrative row
+  const ev = A.card(o, ctx({ mjd: T0 + 500, mover, validity: { ok: false }, evidence: true, place: { sysAu: [2.4, 0.5, 0.1] } }));
+  assert.equal(ev.rows.some((r) => r[2] === 'illustrative'), false);
+  // the old card is untouched
+  assert.deepEqual(rows(A.card(o, ctx())), ['Distance from Sun', 'Distance from Earth', 'From you', 'Visual mag', 'Class']);
+  const same = A.card(o, ctx({ mjd: T0, mover, earthAu: [1, 0, 0], place: { sysAu: [9, 9, 9] } }));
+  assert.deepEqual(rowOf(same, 'Distance from Sun'), rowOf(A.card(o, ctx()), 'Distance from Sun'), 'at the payload epoch the record\'s own distances');
+});
+
+test('exoplanet phase texts by phase source, with ± at the drawn date, and the light-time note once', () => {
+  const E = R.kindSpec('exoplanet'), f = (o, mjd, extra = {}) => E.card(o, ctx({ mjd, place: placeAt(o, mjd), ...extra }));
+  const tr = exoRec(), c = f(tr, T0), ph = rowOf(c, 'Phase');
+  assert.match(ph[1], /^Phase from the 2016 transit time, ±\d+(\.\d+)?° at this date$/); assert.equal(ph[2], 'measured');
+  assert.equal(c.rows[0][0], 'Drawn at'); assert.equal(rowOf(c, 'Drawn at')[2], 'illustrative'); assert.equal(rowOf(c, 'Drawn at')[1], F.fmtDrawnDate(T0));
+  assert.equal(c.notes.filter((n) => /light time|seen from the Solar System/.test(n)).length, 1);
+  assert.equal(c.notes.some((n) => /today/.test(n)), false, 'the old "today" note is replaced');
+  const sg = orbitPlacement(tr, T0).phaseSigmaDeg, shown = Number(/±(\d+(?:\.\d+)?)°/.exec(ph[1])[1]);
+  assert.ok(Math.abs(shown - sg) / sg < 0.05, 'the sigma of the drawn date');
+  const early = rowOf(f(tr, 15020 + 10), 'Phase')[1], late = Number(/±(\d+(?:\.\d+)?)°/.exec(early)[1]); assert.ok(late > shown * 5, 'the uncertainty grows towards 1900');
+  // a conjunction time that is not a transit
+  assert.match(rowOf(f(exoRec({ props: { ...tr.props, disc_method: q('Radial Velocity', undefined, 'catalogue') } }), T0), 'Phase')[1], /^Phase from the 2016 conjunction time/);
+  // no period interval: the uncertainty is not known
+  const noErr = exoRec({}, { period_d: q(1.510826, 'd', 'measured', NEA + 'x') });
+  assert.equal(rowOf(f(noErr, T0), 'Phase')[1], 'Phase from the 2016 transit time; the phase uncertainty at this date is not known (no period error published)');
+  // no phase epoch at all: an assumed starting point, illustrative
+  const assumed = exoRec({}, { t_conj_mjd: null, period_d: q(5.6, 'd', 'measured', NEA + 'x') }), ca = f(assumed, T0), pa = rowOf(ca, 'Phase');
+  assert.equal(pa[1], 'No published phase epoch: the motion runs at the measured 5.6-day period from an assumed starting point; where it is on its orbit is illustrative'); assert.equal(pa[2], 'illustrative');
+  // beyond 90 degrees: demoted, said first
+  const wide = exoRec({}, { period_d: { ...q(1.510826, 'd', 'measured', NEA + 'x'), lo: 1.4, hi: 1.62 } }), cw = f(wide, T0 + 20000, { validity: { ok: false, reason: 'phase-sigma' } });
+  assert.match(cw.rows[0][1], /^extrapolated beyond its valid range \(phase uncertainty [\d,]+° at this date\), illustrative$/); assert.equal(cw.rows[0][0], 'Position'); assert.equal(cw.rows[0][2], 'illustrative');
+  assert.equal(rowOf(cw, 'Phase')[2], 'illustrative');
+  assert.equal(f(wide, T0 + 20000).rows[0][0], 'Position', 'without ctx.validity the sigma over 90 degrees decides');
+  assert.equal(rowOf(E.card(tr, ctx({ mjd: T0, place: placeAt(tr, T0), evidence: true })), 'Phase')[2], 'measured', 'a measured phase row stays in the Evidence view');
+  // the old call keeps the old notes
+  assert.match(E.card(tr, ctx({ place: placeOf(tr) })).notes[1], /today\.$/);
+});
+
+test('black hole card: the periastron time, the relative-orbit note, and Cyg X-1\'s missing phase epoch', () => {
+  const B = R.kindSpec('black_hole'), el = { t_peri_mjd: q(57438.3, undefined, 'measured', 'El-Badry'), period_d: { ...q(185.59, 'd', 'measured', 'El-Badry Table 1'), lo: 185.58, hi: 185.6 } };
+  const gaia = bhRec({ position: { ...bhRec().position, elements: { ...bhRec().position.elements, ...el } } }), c = B.card(gaia, ctx({ mjd: T0, place: placeAt(gaia, T0) }));
+  assert.match(rowOf(c, 'Phase')[1], /^Phase from the periastron time \(2016\), ±\d+(\.\d+)?° at this date$/); assert.equal(rowOf(c, 'Phase')[2], 'measured');
+  assert.equal(rowOf(c, 'Drawn at')[2], 'measured'); assert.ok(c.notes.some((n) => /relative orbit; the star is held still/i.test(n)));
+  assert.equal(c.notes.filter((n) => /seen from the Solar System/.test(n)).length, 1);
+  const cyg = bhRec({ id: 'bh:Cyg X-1', name: 'Cyg X-1', evidence: 'illustrative', position: { ...bhRec().position, tier: 'illustrative', elements: { period_d: q(5.599829, 'd', 'measured', 'x'), a_au: q(0.2), e: q(0.02) } } });
+  const cc = B.card(cyg, ctx({ mjd: T0, place: placeAt(cyg, T0) }));
+  assert.match(rowOf(cc, 'Phase')[1], /^No published phase epoch: the motion runs at the measured 5\.6-day period from an assumed starting point; where it is on its orbit is illustrative$/);
+  assert.equal(rowOf(cc, 'Drawn at')[2], 'illustrative');
+  assert.equal(B.card(sgrRec(), ctx({ mjd: T0 })).rows.some((r) => r[0] === 'Phase' || r[0] === 'Drawn at'), false, 'a fixed black hole does not move');
+  assert.equal(B.card(gaia, ctx({ place: placeAt(gaia, T0) })).rows.some((r) => r[0] === 'Phase'), false);
+});
+
+test('cluster card: member rows from the member file, loading, error, and beyond 500 pc', () => {
+  const C = R.kindSpec('cluster'), within = cl({ assets: { members: 'members/4423.json' } });
+  const loaded = C.card(within, ctx({ members: { n: 1721, nP50: 1014, highlighted: 612 } }));
+  const m = rowOf(loaded, 'Members (HR24)');
+  assert.deepEqual(m.slice(0, 3), ['Members (HR24)', '1,721 · 1,014 with probability ≥ 0.5', 'catalogue']); assert.match(m[3], /J\/A\+A\/686\/A42\/members/); assert.match(m[3], /Credit: ESA\/Gaia\/DPAC/);
+  assert.deepEqual(rowOf(loaded, 'In this view').slice(1, 3), ['612 highlighted', 'catalogue']);
+  assert.ok(loaded.notes.includes('Members outside the star layer (beyond the cone, or fainter than its limit) are not drawn.'));
+  assert.match(rowOf(loaded, 'Data')[1], /Credit: ESA\/Gaia\/DPAC/); assert.equal(rowOf(loaded, 'Members')[1], '1,250', 'the catalogue count row stays');
+  assert.equal(rowOf(C.card(within, ctx({ members: { loading: true } })), 'Members (HR24)')[1], 'loading…');
+  assert.equal(rowOf(C.card(within, ctx()), 'Members (HR24)')[1], 'loading…', 'a cluster with a member file and no data yet is loading');
+  assert.equal(rowOf(C.card(within, ctx({ members: { error: 'x' } })), 'Members (HR24)')[1], 'could not be loaded');
+  assert.equal(rowOf(C.card(within, ctx({ members: { loading: true } })), 'In this view'), undefined);
+  assert.equal(rowOf(C.card(within, ctx({ members: { n: 5, nP50: 0, highlighted: 0 }, evidence: true })), 'In this view')[1], '0 highlighted', 'catalogue rows stay in the Evidence view');
+  const far = cl({ position: { ...cl().position, dist: q(800, 'pc', 'measured', 'HR23') } });
+  assert.deepEqual(rowOf(C.card(far, ctx()), 'Member stars').slice(1, 3), ['shown for clusters within 500 pc', 'catalogue']); assert.equal(rowOf(C.card(far, ctx()), 'Members (HR24)'), undefined);
+  assert.equal(rowOf(C.card(cl(), ctx()), 'Member stars'), undefined, 'a cluster within 500 pc without a file says nothing');
+});
+
+test('the star epoch row: the stars stay at their catalogue epoch', () => {
+  assert.deepEqual(R.starEpochRow().slice(0, 3), ['Position epoch', '2016.0 (Gaia DR3)', 'catalogue']);
+  assert.equal(R.starEpochRow(2015.5, 'Hipparcos-2')[1], '2015.5 (Hipparcos-2)');
+});

@@ -27,9 +27,15 @@
 //   fmtDistPc(pc) -> '3.2 AU' (below 0.02 pc) | '350 pc · 1,140 ly' | '49.4 kpc · 161,000 ly' | '16.9 Mpc · 55.0 million ly' ('… billion ly' from
 //                    1,000 million); 3 significant figures; 'n/a' when not finite or negative
 //   fmtSpeedPc(pcPerS) -> '0' | '206 AU/s · ≈ 0.4× c' | '2 pc/s · ≈ 6.5 hundred million× c'-style: AU/s (below 0.02 pc/s), pc/s, kpc/s or Mpc/s, then ' · ≈ ' and fmtTimesC
+//
+// PHASE 5 (docs/object-framework.md section 20): dates and time spans on cards
+//   fmtDrawnDate(mjd) -> '20 Nov 2026 14:00 UT'   the drawn date (a TT MJD) as UT to the minute, in the Julian calendar before 1582 (skyclock.clockText); 'n/a' when not finite
+//   fmtSpan(days) -> '45 days' | '1.3 yr' | '6 hours' | '1 day'   a span of days (sign ignored): minutes below an hour, hours below a day, days below a year (365.25 d), else
+//                    years to 2 significant figures ('1.3 yr', '12 yr', '120 yr'); 'n/a' when not finite
 //   LY_PER_PC, AU_PER_PC re-stated here are the same constants as scene3d-math.js and scene3d-frames.js
 
 import { fmtTimesC, C_PC_PER_S } from './scene3d-nav.js';
+import { clockText } from './skyclock.js';
 
 export const SCI_HI = 1e5, SCI_LO = 1e-3;
 const AU_PER_PC = 206264.80624709636, LY_PER_PC = 3.2615638;
@@ -110,4 +116,22 @@ export function fmtSpeedPc(pcPerS) {
   if (pcPerS < 999.5) return `${fmtNum(pcPerS)} pc/s${tail}`;
   if (pcPerS < 999.5e3) return `${fmtNum(pcPerS / 1e3)} kpc/s${tail}`;
   return `${fmtNum(pcPerS / 1e6)} Mpc/s${tail}`;
+}
+
+// ------------------------------------------------------------------ Phase 5: the drawn date and spans (section 20.4, 20.5)
+const MJD0 = 2400000.5;
+/** A TT MJD as 'D Mon YYYY HH:MM UT' (skyclock.clockText: UT = TT - deltaT, whole minutes, Julian calendar before 1582 October 15). */
+export function fmtDrawnDate(mjd) {
+  if (!fin(mjd)) return 'n/a';
+  const t = clockText({ jd: mjd + MJD0, rate: 0, playing: false });
+  return `${t.date} ${t.time}`;
+}
+/** A span of days as text, by value: '30 min', '6 hours', '1 day', '45 days', '1.3 yr'. */
+export function fmtSpan(days) {
+  if (!fin(days)) return 'n/a';
+  const d = Math.abs(days), two = (v) => fmtNum(v, 2), unit = (txt, one, many) => `${txt} ${txt === '1' ? one : many}`;
+  if (d < 1 / 24) return `${two(d * 1440)} min`;
+  if (d < 1) return unit(two(d * 24), 'hour', 'hours');
+  if (d < 365.25) return unit(d < 10 ? two(d) : String(Math.round(d)), 'day', 'days');
+  return `${two(d / 365.25)} yr`;
 }

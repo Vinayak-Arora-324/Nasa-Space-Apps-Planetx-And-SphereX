@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtQuantity, fmtNum, roundUncertainty, superscript, SCI_HI, SCI_LO, fmtDistPc, fmtSpeedPc } from '../js/blink/scene3d-format.js';
+import { fmtQuantity, fmtNum, roundUncertainty, superscript, SCI_HI, SCI_LO, fmtDistPc, fmtSpeedPc, fmtDrawnDate, fmtSpan } from '../js/blink/scene3d-format.js';
 import * as R from '../js/blink/scene3d-registry.js';
 import { fmtValue } from '../js/blink/scene3d-physics.js';
 
@@ -93,4 +93,19 @@ test('fmtSpeedPc: AU/s, pc/s, kpc/s, Mpc/s and the multiple of light speed', () 
   assert.match(fmtSpeedPc(4.5e4), /^45 kpc\/s · ≈ .*× c$/);
   assert.match(fmtSpeedPc(1.6e7), /^16 Mpc\/s · ≈ .*× c$/);
   assert.equal(fmtSpeedPc(NaN), 'n/a');
+});
+
+test('fmtDrawnDate: the drawn TT date as UT to the minute, Julian before 1582, n/a when not finite', () => {
+  assert.equal(fmtDrawnDate(51544.5), '1 Jan 2000 11:59 UT');                       // J2000.0 TT is about 11:58:55.8 UT (deltaT 64 s), rounded to the minute
+  assert.match(fmtDrawnDate(61000), /^\d{1,2} [A-Z][a-z]{2} 2025 \d\d:\d\d UT$/);
+  assert.match(fmtDrawnDate(15020), /^1 Jan 1900 00:0\d UT$|^31 Dec 1899 23:5\d UT$/);   // the start of the 3D view's range
+  assert.match(fmtDrawnDate(-600000), /UT$/);
+  assert.equal(fmtDrawnDate(NaN), 'n/a'); assert.equal(fmtDrawnDate(undefined), 'n/a');
+});
+
+test('fmtSpan: minutes, hours, days and years, by value', () => {
+  assert.equal(fmtSpan(45), '45 days'); assert.equal(fmtSpan(1), '1 day'); assert.equal(fmtSpan(1.4), '1.4 days'); assert.equal(fmtSpan(-45), '45 days');
+  assert.equal(fmtSpan(0.25), '6 hours'); assert.equal(fmtSpan(1 / 24 / 2), '30 min'); assert.equal(fmtSpan(1 / 24), '1 hour');
+  assert.equal(fmtSpan(475), '1.3 yr'); assert.equal(fmtSpan(4400), '12 yr'); assert.equal(fmtSpan(365.25), '1 yr'); assert.equal(fmtSpan(364), '364 days');
+  assert.equal(fmtSpan(Infinity), 'n/a');
 });

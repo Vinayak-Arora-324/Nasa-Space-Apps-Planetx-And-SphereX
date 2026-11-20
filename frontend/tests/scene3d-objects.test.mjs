@@ -12,6 +12,9 @@ import * as F from '../js/blink/scene3d-frames.js';
 import * as M from '../js/blink/scene3d-math.js';
 import { starModel } from '../js/blink/scene3d-physics.js';
 import { renderStarCard } from '../js/blink/scene3d-card.js';
+import { motionSummary, evalMover, moverValidity } from '../js/blink/scene3d-motion.js';
+import { GK } from '../js/blink/ephem.js';
+import { GREY_ALPHA, greyRgb } from '../js/blink/scene3d-objects.js';
 
 const AU = F.AU_PER_PC;
 const q = (v, unit, tier = 'measured') => ({ v, unit, src: 'test', tier });
@@ -117,7 +120,8 @@ test('group counts respect layers and evidence', () => {
   const g = groupState(s, visibleObjects(s, gctx({ layers })), cam, 1000)['ss:sun'];
   assert.equal(g.count, 4); assert.equal(g.byKind.asteroid, undefined);
   const ill = store([...ALL.slice(0, 5), { ...astIn, evidence: 'illustrative' }]);
-  assert.equal(groupState(ill, visibleObjects(ill, gctx({ evidence: true })), cam, 1000)['ss:sun'].count, 4);
+  // section 20.8: the group is built from every layer-on record, so an illustrative one still counts in the Evidence view (it exists; the marker takes the host's evidence)
+  assert.equal(groupState(ill, visibleObjects(ill, gctx({ evidence: true })), cam, 1000)['ss:sun'].count, 5);
   assert.equal(groupState(ill, visibleObjects(ill, gctx({ evidence: false })), cam, 1000)['ss:sun'].count, 5);
 });
 
@@ -855,8 +859,8 @@ test('hosted black holes are placed through the orbit branch, group with their h
   assert.deepEqual(s.childrenOf(BH_HOST).map((o) => o.id).sort(), ['bh:Cyg X-1', 'bh:Gaia BH2']);
   const vis = visibleObjects(s, gctx()), cam = F.makeCam({ pos: [0, 0, 0] });
   assert.deepEqual(vis.filter((e) => e.kind === 'black_hole').map((e) => e.renderer), ['marker', 'marker']);
-  const g = groupState(s, vis.filter((e) => e.id === 'bh:Gaia BH2'), cam, 1000);
-  assert.equal(g[BH_HOST].grouped, true); assert.equal(g[BH_HOST].label, 'Gaia BH2 companion · 1 black hole'); assert.equal(g[BH_HOST].noun[0], 'black hole');
+  const g = groupState(s, vis, cam, 1000);   // both black holes are on the group, whatever their evidence (section 20.8)
+  assert.equal(g[BH_HOST].grouped, true); assert.equal(g[BH_HOST].label, 'Gaia BH2 companion · 2 black holes'); assert.equal(g[BH_HOST].noun[0], 'black hole');
   assert.deepEqual(visibleObjects(s, gctx({ evidence: true })).filter((e) => e.kind === 'black_hole').map((e) => e.id), ['bh:Gaia BH2'], 'illustrative ones are hidden, exactly as exoplanets are');
   assert.equal(hostCountText(s, BH_HOST, { evidence: false, layers: {} }), '2 black holes (positions illustrative)');
   assert.equal(hostCountText(s, BH_HOST, { evidence: true, layers: {} }), '2 black holes (positions illustrative, hidden in the Evidence view)');
@@ -1351,4 +1355,214 @@ test('homeMarkers: the Sun and the Milky Way centre, faded with the stars, merge
   assert.equal(at(camAtPc([0, 0, 30e3 * 1e-6], 'cosmos'), { project: (rel) => [rel[0] * 1e4, rel[1] * 1e4], galaxyFade: 1 }).length, 2, 'far apart on screen: two');
   assert.deepEqual(at(cam, { store: store([]) }).map((m) => m.id), ['ss:sun'], 'no Milky Way record: only the Sun');
   assert.deepEqual(at(cam, { project: () => null }), [], 'behind the camera: nothing');
+});
+
+
+// ------------------------------------------------------------------ Phase 5 (section 20): time, the general evidence rule, greyed records
+const P5_MJD = 61000, P5_JD = P5_MJD + 2400000.5;
+const eph = (id, kind, name, xyz) => rec(id, kind, name, xyz, { provenance: { source: 'ephem' }, position: { model: 'state', mjd: P5_MJD, xyz_au: xyz, method: 'ephemeris', src: 'astropy ephem', tier: 'measured' } });
+const kep = (id, name, o = {}) => small(id, 'asteroid', name, [2.5, 0.1, 0.02], { in_cone: true, provenance: { source: 'skybot' }, ...o,
+  position: { model: 'state', mjd: P5_MJD, xyz_au: [2.5, 0.1, 0.02], method: 'orbit-propagation', src: 'SkyBoT', tier: 'catalogue',
+    osc: { epoch_jd: P5_JD - 0.5, xyz_au: [2.49, 0.09, 0.02], vxyz_au_d: [0, GK / Math.sqrt(2.5), 0.0005], frame: 'icrf-heliocentric', src: 'SkyBoT state', tier: 'catalogue' } } });
+const mercury = eph('ss:mercury', 'planet', 'Mercury', [0.3, -0.2, -0.1]), earth5 = eph('ss:earth', 'planet', 'Earth', [0.9, 0.4, 0.17]);
+const sun5 = rec('ss:sun', 'sun', 'Sun', [0, 0, 0]);
+const store5 = (objs, opts) => { const s = new ObjectStore(opts); assert.ok(s.ingest(payload(objs, { query: { ra: 150, dec: 2, radius: 3, mjd: P5_MJD, kinds: [] } })).ok); return s; };
+const snapshot = (st) => st.recs.map((r) => [r.id, r.sysAu && r.sysAu.slice(), r.galPc && r.galPc.slice(), r.orbit && r.orbit.xyzAu.slice()]);
+
+test('setTime(query.mjd) leaves every record where ingest put it; the arrays are the same objects throughout', () => {
+  const st = store5([sun5, earth5, mercury, kep('mp:7', 'Seven'), exo('nea:b', { host: HOST }), hostStar()]);
+  st.setHostResolver(resolver({ [HOST]: HOST }, { [HOST]: HOST_PC }));
+  const before = snapshot(st), arrays = st.recs.map((r) => [r.sysAu, r.galPc]);
+  assert.equal(st.mjd, P5_MJD); assert.equal(st.setTime(P5_MJD, { hosts: [HOST] }), false);
+  assert.deepEqual(snapshot(st), before);
+  assert.equal(st.setTime(P5_MJD + 30, { hosts: [HOST] }), true); assert.equal(st.mjd, P5_MJD + 30);
+  st.recs.forEach((r, i) => { assert.equal(r.sysAu, arrays[i][0], r.id); assert.equal(r.galPc, arrays[i][1], r.id); });   // in place
+  assert.equal(st.setTime(P5_MJD, { hosts: [HOST] }), true);
+  const back = snapshot(st);
+  back.forEach((b, i) => { for (const k of [1, 2, 3]) if (b[k]) assert.ok(near(b[k], before[i][k], 1e-9), `${b[0]} back at the payload epoch`); });
+});
+
+test('setTime moves Mercury and Earth on the ephemeris and a SkyBoT body two-body; the Sun marker stays at minus Earth', () => {
+  const st = store5([sun5, earth5, mercury, kep('mp:7', 'Seven')]);
+  const m0 = st.placement('ss:mercury').sysAu.slice(), e0 = st.placement('ss:earth').sysAu.slice(), k0 = st.placement('mp:7').sysAu.slice();
+  assert.ok(st.mover('ss:mercury') && st.mover('mp:7').elements && !st.mover('ss:sun'));
+  assert.equal(st.setTime(P5_MJD + 40), true);
+  const m1 = st.placement('ss:mercury').sysAu, e1 = st.placement('ss:earth').sysAu, k1 = st.placement('mp:7').sysAu;
+  assert.ok(Math.hypot(...m1.map((v, i) => v - m0[i])) > 0.1, 'Mercury moved a good part of its orbit in 40 days');
+  assert.ok(Math.hypot(...e1.map((v, i) => v - e0[i])) > 0.1); assert.ok(Math.hypot(...k1.map((v, i) => v - k0[i])) > 0.05);
+  assert.ok(near(st.placement('ss:sun').galPc, e1.map((v) => -v / AU), 1e-12), 'the Sun marker follows minus the DRAWN Earth');
+  assert.ok(near(st.placement('mp:7').galPc, k1.map((v, i) => (v - e1[i]) / AU), 1e-12), 'a Sun-hosted galPc is relative to the drawn Earth');
+  assert.equal(st.setTime(P5_MJD + 40), false);
+  // the same record through evalMover directly
+  assert.ok(near(k1, evalMover(st.mover('mp:7'), P5_MJD + 40, [0, 0, 0]), 1e-12));
+});
+
+test('hosts: only the Sun and the listed hosts are evaluated; a host added later is brought to the current date', () => {
+  const st = store5([sun5, earth5, exo('nea:b', { host: HOST }), hostStar()]);
+  st.setHostResolver(resolver({ [HOST]: HOST }, { [HOST]: HOST_PC }));
+  const b0 = st.placement('nea:b').sysAu.slice();
+  assert.equal(st.setTime(P5_MJD + 0.7, { hosts: [] }), true);              // only Earth moved; the planet waits
+  assert.deepEqual(st.placement('nea:b').sysAu, b0); assert.equal(st.mjd, P5_MJD + 0.7);
+  assert.equal(st.setTime(P5_MJD + 0.7, { hosts: new Set([HOST]) }), true);  // the date did not change, the host is new
+  assert.ok(Math.hypot(...st.placement('nea:b').sysAu.map((v, i) => v - b0[i])) > 1e-5);
+  assert.ok(near(st.placement('nea:b').sysAu, orbitPlacement(trB.host ? exo('nea:b', { host: HOST }) : null, P5_MJD + 0.7).xyzAu, 1e-11), 'the same as orbitPlacement at that date');
+});
+
+test('placement(id).orbit follows the drawn date', () => {
+  const el = { period_d: { v: 1.510826, lo: 1.510726, hi: 1.510926, unit: 'd', tier: 'measured', src: 't' } };
+  const st = store5([earth5, exo('nea:b', { host: HOST }, el), hostStar()]);
+  st.setHostResolver(resolver({ [HOST]: HOST }, { [HOST]: HOST_PC }));
+  const o0 = st.placement('nea:b').orbit, s0 = o0.phaseSigmaDeg;
+  st.setTime(P5_MJD + 1000, { hosts: [HOST] });
+  const o1 = st.placement('nea:b').orbit, want = orbitPlacement(exo('nea:b', { host: HOST }, el), P5_MJD + 1000);
+  assert.equal(o1, o0, 'updated in place'); assert.ok(Math.abs(o1.phaseSigmaDeg - want.phaseSigmaDeg) < 1e-9); assert.ok(o1.phaseSigmaDeg > s0);
+  assert.ok(Math.abs(o1.used.trueAnomaly - want.used.trueAnomaly) < 1e-9 && Math.abs(o1.used.r - want.used.r) < 1e-15);
+});
+
+test('validity(id) is moverValidity, { ok: true } without a mover; moverOk agrees with it', () => {
+  const st = store5([sun5, earth5, mercury, kep('mp:7', 'Seven'), exo('nea:b', { host: HOST }, { period_d: { v: 1.5, lo: 1.4, hi: 1.6, unit: 'd', tier: 'measured', src: 't' } }), hostStar()]);
+  assert.deepEqual(st.validity('ss:sun'), { ok: true, reason: null }); assert.equal(st.validity('mp:7').ok, true);
+  assert.equal(st.validity('mp:7', P5_MJD + 400).reason, 'osc-epoch'); assert.equal(st.validity('nope').ok, true);
+  for (const id of ['mp:7', 'nea:b', 'ss:mercury']) for (const dt of [-30000, -500, 0, 300, 400, 5000, 30000]) {
+    st.setTime(P5_MJD + dt, { hosts: [HOST] });
+    assert.equal(!st.placement(id).greyed, moverValidity(st.mover(id), P5_MJD + dt).ok, `${id} ${dt}`);
+  }
+});
+
+test('greyed: beyond its valid range only; flagged in the normal view, hidden in the Evidence view, still counted, styled in markers and labels', () => {
+  const st = store5([sun5, earth5, mars, kep('mp:7', 'Seven'), kep('mp:8', 'Eight')]);
+  const cam = F.makeCam({ pos: [0, 0, 0] });
+  assert.ok(visibleObjects(st, gctx()).every((e) => !e.greyed), 'inside the window nothing is greyed');
+  st.setTime(P5_MJD + 400);
+  const vis = visibleObjects(st, gctx()), g7 = vis.find((e) => e.id === 'mp:7');
+  assert.equal(g7.greyed, true); assert.equal(vis.find((e) => e.id === 'ss:mars').greyed, undefined);
+  const ev = visibleObjects(st, gctx({ evidence: true }));
+  assert.ok(!ev.some((e) => e.id === 'mp:7' || e.id === 'mp:8'), 'hidden in the Evidence view');
+  // counted: the group's extra (ungrouped here) and the HUD counts
+  const groups = groupState(st, ev, cam, 1000);
+  assert.equal(groups['ss:sun'].grouped, false); assert.deepEqual(groups['ss:sun'].extra, { asteroid: 2 });
+  assert.equal(visibleCounts(ev, groups).counts.asteroid, 2); assert.equal(visibleCounts(ev).counts.asteroid, undefined);
+  assert.equal(visibleCounts(vis, groupState(st, vis, cam, 1000)).counts.asteroid, 2, 'no double count in the normal view');
+  assert.equal(groups['ss:sun'].count, 4);
+  // the marker: alpha and colour
+  const pts = markerPoints(vis, {}, cam), ent = (id) => vis.findIndex((e) => e.id === id);
+  const k = ent('mp:7'), mk = ent('ss:mars');
+  assert.ok(Math.abs(pts[8 * k + 4] - GREY_ALPHA) < 1e-6); assert.ok(Math.abs(pts[8 * mk + 4] - 1) < 1e-6);
+  const c = g7.spec.color(g7.o), want = greyRgb(c); assert.ok(Math.abs(pts[8 * k + 5] - want[0]) < 1e-6);
+  assert.ok(Math.max(...want) - Math.min(...want) < Math.max(...c) - Math.min(...c), 'desaturated');
+  // labels end in (extrapolated), without the illustrative glyph
+  const L = labelCandidates(vis, {}, { project: () => [10, 10], framePos: (e) => framePos(e, cam) }).filter((l) => /Seven|Eight/.test(l.text));
+  assert.deepEqual(L.map((l) => l.text).sort(), ['Eight (extrapolated)', 'Seven (extrapolated)']); assert.ok(L.every((l) => l.greyed === true));
+  const pk = pickObjects(vis, {}, 10, 10, 50, { project: () => [10, 10], framePos: (e) => framePos(e, cam) });
+  assert.ok(pk);
+});
+
+test('a moving record whose drawn placement is illustrative ends its label in the illustrative glyph', () => {
+  const st = store5([earth5, exo('nea:b', { host: HOST, name: 'TRAPPIST-1 b', evidence: 'illustrative' }), hostStar()]);
+  st.setHostResolver(resolver({ [HOST]: HOST }, { [HOST]: HOST_PC }));
+  const cam = F.makeCam({ frame: 'system', host: { key: HOST, pc: HOST_PC }, pos: [0.01, 0, 0] });
+  const vis = visibleObjects(st, { layers: defaultLayers(), evidence: false, frame: 'system', inHost: (h) => h === HOST });
+  assert.equal(vis.length, 1);
+  const L = labelCandidates(vis, {}, { project: () => [1, 1], framePos: (e) => framePos(e, cam) });
+  assert.equal(L[0].text, 'TRAPPIST-1 b ◌'); assert.equal(L[0].greyed, undefined);
+  const still = rec('mp:9', 'asteroid', 'Still', [1, 1, 0], { evidence: 'illustrative', in_cone: true });
+  const st2 = store5([earth5, still]), vis2 = visibleObjects(st2, gctx());
+  assert.equal(labelCandidates(vis2, {}, { project: () => [1, 1], framePos: (e) => framePos(e, F.makeCam({ pos: [0, 0, 0] })) })[0].text, 'Still', 'no mover, no glyph');
+});
+
+test('motionItems feeds motionSummary: planets, small bodies beyond their range, exoplanets and black holes with their evidence', () => {
+  const trio = ['b', 'c', 'd'].map((n) => exo(`nea:${n}`, { host: HOST, name: `TRAPPIST-1 ${n}` }));
+  const cyg = bh('bh:Cyg X-1', { host: HOST, parent: HOST, name: 'Cyg X-1', evidence: 'illustrative', position: { ...bh('x').position, tier: 'illustrative', elements: bhEl({ node_deg: null, t_peri_mjd: null }) } });
+  const st = store5([sun5, earth5, mercury, kep('mp:7', 'Seven'), kep('mp:8', 'Eight'), ...trio, cyg, hostStar()]);
+  st.setHostResolver(resolver({ [HOST]: HOST }, { [HOST]: HOST_PC }));
+  st.setTime(P5_MJD + 400, { hosts: [HOST] });
+  const vis = [...visibleObjects(st, gctx()), ...visibleObjects(st, { layers: defaultLayers(), evidence: false, frame: 'system', inHost: (h) => h === HOST })].filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i);
+  const items = st.motionItems(vis);
+  const m = motionSummary(items);
+  assert.match(m.text, /^Moving: 1 planet \(ephemeris\)/); assert.match(m.text, /2 small bodies \(SkyBoT orbits, ±1 yr; 2 beyond their range\)/);
+  assert.match(m.text, /3 exoplanets ◌/); assert.match(m.text, /1 black hole ◌ \(no phase epoch published\)/);
+  assert.equal(m.counts.beyond, 2); assert.equal(items.find((i) => i.kind === 'black_hole').illustrative, true);
+  assert.deepEqual(st.motionItems([]), []);
+});
+
+// the general evidence rule for hosted kinds (section 20.8)
+const sevenOf = (host, o = {}) => ['b', 'c', 'd', 'e', 'f', 'g', 'h'].map((n) => exo(`nea:T1 ${n}`, { host, name: `TRAPPIST-1 ${n}`, ...o }));
+const galStore = (hostRec, planets) => {
+  const st = store5([earth5, ...planets, hostRec]);
+  st.setHostResolver(resolver({ [hostRec.id]: hostRec.id }, { [hostRec.id]: HOST_PC }));
+  return st;
+};
+const farCam = () => F.makeCam({ pos: [0, 0, 0] });
+
+test('TRAPPIST-1 · 7 exoplanets shows as a group marker in the Evidence view (illustrative planets, measured host) and counts on the HUD', () => {
+  const st = galStore(hostStar(), sevenOf(HOST)), cam = farCam();
+  for (const evidence of [false, true]) {
+    const vis = visibleObjects(st, gctx({ evidence })), g = groupState(st, vis, cam, 1000)[HOST];
+    assert.equal(vis.filter((e) => e.kind === 'exoplanet').length, evidence ? 0 : 7);
+    assert.equal(g.grouped, true); assert.equal(g.label, 'TRAPPIST-1 · 7 exoplanets'); assert.equal(g.evidence, 'measured'); assert.equal(g.hidden, false); assert.equal(g.hollow, false);
+    assert.equal(markerPoints(vis, { [HOST]: g }, cam).length, 8, 'one solid group marker');
+    assert.ok(markerPoints(vis, { [HOST]: g }, cam)[3] > 0);
+    assert.equal(labelCandidates(vis, { [HOST]: g }, { project: () => [1, 1], framePos: (e) => framePos(e, cam) }).filter((l) => l.text === 'TRAPPIST-1 · 7 exoplanets').length, 1);
+    assert.ok(pickObjects(vis, { [HOST]: g }, 1, 1, 50, { project: () => [1, 1], framePos: (e) => framePos(e, cam) }).sel.kind === 'group');
+    assert.equal(visibleCounts(vis, { [HOST]: g }).counts.exoplanet, 7, 'the HUD counts them in both views');
+  }
+  assert.equal(hostCountText(st, HOST, { evidence: true, layers: {} }), '7 exoplanets (positions illustrative, hidden in the Evidence view)', 'unchanged');
+});
+
+test('a derived host draws a hollow group marker in both views; an illustrative host hides it in the Evidence view only', () => {
+  const cam = farCam();
+  const derived = galStore(hostStar(HOST, { evidence: 'derived' }), sevenOf(HOST));
+  for (const evidence of [false, true]) {
+    const vis = visibleObjects(derived, gctx({ evidence })), g = groupState(derived, vis, cam, 1000)[HOST], pts = markerPoints(vis, { [HOST]: g }, cam);
+    assert.equal(g.hollow, true); assert.equal(g.hidden, false); assert.equal(pts.length, 8); assert.ok(isHollowSize(pts[3]) && Math.abs(pts[3]) >= 8);
+  }
+  const ill = galStore(hostStar(HOST, { evidence: 'illustrative' }), sevenOf(HOST));
+  const nv = visibleObjects(ill, gctx({ evidence: false })), gn = groupState(ill, nv, cam, 1000)[HOST];
+  assert.equal(gn.hidden, false); assert.equal(markerPoints(nv, { [HOST]: gn }, cam).length, 8);
+  const ev = visibleObjects(ill, gctx({ evidence: true })), ge = groupState(ill, ev, cam, 1000)[HOST];
+  assert.equal(ge.grouped, true); assert.equal(ge.hidden, true); assert.equal(markerPoints(ev, { [HOST]: ge }, cam).length, 0);
+  assert.equal(labelCandidates(ev, { [HOST]: ge }, { project: () => [1, 1], framePos: (e) => framePos(e, cam) }).length, 0);
+  assert.equal(pickObjects(ev, { [HOST]: ge }, 1, 1, 50, { project: () => [1, 1], framePos: (e) => framePos(e, cam) }), null);
+  assert.equal(visibleCounts(ev, { [HOST]: ge }).counts.exoplanet, undefined, 'a hidden group adds no count');
+  assert.equal(groupState(ill, ev, cam, 1000, 8, { evidence: false })[HOST].hidden, false, 'opts.evidence overrides the store flag');
+});
+
+test('the Sun\'s group is the same in both views: measured, solid, never hidden', () => {
+  const st = store([sun, earth, mars, jupiter, ceres, astIn, comet]), cam = F.makeCam({ pos: [1, 0, 0] });
+  for (const evidence of [false, true]) {
+    const g = groupState(st, visibleObjects(st, gctx({ evidence })), cam, 1000)['ss:sun'];
+    assert.deepEqual([g.grouped, g.evidence, g.hollow, g.hidden, g.count], [true, 'measured', false, false, 6]);
+  }
+});
+
+test('a resolved system draws each record with its own evidence: illustrative hidden and derived hollow in the Evidence view', () => {
+  const planets = [exo('nea:m', { host: HOST, evidence: 'measured' }), exo('nea:d', { host: HOST, evidence: 'derived' }), exo('nea:i', { host: HOST, evidence: 'illustrative' })];
+  const st = galStore(hostStar(), planets);
+  const cam = F.makeCam({ frame: 'system', host: { key: HOST, pc: HOST_PC }, pos: [0.01, 0, 0] });
+  const sys = (evidence) => visibleObjects(st, { layers: defaultLayers(), evidence, frame: 'system', inHost: (h) => h === HOST });
+  assert.deepEqual(sys(true).map((e) => e.id).sort(), ['nea:d', 'nea:m']);
+  assert.equal(sys(false).length, 3); assert.equal(sys(true).find((e) => e.id === 'nea:d').spec.markerStyle({ evidence: 'derived' }), 'hollow');
+  // close in the galaxy frame it is resolved too: the group is not drawn and each marker keeps its own style
+  const near1 = F.makeCam({ pos: HOST_PC.map((v) => v * (1 - 1e-12)) }), vis = visibleObjects(st, gctx({ evidence: true })), g = groupState(st, vis, near1, 1000)[HOST];
+  assert.equal(g.grouped, false); assert.equal(g.count, 3); assert.equal(visibleCounts(vis, { [HOST]: g }).counts.exoplanet, 2, 'only the drawn ones, resolved');
+});
+
+test('the spread is the orbit size a(1 + e): a system groups and ungroups at the same distance whatever the date or the phase', () => {
+  const wide = exo('nea:w', { host: HOST }, { a_au: q(50, 'au', 'catalogue'), e: q(0.8), period_d: q(100000, 'd') });
+  const st = galStore(hostStar(), [wide]);
+  assert.ok(Math.abs(st.recs.find((r) => r.id === 'nea:w').orbitAu - 90) < 1e-9, 'a (1 + e) = 90 AU');
+  const pxPerRad = 1000, dist = 90 * pxPerRad / 8;                                          // exactly 8 px of spread
+  const camAt = (au) => F.makeCam({ pos: HOST_PC.map((v, i) => v - (i === 0 ? au / AU : 0)) });
+  const grouped = (cam) => groupState(st, visibleObjects(st, gctx()), cam, pxPerRad)[HOST].grouped;
+  for (const dt of [0, 9000, 17000, 31000]) {
+    st.setTime(P5_MJD + dt, { hosts: [HOST] });
+    assert.equal(grouped(camAt(dist * 1.02)), true, `grouped from far away at +${dt} d`); assert.equal(grouped(camAt(dist * 0.98)), false, `resolved nearer at +${dt} d`);
+  }
+});
+
+test('records of a host whose layer is off are not in its group; the layers of the last visibleObjects call are the default', () => {
+  const st = galStore(hostStar(), sevenOf(HOST)), cam = farCam();
+  const vis = visibleObjects(st, gctx({ layers: { ...defaultLayers(), exoplanets: false } }));
+  assert.equal(groupState(st, vis, cam, 1000)[HOST], undefined);
+  assert.equal(groupState(st, vis, cam, 1000, 8, { layers: {} })[HOST].count, 7, 'explicit layers win');
 });

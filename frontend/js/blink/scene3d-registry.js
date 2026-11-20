@@ -124,9 +124,19 @@
 //                    (cluster, exoplanet, nebula, galaxy, supermassive and stellar-mass black holes). null when the card shows nothing that needs a credit. ctx.hostRecord
 //                    (the companion star record) counts for a stellar-mass black hole. Every card appends it itself; callers add nothing.
 //   NEBULA_GAIA_CREDIT, SHEN_CREDIT, CLUSTER_CREDIT, NEA_CREDIT, EDD_TERMS, markerOnlyNote({ truePx, parentName })   the pieces
+//
+// PHASE 5 (docs/object-framework.md section 20, decisions 20.17): time on the cards. New OPTIONAL card ctx fields (a card built without them is exactly the old card):
+//   ctx.mjd        the drawn date (TT MJD, store.mjd). With it the card adds 'Drawn at <date>' (a moving record) and, for an orbit, the phase rows and the light-time note
+//   ctx.validity   store.validity(id): { ok, reason, lo, hi, sigmaDeg }. Not ok: a first 'Position' row 'extrapolated beyond its valid range (<reason>), illustrative' (illustrative)
+//   ctx.mover      store.mover(id): a small body's osculating elements (mover.elements) are shown as catalogue rows
+//   ctx.earthAu    Earth's drawn xyz (AU, store.placement('ss:earth').sysAu): the 'Distance from Earth' of a small body drawn off its payload date
+//   ctx.members    a cluster's member file: { n, nP50, highlighted, src? } | { loading: true } | { error }; the card has 'Members (HR24)', 'In this view' and a note
+//   A planet or the Moon drawn off its payload epoch (position.mjd) says its position is 'ERFA plan94/moon98 in the browser (ephem.js), anchored to the server ephemeris at <payload date>';
+//   'Distance from Sun' follows the drawn position (place.sysAu) then. Small-body distances too (catalogue within the valid range, illustrative beyond).
+//   starEpochRow(epoch = 2016, catalogue = 'Gaia DR3') -> ['Position epoch', '2016.0 (Gaia DR3)', 'catalogue', url]   the star card's epoch row (section 20.17 item 1): the stars stay at their catalogue epoch
 import { KM_PER_AU } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
-import { fmtNum, fmtQuantity } from './scene3d-format.js';
+import { fmtNum, fmtQuantity, fmtDrawnDate, fmtSpan } from './scene3d-format.js';
 
 export const SCHEMA_MAJOR = 1;
 export const MAX_BODY_LABELS = 12;
@@ -234,11 +244,23 @@ const num = (ctx) => ctx.fmtNum || fmtNum;
 /** A Quantity's card text (scene3d-format.js fmtQuantity): the digits its uncertainty supports, or 3 significant figures without one. */
 export function valueWithRange(q, unit = '', sig = 3) { return fq(q, unit, { sig }); }
 
+// ------------------------------------------------------------------ Phase 5: the drawn date on the cards (section 20.4, 20.5, 20.17)
+const hasDate = (ctx) => Number.isFinite(ctx.mjd);
+/** The epoch of the record's own position (the payload's date for a SkyBoT or ephemeris state). */
+const payloadMjdOf = (o, ctx) => (Number.isFinite(ctx.payloadMjd) ? ctx.payloadMjd : o.position && Number.isFinite(o.position.mjd) ? o.position.mjd : null);
+/** True when the card is drawn for a date other than the record's own epoch. */
+const offPayload = (o, ctx) => { const p = payloadMjdOf(o, ctx); return hasDate(ctx) && p !== null && Math.abs(ctx.mjd - p) > 1e-6; };
+const EPHEM_SRC = (payload) => `ERFA plan94/moon98 in the browser (ephem.js), anchored to the server ephemeris at ${fmtDrawnDate(payload)}`;
+const placeDistAu = (ctx) => { const a = ctx.place && ctx.place.sysAu; return a && a.every(Number.isFinite) ? hypot3(a) : null; };
+
 function planetCard(o, ctx) {
-  const r = o.size && o.size.radius, sun = sunDistAu(o);
+  const r = o.size && o.size.radius, off = offPayload(o, ctx), live = off ? placeDistAu(ctx) : null;
+  const src = off ? EPHEM_SRC(payloadMjdOf(o, ctx)) : srcOf({ src: o.position && o.position.src });
+  const sun = live !== null ? { v: live, unit: 'au', tier: 'measured', src } : sunDistAu(o);
   return finish(ctx, {
     title: o.name, subtitle: null, notes: null,
     rows: [
+      ...(hasDate(ctx) ? [['Drawn at', fmtDrawnDate(ctx.mjd), 'measured', src]] : []),
       ['Radius', kmText(r), (r && r.tier) || 'measured', srcOf(r)],
       qtyRow('Distance from Sun', sun, (q) => fq(q, 'AU'), 'measured'),
       ...fromYouRow(ctx),
@@ -250,20 +272,40 @@ function sunCard(o, ctx) {   // the renderer replaces this with the star card fo
   const e = earthDistAu(o);
   return finish(ctx, { title: o.name || 'Sun', subtitle: 'The Sun', notes: null, rows: [qtyRow('Distance from Earth', e, (q) => fq(q, 'AU'), 'measured'), ...fromYouRow(ctx)] });
 }
+const rangeRow = (text, src) => ['Position', `extrapolated beyond its valid range (${text}), illustrative`, 'illustrative', src || null];
+/** The osculating elements of a kepler mover as catalogue rows (section 20.4.2): the state's epoch first, then a, e, i, Ω, ω, q and the period of an ellipse. */
+function elementRows(o, ctx) {
+  const m = ctx.mover, el = m && m.model === 'kepler' ? m.elements : null;
+  if (!el) return [];
+  const osc = (o.position && o.position.osc) || {}, f = num(ctx), src = osc.src || "SkyBoT's state vector, two-body elements derived on the page";
+  const rows = [['Osculating elements', `from SkyBoT's state at JD ${(Number.isFinite(osc.epoch_jd) ? osc.epoch_jd : m.epochJd).toFixed(1)}`, 'catalogue', src]];
+  if (el.e < 1 && Number.isFinite(el.a)) rows.push(['a', `${f(el.a)} AU`, 'catalogue', src]);
+  rows.push(['e', f(el.e), 'catalogue', src], ['i', `${f(el.i)}°`, 'catalogue', src], ['Ω', `${f(el.node)}°`, 'catalogue', src], ['ω', `${f(el.omega)}°`, 'catalogue', src],
+    ['q', `${f(el.q)} AU`, 'catalogue', src]);
+  if (Number.isFinite(el.period)) rows.push(['Period', `${f(el.period)} d (${f(el.period / 365.25)} yr)`, 'catalogue', src]);
+  return rows;
+}
 function smallBodyCard(o, ctx) {
   const m = /^mp:(\d+)$/.exec(o.id || ''), name = o.name || 'Small body';
   const title = m && name !== m[1] ? `${m[1]} ${name}` : name;
   const vmag = prop(o, 'vmag'), cls = prop(o, 'class');
-  return finish(ctx, {
-    title, subtitle: null, notes: null,
-    rows: [
-      qtyRow('Distance from Sun', sunDistAu(o), (q) => fq(q, 'AU'), 'catalogue'),
-      qtyRow('Distance from Earth', earthDistAu(o), (q) => fq(q, 'AU'), 'catalogue'),
-      ...fromYouRow(ctx),
-      ['Visual mag', vmag && Number.isFinite(vmag.v) ? vmag.v.toFixed(1) : 'n/a', (vmag && vmag.tier) || 'catalogue', srcOf(vmag)],
-      ['Class', (cls && cls.v) || 'n/a', (cls && cls.tier) || 'catalogue', srcOf(cls)],
-    ],
-  });
+  const dated = hasDate(ctx), off = offPayload(o, ctx), bad = !!(ctx.validity && !ctx.validity.ok);
+  const osc = (o.position && o.position.osc) || {}, stateDate = Number.isFinite(osc.epoch_jd) ? fmtDrawnDate(osc.epoch_jd - 2400000.5) : null;
+  const rows = [];
+  if (bad) rows.push(rangeRow(`more than 1 year from its SkyBoT state of ${stateDate || 'its reference epoch'}`, "two-body propagation of SkyBoT's state vector, past its one-year window"));
+  if (dated) rows.push(['Drawn at', fmtDrawnDate(ctx.mjd), bad ? 'illustrative' : off ? 'catalogue' : (o.position && o.position.tier) || 'measured',
+    off ? "two-body propagation of SkyBoT's state vector, anchored to its position at " + fmtDrawnDate(payloadMjdOf(o, ctx)) : (o.position && o.position.src) || null]);
+  const live = off ? placeDistAu(ctx) : null, liveTier = bad ? 'illustrative' : 'catalogue', liveSrc = "two-body propagation of SkyBoT's state vector";
+  rows.push(live !== null ? ['Distance from Sun', fq({ v: live }, 'AU'), liveTier, liveSrc] : qtyRow('Distance from Sun', sunDistAu(o), (q) => fq(q, 'AU'), 'catalogue'));
+  const ea = ctx.earthAu && ctx.place && ctx.place.sysAu ? Math.hypot(ctx.place.sysAu[0] - ctx.earthAu[0], ctx.place.sysAu[1] - ctx.earthAu[1], ctx.place.sysAu[2] - ctx.earthAu[2]) : null;
+  if (!off) rows.push(qtyRow('Distance from Earth', earthDistAu(o), (q) => fq(q, 'AU'), 'catalogue'));
+  else if (Number.isFinite(ea)) rows.push(['Distance from Earth', fq({ v: ea }, 'AU'), liveTier, liveSrc]);
+  else { const q = earthDistAu(o); rows.push(qtyRow(`Distance from Earth (at ${fmtDrawnDate(payloadMjdOf(o, ctx))})`, q, (x) => fq(x, 'AU'), 'catalogue')); }
+  rows.push(...fromYouRow(ctx));
+  rows.push([off ? `Visual mag (at ${fmtDrawnDate(payloadMjdOf(o, ctx))})` : 'Visual mag', vmag && Number.isFinite(vmag.v) ? vmag.v.toFixed(1) : 'n/a', (vmag && vmag.tier) || 'catalogue', srcOf(vmag)],
+    ['Class', (cls && cls.v) || 'n/a', (cls && cls.tier) || 'catalogue', srcOf(cls)]);
+  rows.push(...elementRows(o, ctx));
+  return finish(ctx, { title, subtitle: null, notes: null, rows });
 }
 const smallMag = (o) => (o.render && Number.isFinite(o.render.mag) ? o.render.mag : (prop(o, 'vmag') && Number.isFinite(prop(o, 'vmag').v) ? prop(o, 'vmag').v : 30));
 const radiusAu = (o) => { const a = toAu(o.size && o.size.radius); return Number.isFinite(a) ? a : 4e-5; };   // 4e-5 AU: the old fallback
@@ -308,6 +350,37 @@ export function planetLine(o, fmt = fmtNum) {
   return { line: parts.join(' · '), tier: worstTier(tiers) };
 }
 
+const yearOfMjd = (mjd) => Math.round(2000 + (mjd - 51544.5) / 365.25);
+const sigText = (sg) => fmtNum(sg, 2);
+/**
+ * What the card says about an orbit record drawn at ctx.mjd (section 20.4.3, 20.5, 20.17): { rows, notes } or null without ctx.mjd or a placement orbit.
+ * rows: [Position (beyond the valid range)], Drawn at, Phase; notes: the light-time note once. The phase source decides the Phase text; a tier never stronger than what the source gives.
+ */
+function orbitMotion(o, ctx, el, f) {
+  const orb = ctx.place && ctx.place.orbit;
+  if (!hasDate(ctx) || !orb) return null;
+  const sg = orb.phaseSigmaDeg, bad = ctx.validity ? !ctx.validity.ok : sg != null && sg > 90, assumed = orb.phaseSource === 'assumed';
+  const tj = hasV(el.t_conj_mjd) ? el.t_conj_mjd : null, tp = hasV(el.t_peri_mjd) ? el.t_peri_mjd : null, m = prop(o, 'disc_method');
+  const rows = [], notes = [];
+  const unknown = '; the phase uncertainty at this date is not known (no period error published)', at = sg != null ? `, ±${sigText(sg)}° at this date` : unknown;
+  let text, tier, src;
+  if (assumed) {
+    const P = orb.used && Number.isFinite(orb.used.period) ? orb.used.period : null;
+    text = `No published phase epoch: the motion runs at the measured ${P !== null ? `${f(P)}-day ` : ''}period from an assumed starting point; where it is on its orbit is illustrative`;
+    tier = 'illustrative'; src = 'the starting phase is a hash of the record id at J2000';
+  } else if (orb.phaseSource === 'conjunction' && tj) {
+    text = `Phase from the ${yearOfMjd(tj.v)} ${m && m.v === 'Transit' ? 'transit' : 'conjunction'} time${at}`; tier = tj.tier || 'measured'; src = srcOf(tj);
+  } else if (tp) {
+    text = `Phase from the periastron time (${yearOfMjd(tp.v)})${at}`; tier = tp.tier || 'measured'; src = srcOf(tp);
+  } else { text = `Phase from its published epoch${at}`; tier = 'measured'; src = null; }
+  if (bad) rows.push(rangeRow(`phase uncertainty ${sg != null ? sigText(sg) : 'over 90'}° at this date`, 'phase uncertainty 360° |t − T₀| σ_P / P² past 90°'));
+  const illus = bad || assumed || (o.position && o.position.tier === 'illustrative');
+  rows.push(['Drawn at', fmtDrawnDate(ctx.mjd), illus ? 'illustrative' : (o.position && o.position.tier) || 'measured', (o.position && o.position.src) || null]);
+  rows.push(['Phase', text, bad ? 'illustrative' : tier, src]);
+  notes.push('Archive epochs are times seen from the Solar System, so the phase drawn at a date is the phase observed from here then: a transit drawn at a date is a transit seen on that date.');
+  return { rows, notes };
+}
+
 function exoplanetCard(o, ctx) {
   const f = num(ctx), el = (o.position && o.position.elements) || {}, place = ctx.place || null, orb = place && place.orbit;
   const P = el.period_d, a = el.a_au, e = el.e, inc = el.i_deg, cat = (o.provenance && o.provenance.catalogue) || null;
@@ -333,10 +406,13 @@ function exoplanetCard(o, ctx) {
   rows.push(['Discovered', disc || 'n/a', (m && m.tier) || 'catalogue', srcOf(m)]);
   if (place && place.sysAu) rows.push(['From its star now', `${f(hypot3(place.sysAu))} AU`, 'illustrative', 'where it is drawn on its orbit is illustrative']);
   rows.push(...fromYouRow(ctx));
+  const mo = orbitMotion(o, ctx, el, f);
+  if (mo) rows.unshift(...mo.rows);
   pushData(rows, o, ctx);
   const notes = [];
   if (!hasV(el.node_deg)) notes.push('Where it is drawn on its orbit is illustrative: the orbit\'s orientation on the sky is not known.');
-  if (orb) {
+  if (mo) notes.push(...mo.notes);
+  else if (orb) {
     const sg = orb.phaseSigmaDeg, tj = hasV(el.t_conj_mjd) ? el.t_conj_mjd.v : null, tp = hasV(el.t_peri_mjd) ? el.t_peri_mjd.v : null;
     const year = (mjd) => Math.round(2000 + (mjd - 51544.5) / 365.25);
     if (orb.phaseSource === 'assumed') notes.push('Its place along the orbit is unknown, so an assumed phase is drawn.');
@@ -442,11 +518,33 @@ function clusterCard(o, ctx) {
   if (cls) rows.push(['Class', typeof cls.v === 'boolean' ? (cls.v ? 'bound cluster' : 'moving group') : String(cls.v), cls.tier || 'catalogue', srcOf(cls)]);
   const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', fq(mass, mass.unit === 'Msun' || !mass.unit ? 'M☉' : mass.unit), mass.tier || 'inferred', srcOf(mass)]);
   rows.push(...fromYouRow(ctx));
+  const notes = [], mem = memberRows(o, ctx, rows, notes);
   pushData(rows, o, ctx);
-  const notes = [];
   if ((d && d.tier === 'inferred') || o.evidence === 'derived') notes.push('The distance is prior-dominated (parallax S/N < 5), so the cluster is drawn as a hollow marker.');
   if (qu && qu.v === 'candidate') notes.push('Candidate: it does not pass the catalogue\'s reliability cut and may not be a real cluster.');
   return finish(ctx, { title: o.name, subtitle: 'Star cluster', rows, notes: notes.length ? notes : null });
+}
+export const MEMBERS_SRC = 'Hunt & Reffert 2024, table 2 (J/A+A/686/A42/members)';
+export const MEMBERS_MAX_PC = 500;
+/**
+ * The member-star rows of a cluster card (section 20.9, 20.17 item 4), pushed onto rows and notes. A record with assets.members shows 'Members (HR24)' from ctx.members
+ * ({ n, nP50 } of the member file; { loading: true } or none while it loads; { error }) and 'In this view' (ctx.members.highlighted) with a note; a cluster without them beyond
+ * 500 pc says 'Member stars shown for clusters within 500 pc'. Membership is catalogue data (Gaia astrometry), so its rows stay in the Evidence view; the credit is on the row.
+ */
+function memberRows(o, ctx, rows, notes) {
+  const has = !!(o.assets && o.assets.members), m = ctx.members;
+  if (!has) {
+    const d = toPc(o.position && o.position.dist);
+    if (Number.isFinite(d) && d > MEMBERS_MAX_PC) rows.push(['Member stars', 'shown for clusters within 500 pc', 'catalogue', MEMBERS_SRC]);
+    return false;
+  }
+  const src = `${m && m.src ? m.src : MEMBERS_SRC}; Credit: ESA/Gaia/DPAC`;
+  if (!m || m.loading) { rows.push(['Members (HR24)', 'loading…', 'catalogue', src]); return true; }
+  if (m.error || !Number.isFinite(m.n)) { rows.push(['Members (HR24)', 'could not be loaded', 'catalogue', src]); return true; }
+  rows.push(['Members (HR24)', `${fmtNum(m.n, 7)} · ${fmtNum(m.nP50, 7)} with probability ≥ 0.5`, 'catalogue', src]);
+  if (Number.isFinite(m.highlighted)) rows.push(['In this view', `${fmtNum(m.highlighted, 7)} highlighted`, 'catalogue', 'members matched to the stars drawn in this view']);
+  notes.push('Members outside the star layer (beyond the cone, or fainter than its limit) are not drawn.');
+  return true;
 }
 const clusterMembers = (o) => { const n = prop(o, 'n_members'); return hasV(n) ? n.v : 0; };
 
@@ -526,6 +624,8 @@ export const GAIA_CREDIT = 'Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IG
 const GAIA_URL = 'https://www.cosmos.esa.int/web/gaia/dr3';
 /** The Data row of a Gaia star card (section 18.12): never dropped in the Evidence view. */
 export const gaiaDataRow = () => ['Data', GAIA_CREDIT, 'catalogue', GAIA_URL];
+/** The star card's epoch row (section 20.17 item 1): the stars are drawn at their catalogue epoch, 2016.0 for Gaia DR3 (the payload's stars.epoch), whatever the clock says. */
+export const starEpochRow = (epoch = 2016, catalogue = 'Gaia DR3') => ['Position epoch', `${Number(epoch).toFixed(1)} (${catalogue})`, 'catalogue', GAIA_URL];
 
 /** Words for the distance methods (the Phase 3 ones and the three older ones galaxies use); an unlisted method is returned as is. */
 export const METHOD_WORDS = {
@@ -712,6 +812,8 @@ function blackHoleCard(o, ctx) {
   } else { const cp = prop(o, 'companion'); if (cp && cp.v) rows.push(['Companion', String(cp.v), cp.tier || 'catalogue', srcOf(cp)]); }
   rows.push(...fromYouRow(ctx));
   rows.push(['Look', 'illustrative: a shadow, a photon ring and a halo' + (isAccreting(o) ? ', and an accretion disc' : ''), 'illustrative', 'drawn by the renderer, not catalogued']);
+  const mo = hosted ? orbitMotion(o, ctx, el, f) : null;
+  if (mo) rows.unshift(...mo.rows);
   pushData(rows, o, ctx);
   const notes = [];
   if (ctx.lensing && ctx.lensing.markerOnly) notes.push(markerOnlyNote({ truePx: ctx.lensing.truePx, parentName: ctx.lensing.parentName || ctx.parentName }));
@@ -721,6 +823,7 @@ function blackHoleCard(o, ctx) {
     if (rescaled) notes.push(`The mass paper assumed ${hasV(dpub) ? fq(dpub, dpub.unit || 'Mpc') : 'another distance'}; the galaxy's catalogue distance is used so the black hole sits at its galaxy's centre, and a dynamical mass scales with the distance, so it is rescaled by ×${Number(factor.toPrecision(5))}.`);
     const mn = prop(o, 'mass_note'); if (mn && typeof mn.v === 'string' && mn.v) notes.push(mn.v);
   }
+  if (mo) notes.push('Relative orbit; the star is held still.', ...mo.notes);
   if (hosted) {
     if ((p.tier || 'illustrative') === 'illustrative') notes.push('Where it is drawn on its orbit is illustrative: the orbit\'s orientation on the sky is not known.');
     else if (p.src) notes.push(`Orbit: ${p.src}.`);

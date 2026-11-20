@@ -27,7 +27,9 @@ float starY(float x){
 `;
 
 // Interleaved gradient noise (Jimenez 2014): the galaxy and nebula glows add (h - 0.5) / 255 to what they write, before the additive blend into an 8-bit target (section 19.3.5).
-const DITHER_GLSL = `float dither(vec2 p){ return (fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5) / 255.0; }`;
+// +-1/2 of an 8-bit step of interleaved-gradient noise, faded in over the glow's own first step (c: the colour about to be written), so the
+// empty corners of a glow's quad get none and its edge does not show (section 19.3.5)
+const DITHER_GLSL = `vec3 dither(vec2 p, vec3 c){ float d = (fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5) / 255.0; return c + d * clamp(max(c.r, max(c.g, c.b)) * 255.0, 0.0, 1.0); }`;
 
 // Stars: 7 floats per vertex (x y z abs r g b). The shader subtracts the eye in the current frame's units and gets the
 // distance in pc from u_toPc. u_skip lists star indices drawn elsewhere (the near-camera stars, drawn from exact doubles).
@@ -461,7 +463,7 @@ void main(){
 #ifdef LDR
   c = srgb(tonemap(c));
 #endif
-  if (mode < 9.5) c += dither(gl_FragCoord.xy);                         // +-1/2 of an 8-bit step: no banding in a smooth glow (section 19.3.5); not in the outline
+  if (mode < 9.5) c = dither(gl_FragCoord.xy, c);                         // +-1/2 of an 8-bit step: no banding in a smooth glow (section 19.3.5); not in the outline
   o = vec4(c, 1.0);
 }`;
 
@@ -620,7 +622,7 @@ void main(){
 #ifdef LDR
   c = srgb(tonemap(c));
 #endif
-  c += dither(gl_FragCoord.xy);                                          // +-1/2 of an 8-bit step: no banding in a smooth glow (section 19.3.5)
+  c = dither(gl_FragCoord.xy, c);                                          // +-1/2 of an 8-bit step: no banding in a smooth glow (section 19.3.5)
   o = vec4(c, 1.0);
 }`;
 

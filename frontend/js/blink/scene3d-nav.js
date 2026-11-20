@@ -129,11 +129,14 @@ export class SpeedTracker {
 export const smoothSpeed = (prev, v, dt) => prev + (v - prev) * (1 - Math.exp(-dt / SPEED_TAU_S));
 /**
  * What the HUD prints for the speed: { mode: 'moving' | 'rest' | 'turning', speedPc }. 'turning': an autopilot trip in its turn phase (the camera does not move; the
- * HUD says so). 'rest': no speed above 1e-15 pc/s (the HUD reads '0 · cruise ...'). 'moving': speedPc as measured. ap: the Autopilot (or null).
+ * HUD says so). 'rest': no speed above 1e-15 pc/s or above SPEED_REL_FLOOR of cruisePc (the
+ * current cruise speed, pc/s; the HUD reads '0 · cruise ...'). 'moving': speedPc as measured. ap: the Autopilot (or null).
  */
-export function hudSpeed(speedPc, ap = null) {
+export function hudSpeed(speedPc, ap = null, cruisePc = 0) {
   if (ap && ap.active && ap.t < TURN_SECONDS) return { mode: 'turning', speedPc: 0 };
-  return speedPc > 1e-15 ? { mode: 'moving', speedPc } : { mode: 'rest', speedPc: 0 };
+  // a camera at rest has no peak to compare with, so float-level drift (a few 1e-14 pc/s) would read as a speed: below 1e-6 of the cruise speed is rest too
+  const floor = Math.max(1e-15, SPEED_REL_FLOOR * (cruisePc > 0 ? cruisePc : 0));
+  return speedPc > floor ? { mode: 'moving', speedPc } : { mode: 'rest', speedPc: 0 };
 }
 
 /**

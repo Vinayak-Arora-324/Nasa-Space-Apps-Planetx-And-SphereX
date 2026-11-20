@@ -119,3 +119,9 @@ test('SpeedTracker and hudSpeed: free flight, a stop, a slow flight after a fast
   assert.equal(hudSpeed(0, null).mode, 'rest'); assert.equal(hudSpeed(1e-16, null).mode, 'rest');
   assert.equal(smoothSpeed(0, 10, 0.1), 10 * (1 - Math.exp(-1)));
 });
+
+test('hudSpeed: a camera at rest with float-level drift reads as rest against the cruise speed', () => {
+  assert.equal(hudSpeed(3.7e-14, null, 0.03).mode, 'rest');          // 7.6e-9 AU/s of drift at the Sun, cruise 0.03 pc/s (seen in the browser)
+  assert.equal(hudSpeed(1e-6, null, 0.03).mode, 'moving');           // a real crawl: 0.2 AU/s
+  assert.equal(hudSpeed(3.7e-14).mode, 'moving');                    // no cruise given: the old 1e-15 floor
+});

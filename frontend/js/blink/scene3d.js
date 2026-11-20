@@ -1796,7 +1796,7 @@ export class Scene3D {
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
       hostCount: this._hostCountText(), visCounts: vc.counts, visDirect: vc.direct,
-      speedMode: hudSpeed(this.speedPc, this.ap && this.ap.obj).mode, mwGlow: this._mwFade > 0.01,   // mwGlow: the credits line names the Milky Way glow while it shows (section 19.8)
+      speedMode: hudSpeed(this.speedPc, this.ap && this.ap.obj, this._cruise() / F.unitsPerPc(cam)).mode, mwGlow: this._mwFade > 0.01,   // mwGlow: the credits line names the Milky Way glow while it shows (section 19.8)
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };
   }

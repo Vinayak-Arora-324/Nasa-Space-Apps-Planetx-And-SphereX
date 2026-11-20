@@ -260,10 +260,17 @@ uv run python backend/scripts/build_objects_galaxies.py [--check | --refresh] # 
 uv run python backend/scripts/build_objects_smbh.py [--check]                 # supermassive black holes (reads the built galaxies)
 ```
 
+**Tile format.** Every dataset is written as `space-maps.object-tiles/2` (`write_dataset(..., compact=True)`,
+`docs/object-framework.md` §19.7): the manifest holds a `quantity_table` of `[src, tier, unit]`, and a Quantity in a
+tile is stored as `[v, q]` or `[v, q, lo, hi]`; anything else stays an object, so nothing is lost. The server reads
+`/1` and `/2` and serves the same records either way; `frontend/dev/mock_server.py` expands `/2` too. Nothing in the
+browser reads tiles. A static source re-reads its manifest provenance (credit, licence) when the manifest's mtime
+changes, so a rebuilt dataset's credit shows without a restart; a dataset added or removed still needs one.
+
 Build `galaxies` before `smbh-curated`: the black holes copy their host galaxy's position and distance, and the
 SMBH `--check` fails if a host's distance has changed since the SMBH dataset was built.
 
-**`nea-exoplanets`** (`frontend/data/objects/nea-exoplanets/`, 11.6 MB in 404 tiles)
+**`nea-exoplanets`** (`frontend/data/objects/nea-exoplanets/`, 7.9 MB in 404 tiles)
 - Source: the NASA Exoplanet Archive `pscomppars` table through TAP, snapshot of 2026-11-18. The archive has no dated
   releases, so the committed snapshot is the pin.
 - Contents: 6,458 planets (12 excluded for having neither a period nor a semi-major axis) and 4,852 host-star records.
@@ -287,7 +294,7 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
 - Cite NASA Exoplanet Archive (Christiansen et al. 2025) with the archive's acknowledgement (in `SOURCE.json`); Gaia
   Collaboration, Vallenari et al. 2023; Torra et al. 2021 for the DR2–DR3 neighbourhood.
 
-**`hr23-clusters`** (`frontend/data/objects/hr23-clusters/`, 9.3 MB in 300 tiles)
+**`hr23-clusters`** (`frontend/data/objects/hr23-clusters/`, 5.3 MB in 300 tiles)
 - Source: Hunt & Reffert 2024, VizieR `J/A+A/686/A42/clusters` (7,167 clusters). It is the same census as Hunt &
   Reffert 2023 (`J/A+A/673/A114`), with identical astrometry and distances, plus masses and the bound-cluster /
   moving-group class. Pinned by VizieR id and sha256.
@@ -300,20 +307,29 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
   https://cds.unistra.fr/vizier-org/licences_vizier.html.
 - The members table (1.29 M rows) is not used; the member-star highlight is a follow-up.
 
-**`nebulae`** (`frontend/data/objects/nebulae/`, 0.9 MB in 151 tiles; **data licence CC BY-SA 4.0**)
+**`nebulae`** (`frontend/data/objects/nebulae/`, 0.5 MB in 151 tiles; **data licence CC BY-SA 4.0**, with Gaia-derived distances under CC BY-NC 3.0 IGO)
 - Sources: OpenNGC release v20260501, pinned to commit `36cb178a`; Sharpless 1959 (VizieR `VII/20`); Chornay &
-  Walton 2021 (`J/A+A/656/A110`); and Russeil 2003 (`J/A+A/397/133`). VizieR is fetched from CfA, then IDIA, then CDS.
+  Walton 2021 (`J/A+A/656/A110`); Russeil 2003 (`J/A+A/397/133`); and Shen et al. 2025 (`J/A+A/696/A67`, `table2`
+  and `tablea1`). VizieR is fetched from CfA, then IDIA, then CDS.
 - 697 nebulae: the 433 OpenNGC nebula rows (PN, HII, EmN, RfN, Neb, SNR, Cl+N, DrkN) plus 264 Sharpless-only regions.
   49 OpenNGC objects are merged with their Sharpless region, by identifier (1), the committed override table
   `sh2_ongc_overrides.json` (2) or a capped positional rule (46). The build report lists every pair.
 - Distances:
   - 59 planetary nebulae have Gaia EDR3 central-star parallaxes, `measured`;
-  - 148 HII regions have Russeil stellar distances, `derived` with hollow markers;
-  - the other 490 are direction-only. They are drawn at infinity in their catalogue direction, fade as you fly away from the Sun, and their card button is "Turn to it".
+  - 141 HII regions take Shen et al. 2025's distance (`docs/object-framework.md` §19.4): the mean Gaia DR3
+    (Bailer-Jones) distance of their exciting stars, `measured` for Shen's Group I and `derived` for Groups II and
+    III (one star), or a VLBI maser parallax as Shen adopts it (18 regions, `measured`, not a Gaia value). Orion is
+    at 390 pc, M8 at 1,220 pc, the Rosette at 1,360 pc. Links to Shen's WISE regions follow a positional rule with a
+    committed override table, `shen_overrides.json`; the build report lists every link and every change over 50 %;
+  - 77 HII regions keep Russeil stellar distances, `derived` with hollow markers; where Shen's distance wins, Russeil's
+    is kept in `alt_distances` and shown "not used";
+  - the other 420 are direction-only. They are drawn at infinity in their catalogue direction, fade as you fly away from the Sun, and their card button is "Turn to it".
 - The look is procedural and illustrative. The Evidence view draws only the catalogue ellipse.
 - Licence: the data files are derived from OpenNGC and are CC BY-SA 4.0. See `LICENSE.md` in the dataset and
   sources folders and the repository `LICENSE`. The credit "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC"
-  is shown on every nebula card and in the 3D view's credits line.
+  is shown on every nebula card and in the 3D view's credits line. The Gaia-derived distances (Chornay & Walton,
+  Shen's Gaia rows) are CC BY-NC 3.0 IGO: the manifest credit and a nebula card's `Data` row add "Credit:
+  ESA/Gaia/DPAC" where they are used.
 - Edit the override table by hand, then rebuild. No network is needed, and its sha256 goes into the build report.
 
 **`bh-curated`** (`frontend/data/objects/bh-curated/`, 60 KB)
@@ -331,12 +347,12 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
   GAVO as fallbacks. Gaia data are **CC BY-NC 3.0 IGO** ("Credit: ESA/Gaia/DPAC"), and the credits line shows that credit.
 - The lensing look is illustrative and drawn enlarged when the true shadow is too small. The card says by how much.
 
-**`galaxies`** (`frontend/data/objects/galaxies/`, 12.5 MB in 365 tiles including the sky tile, about 1 MB gzipped; **data licence CC BY-SA 4.0** for the OpenNGC-derived values, EDD terms for the Cosmicflows-4 distances)
+**`galaxies`** (`frontend/data/objects/galaxies/`, 8.0 MB in 365 tiles including the sky tile, 0.9 MB of tiles gzipped; **data licence CC BY-SA 4.0** for the OpenNGC-derived values, EDD terms for the Cosmicflows-4 distances)
 - Sources, pinned by sha256 in `SOURCE.json`: OpenNGC v20260501 (commit `36cb178a`, the same pin as the nebulae);
   UNGC, Karachentsev et al. 2013 (VizieR `J/AJ/145/101/catalog`, 869 rows); Cosmicflows-4, Tully et al. 2023
   (`J/ApJ/944/94/table2`, 55,877 rows, and `groups`, 38,053 rows); McConnachie 2012 (`J/AJ/144/4/catalog`, Local
   Group rows only). Curated by hand, every number with `src`/`where`: `milky_way.json`, `local_group_curated.json` (the
-  LMC and SMC eclipsing-binary distances), `clusters.json` (Virgo, Fornax, Coma, Perseus), `ungc_ongc_overrides.json`
+  LMC and SMC eclipsing-binary distances), `clusters.json` (Virgo, Fornax, Coma, Perseus, and since Phase 4 Centaurus, Abell 1367, Hercules and Hydra), `ungc_ongc_overrides.json`
   and `galaxy_names.json`.
 - 11,449 records: 10,791 OpenNGC galaxy rows (G, GPair, GTrpl, GGroup), 657 UNGC-only dwarfs, and the Milky Way
   (`gal:milky_way`, R0 from GRAVITY 2022, the same value as Sgr A\*). 211 UNGC rows are merged into OpenNGC records
@@ -344,16 +360,25 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
 - Distances follow the ladder of `docs/object-framework.md` §18.4: one adopted distance per galaxy, never averaged;
   the others are kept in `alt_distances` with the reason they lost.
   - 1,850 `measured` (Cepheid, TRGB, SBF, masers, the curated Magellanic Clouds, McConnachie's resolved-star moduli);
-  - 9,599 `derived`: Tully–Fisher, fundamental plane, SNe, 308 group members (178 of them placed at the CF4 distance
-    of the Virgo, Fornax, Coma or Perseus cluster) and 5,763 Hubble-flow distances;
+  - 9,599 `derived`: Tully–Fisher, fundamental plane, SNe, 1,991 group members and 5,732 Hubble-flow distances.
+    The group members are 130 UNGC `mem` distances, 209 Hubble-flow galaxies placed at the CF4 distance of one of the
+    eight rich clusters, and 1,652 galaxies whose only distances were CF4 Tully–Fisher or fundamental plane and whose
+    CF4 group's distance is more precise (`docs/object-framework.md` §19.5): 405 from pairs, 366 from groups of 3–4,
+    301 of 5–9, 384 of 10 or more, 196 in the rich clusters. Their own distance is shown "not used", and
+    `props.group_radius` (the cited cluster radius, or the rms projected distance of the group's CF4 members from
+    their mean position) widens the interval. The groups table's own positions are not used: about 195 groups'
+    `RAJ2000`/`DEJ2000` lie more than 1° from their members (the build report lists them);
   - 912 direction-only (no velocity, or v_CMB below 1000 km/s), drawn on the sky as seen from the Sun.
 - Hubble flow: the heliocentric velocity moved to the CMB frame (Planck 2018 dipole), H0 = 74.6 km/s/Mpc (the
   Cosmicflows-4 scale; Planck's 67.4 would place each galaxy about 11 % farther), q0 = −0.595, and a 300 km/s
   peculiar-velocity allowance as the interval. Every such record's `src` says so.
 - Cosmicflows-4 moduli are luminosity-distance moduli, so their distances are divided by 1 + Vcmb/c.
-- The sky tile is the context set (161 records: everything within 3 Mpc, B ≤ 10, every SMBH host and the Milky Way).
+- The sky tile is the context set (160 records since Phase 4, when NGC 1058 moved from 2.3 to 8.4 Mpc; everything within 3 Mpc, B ≤ 10, every SMBH host and the Milky Way).
   It is served with every request, so flying out of any cone still shows the Local Group and the nearby giants.
 - The look (colour, arms, bar, tilt) is illustrative. The Evidence view draws only the catalogue ellipse.
+- Galaxies placed at a group distance are drawn at an illustrative depth within the smaller of their group radius and
+  their own interval (a deterministic hash of the id), so a cluster seen from the side is a cloud, not a sheet; the
+  Evidence view draws them at the exact group distance, and their supermassive black holes follow them.
 - The credits line shows "Credits: Mattia Verga (OpenNGC); distances: Cosmicflows-4 (Tully et al. 2023), Extragalactic
   Distance Database" with every view, because the context set is always sent.
 - Licence: see `LICENSE.md` in the dataset and sources folders and the repository `LICENSE`. OpenNGC-derived values are
@@ -370,9 +395,10 @@ SMBH `--check` fails if a host's distance has changed since the SMBH dataset was
 - Each black hole takes its host galaxy's position and adopted distance from the built `galaxies` dataset, and `parent`
   names the host. A dynamical mass scales linearly with the assumed distance, so the paper's mass is rescaled by
   (adopted distance / the paper's distance). The paper's values stay beside it as `mass_published` and
-  `dist_published`, shown "not used". The factors run from 0.926 (M104\*) to 1.025 (Cen A\*), and the tests pin each one.
+  `dist_published`, shown "not used". The factors run from 0.900 (NGC 4889\*, at the Coma cluster's distance since Phase 4) to 1.025 (Cen A\*), and the
+  tests pin each one.
   - M31\*'s paper states no distance, so its mass is not rescaled, and `mass_note` says so.
-  - NGC 4889\*'s host distance is derived (fundamental plane), so its rescaled mass is `inferred`.
+  - NGC 4889\*'s host distance is derived (the Coma cluster's CF4 group distance), so its rescaled mass is `inferred`.
   - NGC 4258\* shares the galaxy's Cosmicflows-4 maser distance. Reid et al.'s own 7.576 Mpc is listed as not used.
 - The lensing look is illustrative and enlarged where the true shadow is too small, as for Sgr A\*.
 

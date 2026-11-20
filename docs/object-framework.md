@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19 and approved 2026-11-20 (decisions in §19.14).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -190,7 +190,7 @@ The record's `evidence` describes **where the object is drawn**:
 - **Evidence view.**
   - It hides records whose evidence is `illustrative`.
   - It draws every other record in its renderer's *evidence style*, with no illustrative appearance. Star glows already go today.
-  - **Phase 0 makes no visible change here.** Planet bands, atmospheres and rings are tagged `illustrative` in the planet kind's sphere spec (`features: {band, atm, ring}`). Whether the Evidence view drops them is one constant in `scene3d-registry.js`, `EVIDENCE_HIDES_FEATURES = false`. Today the ring is clipped by the quad extent while bands and atmosphere still show, and that is kept. Hiding them all is a follow-up (§13).
+  - **Phase 0 makes no visible change here.** Planet bands, atmospheres and rings are tagged `illustrative` in the planet kind's sphere spec (`features: {band, atm, ring}`). Whether the Evidence view drops them is one constant in `scene3d-registry.js`, `EVIDENCE_HIDES_FEATURES = false`. Today the ring is clipped by the quad extent while bands and atmosphere still show, and that is kept. Hiding them all is a follow-up (§13). **Phase 4 change (§19.3.1):** `EVIDENCE_HIDES_FEATURES = true`; the Evidence view draws plain discs.
   - Card rows with tier `illustrative` are dropped, as now.
   - Derived records stay visible. Their markers get a hollow style hook, which Phase 0 has no records to use (§7.1).
 - **Phase 3 change (§18.4.3):** the method → evidence table for galaxy distances; SN Ia, Tully–Fisher, fundamental-plane and Hubble-flow distances are `derived`, enforced by `DERIVED_METHODS`.
@@ -340,7 +340,7 @@ template for Phase 1 build scripts).
 ```
 **Tile** `tiles/11-14.json`: `{ "format": "space-maps.object-tiles/1", "tile": "11-14", "objects": [ records ] }`.
 
-Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`. **Phase 1 change (§16.3):** records of a hosted kind (`exoplanet`) may instead use an `orbit` position with a `host` and `position.host_radec`, and are tiled by that direction. **Phase 2 change (§17.7):** `black_hole` is a hosted kind too. **Phase 3 change (§18.9):** `manifest.sky_tiles` names tiles every query returns whatever the cone (the galaxy context set, the supermassive black holes).
+Tile records must use `fixed` positions and `host: null`, and must pass `validate_record`. **Phase 1 change (§16.3):** records of a hosted kind (`exoplanet`) may instead use an `orbit` position with a `host` and `position.host_radec`, and are tiled by that direction. **Phase 2 change (§17.7):** `black_hole` is a hosted kind too. **Phase 3 change (§18.9):** `manifest.sky_tiles` names tiles every query returns whatever the cone (the galaxy context set, the supermassive black holes). **Phase 4 change (§19.7):** format `space-maps.object-tiles/2` adds a manifest `quantity_table` and compact Quantities (`[v, q]`, `[v, q, lo, hi]`); readers accept /1 and /2, and every shipped dataset is /2.
 
 **Reproducibility.**
 - `write_dataset()` writes sorted keys, a stable record order (by id), `separators=(",", ":")` and no timestamps (the build stamp is the script version plus `source_sha256`, not the build time).
@@ -1741,7 +1741,8 @@ Built counts (2026-11-18): **697 nebulae.** Of these, 59 have measured PN parall
 
 **Follow-up:** look for HII-region distance catalogues based on Gaia parallaxes of the ionising stars (for example
 Méndez-Delgado et al. 2020 and later work), which would replace the photometric Russeil distances where they overlap
-(§17.15).
+(§17.15). **Phase 4 change (§19.4):** done with Shen et al. 2025; Russeil's distances are kept as "not used" where
+Shen's win.
 
 ### 17.5 Direction-only records end to end
 
@@ -2592,7 +2593,8 @@ group 41220), because its velocity mostly reflects its motion inside the cluster
 The CF4 `groups` table (`J/ApJ/944/94/groups`, 38,053 rows; columns `1PGC, Ngal, DMzp, e_DMzp, Vh, V3k`) joins the
 snapshot: the same catalogue, so still two distance catalogues. Centaurus, Abell 1367, Hercules and Hydra are left
 out: no cited radius was found for Centaurus, and the others were not researched; their candidates keep the 300 km/s
-floor. Galaxies with their own catalogue distance are never moved. The build report counts and lists the members.
+floor. **Phase 4 change (§19.5, §19.6):** the four join with cited radii, and galaxies with only a TF/FP distance take
+their CF4 group's distance when it is more precise. Galaxies with their own catalogue distance are never moved. The build report counts and lists the members.
 
 #### 18.4.7 The Local Group (added at approval, §18.18 item 6)
 
@@ -3170,22 +3172,22 @@ and SMBHs; (9) docs and mock server.
 - **Phase 7, lensing and real images:** true gravitational lensing of the background; real image billboards,
   preferring tiled sky surveys.
 
-
-- [ ] Real image billboards (§17.6.4), preferring tiled sky surveys with proper sky alignment over press images, licence permitting.
-- [ ] True gravitational lensing of the background (§17.9).
-- [ ] `EVIDENCE_HIDES_FEATURES`.
-- [ ] The README `online` marker.
-- [ ] The cluster member-star highlight (§16.12).
-- [ ] Orbit animation over time.
-- [ ] Migrating "Turn back the sky" onto the shared catalogues.
-- [ ] A general evidence rule for all hosted kinds (§17.15, approval condition 2).
-- [ ] Gaia-parallax-based HII-region distances (§17.4).
-- [ ] Whatever Q1 decides about the Gaia NC term and EDD's terms, applied repository-wide.
-- [ ] A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown.
-- [ ] Group-averaged CF4 distances (its `groups` table) as a third option for galaxies with only a TF/FP distance.
-- [ ] A Sun / "you came from here" marker in `cosmos`.
-- [ ] A compact Quantity encoding (or a per-tile column layout) to bring `galaxies` from 12.5 MB towards the 7 MB budget (§18.19).
-- [ ] Cited radii for the Centaurus, Abell 1367, Hercules and Hydra clusters, so their members get the §18.4.6 rule.
+- [x] §18.19's "Left rough" list (Phase 4, §19.3.3–§19.3.8 and §19.15).
+- [ ] (Phase 7) Real image billboards (§17.6.4), preferring tiled sky surveys with proper sky alignment over press images, licence permitting.
+- [ ] (Phase 7) True gravitational lensing of the background (§17.9).
+- [x] `EVIDENCE_HIDES_FEATURES` (Phase 4, §19.3.1).
+- [x] The README `online` marker (Phase 4, §19.3.2).
+- [ ] (Phase 5) The cluster member-star highlight (§16.12).
+- [ ] (Phase 5) Orbit animation over time.
+- [ ] (Phase 6) Migrating "Turn back the sky" onto the shared catalogues.
+- [ ] (Phase 5) A general evidence rule for all hosted kinds (§17.15, approval condition 2).
+- [x] Gaia-parallax-based HII-region distances (§17.4; Phase 4, §19.4: Shen et al. 2025).
+- [x] Whatever Q1 decides about the Gaia NC term and EDD's terms, applied repository-wide (Phase 4, §19.8).
+- [ ] (Phase 5) A per-galaxy `kpc` frame (§8) if resolved stars of other galaxies are ever shown.
+- [x] Group-averaged CF4 distances (its `groups` table) as a third option for galaxies with only a TF/FP distance (Phase 4, §19.5).
+- [x] A Sun / "you came from here" marker in `cosmos` (Phase 4, §19.3.9).
+- [x] A compact Quantity encoding (or a per-tile column layout) to bring `galaxies` from 12.5 MB towards the 7 MB budget (§18.19; Phase 4, §19.7: `space-maps.object-tiles/2`).
+- [x] Cited radii for the Centaurus, Abell 1367, Hercules and Hydra clusters, so their members get the §18.4.6 rule (Phase 4, §19.6).
 
 ### 18.17 Open questions
 
@@ -3372,8 +3374,8 @@ Left rough:
 
 ## 19. Phase 4: fixes and data quality (design)
 
-Status: **approved 2026-11-20 with the decisions in §19.14**, which override anything in §19.1–§19.13 they contradict. Sections of §1–§18 that Phase 4 changes will carry a
-"Phase 4 change" note pointing here when it is implemented. Where this section and an earlier one disagree, this one
+Status: **approved 2026-11-20 with the decisions in §19.14**, which override anything in §19.1–§19.13 they contradict; **implemented 2026-11-20** (§19.15). Sections of §1–§18 that Phase 4 changes carry a
+"Phase 4 change" note pointing here. Where this section and an earlier one disagree, this one
 wins.
 
 Phase 4 is the first of the four follow-up phases recorded in §18.16: fixes and data (this section), then time and
@@ -3899,3 +3901,134 @@ The open questions of §19.13 were answered as follows. Where an earlier part of
    files.
 
 Everything else in §19 is approved as written.
+
+### 19.15 Implementation notes (stage 2, 2026-11-20)
+
+What the build changed from the design above, the browser checks, and what is left rough. The design text is not
+edited to match; where the two differ, this section describes what ships.
+
+**Tile format /2 (§19.7)**
+- `objects.TILE_FORMAT` stays `space-maps.object-tiles/1` (the schema test pins it); `TILE_FORMAT_2` and
+  `TILE_FORMATS` are new. The writer compacts only Quantities whose `src` and `tier` are strings (all of them in
+  practice) and refuses a list where a Quantity belongs. `alt_distances` sources are not in `src_table` (they never
+  were), so their `quantity_table` entries hold the string.
+- The format commit changed no data: `/api/objects` returned byte-identical records for the seven regression patches
+  before and after it, every `--check` was byte-identical, and `test_objects_migration.py` decodes each dataset to the
+  records its `/1` tiles held at `3d12c9c` (via `git archive`). `nebulae`, `galaxies` and `smbh-curated` left that
+  baseline list in the commits that changed their data, as §19.14 item 5 asks; a permanent round-trip test covers all
+  six.
+
+| Dataset | Manifest before → after | Tiles before → after | Tiles gzipped before → after (gzip -9 per file, summed) |
+|---|---|---|---|
+| `galaxies` (format only) | 0.90 → 1.16 MB | 11.57 → 6.18 MB | 1.21 → 1.06 MB |
+| `galaxies` (after §19.5, §19.6) | 1.50 MB | 6.47 MB | 1.11 MB |
+| `nea-exoplanets` | 0.14 → 0.41 MB | 11.50 → 7.44 MB | 1.64 → 1.49 MB |
+| `hr23-clusters` | 0.032 → 0.032 MB | 9.00 → 5.31 MB | 1.34 → 1.24 MB |
+| `nebulae` (format only; after §19.4) | 0.055 → 0.061; 0.124 MB | 0.449 → 0.319; 0.333 MB | 0.097 → 0.089; 0.096 MB |
+| `bh-curated` | 22 → 24 KB | 18.7 → 12.8 KB | 7.2 → 6.4 KB |
+| `smbh-curated` | 16 → 17 KB | 8.1 → 5.5 KB | 1.8 → 1.7 KB |
+
+  `galaxies` is 12.47 MB before and **7.97 MB** after, under the build's new 8 MB cap with about 25 KB to spare (the
+  1,650 group-distance `src` strings and the build report grew the manifest). The repository's six dataset folders went from
+  33.7 MB to 21.7 MB.
+
+**HII distances (§19.4)**
+- **Eligibility** is every OpenNGC record of type HII, EmN, Neb or Cl+N plus the Sharpless-only regions, not only the
+  Sharpless-merged records (§19.4.2's wording). The research counts of §19.4.1 used this set, and the narrow reading
+  gave 108 links instead of 146.
+- 146 links, **141 adopted**: Group I 76, Group II 10, Group III 55; by remark 97 blank, 26 `M22`, 13 `maser`, 5
+  `maser,M22` (18 maser rows, `measured`, `parallax`, no Gaia credit). **71 Russeil distances replaced, 70
+  direction-only regions placed**; 77 keep Russeil (5 because a Group II/III Shen distance was less precise, 54 with no
+  Shen region in range, 18 excluded as ≥ 120′). Of the 71: median change −14.4 %, median |change| 22.2 %, 40 change by
+  more than 20 % and **9 by more than 50 %**, listed in the report for review: IC 1470 4,200 → 2,050 pc (II), NGC 1931
+  5,200 → 2,150 (I, M22), the Trifid 2,700 → 1,240 (I, M22), Sh2-135 1,200 → 2,130 (II), Sh2-168 2,500 → 4,960 (I),
+  Sh2-207 7,500 → 3,410 (I, M22), Sh2-209 10,100 → 2,840 (I), Sh2-266 2,000 → 4,280 (I, M22), Sh2-305 4,300 → 2,130 (I).
+- Final nebula distances: 59 PN parallaxes, 141 Shen, 77 Russeil, 420 direction-only; 560 `measured`, 137 `derived`.
+- Sh2-289 (§19.4.3's review case) keeps Russeil's 8,500 pc: Shen's Group III 450 pc is derived too and less precise
+  on the ladder. NGC 6611 is excluded by the 120′ guard and keeps Russeil's 2,000 pc; IC 4703 (the Eagle's nebula
+  record) is placed at Shen's 1,720 pc.
+- Shen's table gives no per-row reference for its maser distances, so each maser `src` says so (§19.14 item 1).
+- The nebula `licence_name` became "CC BY-SA 4.0 (OpenNGC data); Gaia-based PN and HII-region distances CC BY-NC 3.0
+  IGO", and the credit names both Gaia sources.
+
+**Group distances and the four clusters (§19.5, §19.6)**
+- **The CF4 groups table's positions are wrong for some rows.** Group 43296 (Cen 30, around NGC 4696 at 192.2°,
+  −41.3°) is listed at (235.1487°, −71.6948°), and its `GLON`/`GLAT` are wrong too; 195 of 38,023 groups lie more than
+  1° from their members' mean and 156 more than 10°. So the group centre is always the **spherical mean of its CF4
+  members**, and `group_radius` is the rms about it (a pair gets exactly half its separation). The snapshot keeps the
+  groups' `RAJ2000`/`DEJ2000` only for the report's upstream note.
+- **1,652 galaxies moved** to a group distance: 405 from pairs, 366 from groups of 3–4, 301 of 5–9, 384 of 10 or more,
+  196 in the rich clusters; the group won every time it was a candidate. 1,469 TF/FP-only galaxies keep their own
+  distance (alone in CF4, or in a group the groups table lacks). Median change −0.1 %, median |change| 11.7 %, 416
+  over 20 %, 37 over 50 % (listed in the report). NGC 1058 moved from its own TF 2.34 Mpc to its pair's 8.39 Mpc and
+  left the context set (161 → 160).
+- **Clusters:** Centaurus 10, Abell 1367 10, Hercules 6, Hydra 5 Hubble-flow members (Virgo 119, Fornax 3, Coma 35,
+  Perseus 21 unchanged). No Cen 45 galaxy joined Centaurus. `clusters.json`'s four new `radius_mpc` entries carry
+  `"tier": "inferred"` (converted from h50 units); the four old ones are `catalogue`.
+- **NGC 4889** moved from its FP 103.65 Mpc to the Coma distance, 92.876 (89.78–95.97) Mpc; NGC 4889\* follows, its
+  mass factor 1.00436 → 0.899961 (1.89 × 10¹⁰ M☉, still `inferred`).
+- `build_objects_galaxies.py --refresh --only ROLE,…` refreshes named inputs only; the CF4 re-snapshots came from
+  CfA (IDIA served `groups` bytes that hash differently).
+
+**Frontend**
+- The lensing cap returns marker-only black holes on a `.markerOnly` list beside the drawn items; `lensVisible` keeps
+  their markers. `projectAxes` reports `inside` for an item behind the camera, so `smbhVisible` also requires the
+  camera to be within the galaxy, or the item to be in front (`forward`).
+- **HUD speed.** The cause was not the frame switch: during an autopilot turn the camera does not move, the smoothed
+  speed decays, and the HUD's 1e-15 pc/s threshold printed the tail (6.8e-9 AU/s is 3.3e-14 pc/s); the same tail
+  followed every arrival. `SpeedTracker` and `hudSpeed` (`scene3d-nav.js`) now show "turning", then the speed, then
+  "0 · cruise …". The browser check found one more source: a camera at rest has no trip peak to compare with, so
+  float-level drift showed as 7.6e-9 AU/s; `hudSpeed` also treats anything below 1e-6 of the cruise speed as rest. The
+  literal acceptance of §19.3.6 cannot hold at the end of a log-distance trip (the real final approach is slower than
+  1e-6 of the peak), so there the HUD reads "0 · cruise".
+- **Dither.** Applied over the whole glow quad, it lit the quad's empty corners by up to half an 8-bit step, which
+  showed as a straight edge under a contrast boost. It now fades in over the glow's own first step.
+- The galaxy depth spread uses `hashUnit(id, 'los') + hashUnit(id, 'los2') − 1` (a triangular bell), bounded by the
+  smaller of `group_radius` and the record's own interval; the store re-points positions when the Evidence view
+  toggles, and supermassive black holes follow their galaxy's drawn centre.
+- `dataRow(o)` puts a Data row on every card; a stellar-mass black hole's card carries the Gaia credit when its host is
+  a `gdr3:` star. The Milky Way glow's credit text and link are in `scene3d-main.js`, not read from `milkyway.json`.
+  The 2D page's footer is hidden in "Turn back the sky" mode, which shows no Gaia values.
+
+**Browser checks (2026-11-20, fresh backends: this tree on :8011 and `origin/main` before Phase 4 on :8012; a headed
+Chromium on a real Wayland display with real-time rAF; 1280 × 800 unless stated)**
+- **M31 from the Sun:** at the start view M31's semi-major axis is 58.7 px; M31\* is drawn with a 2.9 px shadow (its
+  look a fifth of the galaxy's radius, "Drawn enlarged ×3e7"), M32\* is a marker (cap 0.13 px). Before: two 9 px
+  shadows in 36 px quads. The M31\* card has its Data row.
+- **Virgo up close:** seen edge-on from 7 Mpc to the side, the Evidence view shows the Virgo members as a flat sheet and
+  the normal view as a cloud. Over the 149 group-placed galaxies in the cone the offsets fill the bound as a bell (no
+  shell, max |t| 0.89), and all are zero in the Evidence view. M 100's card: "16.1 ± 1.7 Mpc", "Group radius 1.7 Mpc",
+  the cluster note and "Drawn depth within its group is illustrative; the distance above is its group's."
+- **Elliptical glow close up** (M87 at 3 radii, brightness ×4): concentric banding before, smooth after, no quad edge.
+- **Frame-switch HUD** (Sun → M87, 240 samples): before, the speed counted down to 5.4e-9 AU/s after arriving; after,
+  "turning", then Mpc/s through the switch into `cosmos`, then "0 · cruise 34.7 kpc/s", with no speed below 1e-6 pc/s.
+- **Home markers:** from Virgo one merged "Milky Way · the Sun is here"; at 104 kpc "Sun · you started here" and
+  "Milky Way centre · Sgr A\*" on the Milky Way billboard; picking the Sun there opens its card.
+- **Evidence view on Jupiter and Saturn:** plain discs; Saturn's ring and both planets' bands are gone.
+- **Orion:** 390 pc, measured, "VLBI maser parallax", Russeil's 400 ± 40 pc "not used", Data row without the Gaia credit.
+  **M8:** 1,220 ± 20 pc, measured, Russeil's 1,600 "not used", Data row with the Gaia credit; the Trifid 1,240 +40/−30 pc.
+- **A Centaurus galaxy** (NGC 4603): 39.8 ± 1.5 Mpc at the Cen 30 group distance, its own TF 32 Mpc "not used", group
+  radius 1.25 Mpc (inferred), both notes.
+- **Regression:** TRAPPIST-1, the Pleiades, Orion, the Galactic Centre, M31, M87 (the flight into `cosmos` above) and the
+  LMC look as before, apart from fewer counted black holes (SMBHs whose galaxy is behind the camera are no longer
+  counted) and the new credits. The LMC path switches to `cosmos` once past 60 kpc and back once below 40 kpc, with
+  no switch at 55 or 45 kpc. The Evidence view at each patch draws outlines and markers only.
+- **Credits:** at 375 px the 3D credits line is three lines and scrolls; at 768 and 1280 px it is 127 px tall; no
+  horizontal overflow. The 2D page shows "Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO" at all three widths
+  without overlap; the analysis footer reads "Gaia DR3 (Credit: ESA/Gaia/DPAC, CC BY-NC 3.0 IGO)".
+- **Frame times** (rAF deltas over 3–4 s, interleaving the old and new builds per patch): M87, M31 and TRAPPIST-1 all
+  16.67 ms mean, p95 16.8 ms, before and after; Virgo from the side, M87 at 3 radii and the Sun → M87 trip 16.7 ms
+  mean after. The display is 60 Hz, so the measure is capped by vsync: Phase 4 adds no dropped frames, but a cost
+  under one refresh interval would not show. In one long run every patch, old build included, dropped to about 17.8
+  ms from the same moment on, an environmental change, so that run's numbers are not compared.
+
+**Left rough**
+- The credits line lists what the payload holds, not what is drawn: at 100 kpc it still names the Gaia star layer and
+  the exoplanet archive (behaviour since Phase 3).
+- Star labels (Neptune, Regulus) can sit on a planet's disc in the Solar system scene (since Phase 0).
+- `galaxies` is 25 KB under its 8 MB cap; the next data change there may need a smaller build report.
+- Nine HII distances change by more than 50 % and are listed in the report for review; Shen's Group III regions that
+  disagree with Russeil are decided by precision alone.
+- The home ring and the old galaxy-frame Sun marker were not looked at together between 20 and 40 kpc, where both can
+  show.
+- The Galactic Centre's Gaia cone took 176 s to load cold (the upstream archive, the same before and after).

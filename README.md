@@ -90,16 +90,23 @@ docs/              Architecture notes, UI spec, and deep technical reference
 
 ## Running Tests
 
-Backend suite (offline tests run fast; live-network integration tests marked `online` are skipped by default):
+Backend suite (offline; the live-network smoke tests marked `online` are skipped by default):
 
 ```sh
 uv run pytest
 ```
 
+The `online` tests check that the upstreams the data builds pin (VizieR tables, Sesame, SkyBoT, the OpenNGC commit) still
+answer as pinned. They are informational, never part of a deploy, and need the network:
+
+```sh
+uv run pytest --online
+```
+
 Frontend suite (Node.js built-in test runner):
 
 ```sh
-node --test frontend/tests/skygl.test.mjs frontend/tests/skytime.test.mjs frontend/tests/stream.test.mjs
+node --test frontend/tests/*.test.mjs
 ```
 
 ---
@@ -112,6 +119,21 @@ node --test frontend/tests/skygl.test.mjs frontend/tests/skytime.test.mjs fronte
 
 ---
 
+## Data and licences
+
+The code is MIT. Some of the data the app shows is not:
+
+- **Gaia** values (the live star layer, exoplanet hosts, black-hole companions, planetary-nebula and HII-region
+  distances, the Milky Way glow) are distributed by ESA under CC BY-NC 3.0 IGO, "Credit: ESA/Gaia/DPAC".
+- **Cosmicflows-4** galaxy distances follow the Extragalactic Distance Database's terms: use and sharing for research
+  and education, with citation.
+- Files derived from **OpenNGC** (nebulae, galaxies, the supermassive black holes placed at their galaxies) are
+  CC BY-SA 4.0.
+
+Space Maps is run as a non-commercial, educational project, and the app shows each credit where its values appear.
+[`LICENSE`](LICENSE) lists exactly which files are covered by which terms, and what would have to be removed,
+replaced or cleared **before any commercial use**.
+
 ## License
 
-Released under the [MIT License](LICENSE).
+The code is released under the [MIT License](LICENSE); see "Data and licences" above for the data.

@@ -52,6 +52,12 @@ project; see "Before any commercial use" below.
        G magnitudes of exoplanet hosts);
      - the planetary-nebula distances and central-star ids in the nebulae
        folders (Chornay & Walton 2021, from Gaia EDR3 parallaxes);
+     - the HII-region distances in the nebulae folders that Shen et al. 2025
+       derive from Gaia DR3 parallaxes of the regions' exciting stars (their
+       maser-parallax rows are not Gaia values);
+     - the Milky Way glow image, frontend/data/milkyway.webp (NASA/GSFC
+       Scientific Visualization Studio, Deep Star Maps 2020; "Gaia DR2:
+       ESA/Gaia/DPAC");
      - frontend/data/objects/hr23-clusters/ and its sources hold Hunt &
        Reffert's cluster values, derived from Gaia DR3;
      - the live star layer of the 3D view, queried from Gaia archives at run
@@ -65,7 +71,8 @@ project; see "Before any commercial use" below.
    Space Maps.
 
 4. Tables served by VizieR (CDS, Strasbourg) are used under VizieR's terms of
-   use with their citations: Sharpless, Chornay & Walton, Russeil (nebulae),
+   use with their citations: Sharpless, Chornay & Walton, Russeil, Shen et al.
+   2025 (nebulae),
    Hunt & Reffert (clusters), UNGC, McConnachie 2012 and Cosmicflows-4
    (galaxies).
 
@@ -75,8 +82,10 @@ These would have to be removed, replaced or cleared first:
   - the live Gaia star layer (ESA's authorisation, data.licences@esa.int, or a
     different star source);
   - nea-exoplanets and bh-curated: their Gaia DR3 values;
-  - nebulae: the Chornay & Walton (Gaia EDR3) planetary-nebula distances; a
-    rebuild without them leaves those 59 nebulae direction-only;
+  - nebulae: the Chornay & Walton (Gaia EDR3) planetary-nebula distances and
+    Shen et al. 2025's Gaia DR3 HII-region distances; a rebuild without them
+    leaves those 59 planetary nebulae direction-only and the HII regions at
+    Russeil 2003's or Shen's maser-parallax distances, or direction-only;
   - hr23-clusters: whether Hunt & Reffert's Gaia-derived values fall under
     Gaia's non-commercial term;
   - galaxies and smbh-curated: the Cosmicflows-4 distances (EDD's "research and

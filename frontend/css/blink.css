@@ -102,6 +102,10 @@ kbd { font: 500 11px/1 var(--mono); padding: 2px 5px; border: 1px solid var(--ct
 /* ---- dock: a compact bar at the bottom centre, with at most one panel open above it ---- */
 .dock { position: absolute; left: 0; right: 0; bottom: 0; top: 96px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 10px;
   padding: 0 var(--pad) clamp(14px, 2vw, 24px); pointer-events: none; }
+/* the credits footer: the last row of the dock, under the bars (never over them); the sky around it still takes clicks */
+.dock-credit { margin: 0; max-width: 100%; text-align: center; font: 400 10.5px/1.4 var(--mono); color: var(--text-2); text-shadow: var(--shadow); overflow-wrap: anywhere; }
+.dock-credit a { color: inherit; text-decoration: underline; pointer-events: auto; }
+.root.rewinding .dock-credit { display: none; }   /* the rewound sky is XHIP and d3-celestial, not Gaia */
 .sphere-dock { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; }
 .sphere-dock[hidden] { display: none; }
 .glass, .bar, .sheet { background: rgba(8, 10, 15, 0.62); border: 1px solid rgba(233, 230, 223, 0.12); border-radius: 14px;

@@ -90,8 +90,10 @@ function onHud(h) {
     ? `Near ${h.hostName} · ${fmtNum(h.surfaceAu)} AU from its surface`
     : `${h.frame === 'cosmos' ? 'Intergalactic' : 'Interstellar'} · ${fmtDistPc(h.dist).split(' · ')[0]} from the Sun`;
   $('hud-dist').textContent = `${fmtDistPc(h.dist)}${h.scene === 'solar' && solarDate ? ' · ' + solarDate : ''}`;
-  const moving = h.speedPc > 1e-15;
-  $('hud-speed').textContent = `${moving ? fmtSpeedPc(h.speedPc) : `0 · cruise ${fmtSpeedPc(h.cruisePc).split(' · ')[0]}`}${h.flying ? ' · autopilot' : ''}`;
+  // speedMode (hudSpeed, section 19.3.6): 'turning' while an autopilot trip turns (the camera is not moving yet), 'rest' below the noise floor, else the speed
+  const speedText = h.speedMode === 'turning' ? 'turning' : h.speedMode === 'rest' ? `0 · cruise ${fmtSpeedPc(h.cruisePc).split(' · ')[0]}` : fmtSpeedPc(h.speedPc);
+  $('hud-speed').textContent = `${speedText}${h.flying ? ' · autopilot' : ''}`;
+  if (!!h.mwGlow !== mwGlowShown) { mwGlowShown = !!h.mwGlow; refreshCredits(); }   // the Milky Way glow's credit follows its visibility
   $('hud-mode').textContent = h.auto ? `Auto · ${fmtNum(h.throttle, 2)}/s of the way · T` : 'Manual · T';
   $('hud-near').textContent = h.nearName && h.nearText ? `${h.nearName} · ${h.nearText}` : 'n/a';
   $('hud-ev').textContent = `${h.ev >= 0 ? '+' : '−'}${Math.abs(h.ev).toFixed(1)} EV`;
@@ -128,15 +130,22 @@ function setEvidenceUi(on) {
  * The credits line (section 17.2): `credit · licence` for every dataset that has records in the cone and a credit (OpenNGC's CC BY-SA 4.0 for the
  * nebulae). Shown in both scenes, small; the licence name links to its page in a new tab.
  */
-let creditSources = [];   // the last objects payload's sources: the Gaia star credit is added when the stars arrive, which can be after them
+// The Milky Way glow (frontend/data/milkyway.webp, built from NASA SVS 4851, itself from Gaia DR2): its credit shows while the glow does (section 19.8). href is milkyway.json's `source`.
+const MW_CREDIT = { dataset: 'milkyway', text: 'Milky Way glow: NASA/GSFC Scientific Visualization Studio · Gaia DR2: ESA/Gaia/DPAC', credit: 'NASA/GSFC Scientific Visualization Studio', licenceName: null, licence: null, href: 'https://svs.gsfc.nasa.gov/4851' };
+let creditSources = [], mwGlowShown = false;   // the last objects payload's sources: the Gaia star credit is added when the stars arrive, which can be after them
 function refreshCredits(sources = creditSources) {
   creditSources = sources;
   const box = $('credits');
   box.textContent = '';
   // skyScope: the galaxies and supermassive black holes of the context set count even outside the cone; the Gaia star item (section 18.12) is client-side
-  const items = scene ? creditItems(sources, datasetCounts(scene.store, { skyScope: true }), [starCreditItem(scene.counts.gaia > 0)]) : [];
+  const items = scene ? creditItems(sources, datasetCounts(scene.store, { skyScope: true }), [starCreditItem(scene.counts.gaia > 0), mwGlowShown ? MW_CREDIT : null]) : [];
   items.forEach((it, i) => {
     if (i) box.append(' | ');
+    if (it.href && /^https?:\/\//i.test(it.href)) {   // a client-side item whose whole text links to its source (the Milky Way glow)
+      const a = document.createElement('a');
+      a.href = it.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = it.text;
+      box.append(a); return;
+    }
     if (!it.licenceName || !it.licence || !/^https?:\/\//i.test(it.licence)) { box.append(it.text); return; }
     box.append(it.text.endsWith(it.licenceName) ? it.text.slice(0, -it.licenceName.length) : `${it.credit} · `);   // "Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · " keeps its lead-in
     const a = document.createElement('a');

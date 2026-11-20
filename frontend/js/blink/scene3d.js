@@ -11,11 +11,11 @@
 import * as M from './scene3d-math.js';
 import * as F from './scene3d-frames.js';
 import { starModel, granulation } from './scene3d-physics.js';
-import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE, carrySpeed } from './scene3d-nav.js';
+import { Autopilot, arrivalDistance, suggestSpeed, TURN_SECONDS, autoThrottleSpeed, keepOutside, headingWeight, corridorDistance, THROTTLE, carrySpeed, SpeedTracker, hudSpeed } from './scene3d-nav.js';
 import { renderStarCard, renderBodyCard } from './scene3d-card.js';
 import { loadLayers, saveLayers, layerOf, kindSpec, layers as layerDefs, fmtNum as regFmtNum, childGroups, preferredStarDistance, preferredDistanceRows, gaiaDataRow, isMilkyWay } from './scene3d-registry.js';
 import { ObjectStore, visibleObjects, framePos, groupState, groupTarget, pickObjects, choosePick, labelCandidates, planGo, hostCountText, kindsPhrase,
-  objectStarParams, starValuesFromRecord, resolveStarAliases, preferredStarPlacement, starSignature, billboardItems, lensingItems, markerPoints, mergeStarSystem,
+  objectStarParams, starValuesFromRecord, resolveStarAliases, preferredStarPlacement, starSignature, billboardItems, lensingItems, lensVisible, homeMarkers, markerPoints, mergeStarSystem,
   MW_FADE_PC, skyFadeOf, fromYouFor, visibleCounts, galaxyFade, withSmbh, presenceOf, GALAXY_PICK_MIN } from './scene3d-objects.js';
 import { galaxyQuad, galaxySurfacePc, GALAXY_VERTEX_FLOATS } from './scene3d-galaxy.js';
 import { fmtDistPc } from './scene3d-format.js';
@@ -45,7 +45,7 @@ const SNAP_FADE_S = 1.2, SNAP_DROP_S = 0.25;
 const SUN_ABS_G = 4.67, SUN_BP_RP = 0.82;
 const Z_UP = [0, 0, 1];
 const SUN_HOST = { idx: 0, key: 'ss:sun', name: 'Sun', pc: [0, 0, 0] };
-const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8;
+const GROUP_RGB = [1.0, 0.92, 0.75], GROUP_PX_SIZE = 8, HOME_PX = 12;   // HOME_PX: the home markers' ring
 // Cluster glow brightness: BB_K x the exposure (capped), so a glow stays a faint wash even in a dark, high-exposure view. The Evidence
 // ring is a thin line, drawn at a fixed linear level (not scaled by the exposure: a bright star nearby drives the exposure down and a
 // scaled ring vanished with it).
@@ -127,7 +127,7 @@ export class Scene3D {
     this.lost = false; this.running = false; this._last = 0; this._hudT = 0; this._cardT = 0; this._cardSig = ''; this._raf = 0;
     this._pickSig = ''; this._pickSel = null; this._frameNo = 0; this._t = 0;
     this.autoSpeed = true; this.throttle = THROTTLE.def;       // auto-throttle: speed = throttle x distance to the nearest surface
-    this._near = null; this._nearNo = -1; this._xh = null; this._xhT = -1e9; this._lastWorld = null; this.speedPc = 0;
+    this._near = null; this._nearNo = -1; this._xh = null; this._xhT = -1e9; this.speedPc = 0; this._spd = new SpeedTracker(); this._home = []; this._mwFade = 0;   // _home: this frame's homeMarkers; _mwFade: the Milky Way glow's fade (credits line)
     this._intro = null; this._outro = null; this._arrival = null;   // camera animations to and from a flat picture
     this._snap = null;                                               // the flat picture laid over the canvas (showSnap)
     this._frame = this._frame.bind(this);
@@ -483,7 +483,10 @@ export class Scene3D {
   toggleScene() { this.setScene(this.scene === 'stars' ? 'solar' : 'stars'); }
   resetView() { this.setScene(this.scene); }
   setEvidence(on) {
-    this.evidence = !!on; this._cardSig = ''; this._ver++; this._pickSig = '';
+    this.evidence = !!on; this._cardSig = ''; this._ver++; this._pickSig = ''; this._near = null; this._xhT = -1e9;
+    // the group-member line-of-sight spread (section 19.3.4) follows the flag: the store re-points its placements here, before anything reads them (visibleObjects would do it
+    // too); the entries, points, lines, groups and the pick cache are rebuilt from them, and the picks, labels, card, crosshair, Go there and trips read the same placements
+    this.store.setEvidence(this.evidence);
     this._refreshObjectBuffers();
     this.hooks.onEvidence(this.evidence);
   }
@@ -1043,14 +1046,13 @@ export class Scene3D {
     this.tanY = Math.tan(this.fov * D2R / 2); this.tanX = this.tanY * aspect;
     this.pxPerRad = (this.cssH / 2) / this.tanY;
   }
-  /** Measured world-space speed (pc/s, smoothed) from the camera's movement; frame switches do not disturb it. */
+  /**
+   * Measured world-space speed (pc/s, smoothed) from the camera's movement; frame switches do not disturb it. SpeedTracker (scene3d-nav.js) keeps a speed below 1e-6 of the
+   * recent peak (or of the flying autopilot's own peak) at 0, so the HUD says "turning" or "0 · cruise" instead of a speed in the last frames of a trip (section 19.3.6).
+   */
   _trackSpeed(dt) {
-    const w = F.worldPc(this.cam);
-    if (this._lastWorld && dt > 0) {
-      const v = Math.hypot(w[0] - this._lastWorld[0], w[1] - this._lastWorld[1], w[2] - this._lastWorld[2]) / dt;
-      this.speedPc += (v - this.speedPc) * (1 - Math.exp(-dt * 10));
-    }
-    this._lastWorld = w;
+    const o = this.ap && this.ap.type !== 'look' && this.ap.obj;           // the Autopilot of a trip (a look has none); its unitsPerPc turns its frame units into pc
+    this.speedPc = this._spd.update(F.worldPc(this.cam), dt, o && o.active ? o.peakSpeed() / (this.ap.unitsPerPc || 1) : 0);
   }
   /** Stars within NEAR_PC of the camera: nearest first handled by stepFrame, all of them drawn exactly. */
   _scan() {
@@ -1170,8 +1172,8 @@ export class Scene3D {
       dynStars.push(rel[0], rel[1], rel[2], this.st.gal[7 * c.idx + 3], col[0] * wPoint, col[1] * wPoint, col[2] * wPoint);
       if (s > 0 && !inside) bodies.push({ kind: 0, rel, dist: distAu, rAu, s, md, idx: c.idx, units: cam.frame === 'system' ? 1 : AU_PER_PC });
     });
-    const lens = lensingItems(vis, cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, project: this._pjAll });   // black holes: the lensing look (never in the Evidence view)
-    this._lens = new Map(lens.map((it) => [it.id, it]));
+    const lens = lensingItems(vis, cam, { evidence: this.evidence, pxPerRad: this.pxPerRad, project: this._pjAll, items: bb });   // black holes: the lensing look (never in the Evidence view; capped on a galaxy seen from outside, section 19.3.3)
+    this._lens = new Map([...lens, ...lens.markerOnly].map((it) => [it.id, it]));   // the card reads enlarged / factor / truePx / markerOnly / parentName
     for (const it of lens) this.dyn.set(it.id, it.px);            // the pick reach and the selection ring follow the drawn size
     for (const e of vis) {
       if (e.renderer === 'sphere') {                              // a point that cross-fades into a ray-traced sphere
@@ -1195,8 +1197,14 @@ export class Scene3D {
     if (bufOk) this._drawPoints(this.gpu.points, cam.pos);
     if (dynPts.length) this._drawDynPoints(new Float32Array(dynPts));
     this._drawLensing(lens);                                      // after the stars, "over" blending: the black disc hides what is behind it
-    // a lensing entry keeps its marker only in the Evidence view; otherwise its look is the marker
-    const marks = markerPoints(this.evidence ? vis : vis.filter((e) => e.renderer !== 'lensing'), groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
+    // a lensing entry keeps its marker in the Evidence view and when its look is too small to draw (lensVisible); otherwise its look is the marker
+    let marks = markerPoints(lensVisible(vis, lens, this.evidence), groups, cam, bb, { groupPx: GROUP_PX_SIZE, groupRgb: GROUP_RGB });   // galaxy-frame markers, cluster centres, group markers
+    this._home = homeMarkers(cam, { project: this._pjAll, galaxyFade: this._gf, store: this.store, evidence: this.evidence });   // "you came from here" (section 19.3.9): hollow rings
+    if (this._home.length) {
+      const h = new Float32Array(marks.length + 8 * this._home.length); h.set(marks);
+      this._home.forEach((m, i) => h.set([m.rel[0], m.rel[1], m.rel[2], -HOME_PX, m.alpha, m.rgb[0], m.rgb[1], m.rgb[2]], marks.length + 8 * i));
+      marks = h;
+    }
     if (marks.length) this._drawDynPoints(marks);
     // spheres, far to near, premultiplied "over"
     bodies.sort((a, b) => b.dist - a.dist);
@@ -1224,7 +1232,7 @@ export class Scene3D {
       const by = new Map(items.map((i) => [i.id, i]));
       for (const e of this._visAll) if (e.renderer === 'billboard') { const it = by.get(e.id); e.markerOnly = !!(it && it.markerOnly); }
     }
-    this._vis = withSmbh(this._visAll, items, { selectedId: this.sel && this.sel.kind !== 'star' ? this.sel.id : null });
+    this._vis = withSmbh(this._visAll, items, { selectedId: this.sel && this.sel.kind !== 'star' ? this.sel.id : null, forward: M.dirFromYawPitch(cam.yaw, cam.pitch) });   // forward: a parent behind the camera does not count (section 19.3.8)
     return items;
   }
   /**
@@ -1381,10 +1389,13 @@ export class Scene3D {
     gl.blendFunc(gl.ONE, gl.ONE);
   }
   _drawSky() {
+    this._mwFade = 0;
     if (!this.skyTex || !this.layers.mw) return;
     const gl = this.gl, pr = this.prog.sky, u = pr.u, R = this.R;
     const dSun = Math.hypot(...F.worldPc(this.cam));
-    const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) / (1 + (dSun / MW_FADE_PC) ** 2) * this._gf;   // x galaxyFade: gone before the cosmos frame
+    const fade = this._gf / (1 + (dSun / MW_FADE_PC) ** 2);
+    this._mwFade = fade;
+    const k = MW_K * this.expo * Math.pow(10, 0.2 * (this.limit - LIMIT_DEFAULT)) * fade;   // x galaxyFade: gone before the cosmos frame
     if (k < 1e-5) return;
     gl.useProgram(pr.p);
     gl.bindVertexArray(this.vaoEmpty);
@@ -1550,6 +1561,10 @@ export class Scene3D {
     const cands = [];
     if (bi >= 0) cands.push({ sel: this._starSel(bi), priority: kindSpec('star').pick.priority, d: bd });
     cands.push(pickObjects(this._vis, this._groups, px, py, maxPx, { project: this._pj, framePos: this._fp, reach: (e) => this.dyn.get(e.id) || 0, skyFade: skyFadeOf(cam), galaxyFade: this._gf }));
+    for (const h of this._home) {                                // the home markers (section 19.3.9): picking opens the Sun's or the Milky Way's card
+      const d = h.screen ? Math.hypot(h.screen[0] - px, h.screen[1] - py) : Infinity;
+      if (h.alpha >= GALAXY_PICK_MIN && d <= Math.max(maxPx, 8)) cands.push({ sel: { ...h.sel }, priority: 5, d });
+    }
     const win = choosePick(cands);
     return win ? this._pickTarget(win.sel) : null;   // the Sun's marker stays kind 'sun' (drawn where Earth sees it); its card is star 0's
   }
@@ -1573,13 +1588,16 @@ export class Scene3D {
     if (sel.kind === 'star') return F.relFromCam(cam, this._starPc(sel.idx));
     if (sel.kind === 'group') { const host = String(sel.id).replace(/^group:/, ''), g = this._groups[host]; return g ? framePos({ galPc: g.pcPos, host, group: true }, cam) : null; }
     const e = this._entry(sel.id);
-    return e ? framePos(e, cam) : null;
+    if (e) return framePos(e, cam);
+    const h = this._homeOf(sel); return h ? h.rel : null;           // the Sun in the cosmos frame: only its home marker
   }
+  /** This frame's home marker for a selection (the Sun's or the Milky Way centre's), or null. */
+  _homeOf(sel) { return this._home.find((h) => h.sel.kind === sel.kind && h.id === sel.id) || null; }
   _valid(sel) {
     if (!sel) return false;
     if (sel.kind === 'star') return !!this.st.meta[sel.idx];
     if (sel.kind === 'group') { const g = this._groups[String(sel.id).replace(/^group:/, '')]; return !!(g && g.grouped); }
-    return !!this._entry(sel.id);
+    return !!this._entry(sel.id) || !!this._homeOf(sel);
   }
   _hoverPick() {
     const c = this.cam, h = this.hover;
@@ -1694,6 +1712,7 @@ export class Scene3D {
     }
     const L = labelCandidates(this._vis, this._groups, { project: this._pj, framePos: this._fp, discPx: (e) => this.dyn.get(e.id) || 0, skyFade: skyFadeOf(cam), galaxyFade: this._gf });
     for (const l of L) out.push(l);
+    for (const h of this._home) if (h.screen && h.screen[0] > 0 && h.screen[0] < this.cssW && h.screen[1] > 0 && h.screen[1] < this.cssH) out.push({ x: h.screen[0], y: h.screen[1], key: -1e9, text: h.text, alpha: h.alpha, rgb: h.rgb });   // ahead of every other label
     return out;
   }
   _overlay(t) {
@@ -1712,9 +1731,10 @@ export class Scene3D {
       if (placed.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
       const la = L.alpha != null ? L.alpha : 1;                  // a direction-only label fades with the sky (skyFade)
-      lab.fillStyle = `rgba(233, 230, 223, ${(0.9 * la).toFixed(3)})`;
+      const rgb = L.rgb ? L.rgb.map((v) => Math.round(255 * v)).join(', ') : '233, 230, 223';   // a home label has its marker's colour
+      lab.fillStyle = `rgba(${rgb}, ${(0.9 * la).toFixed(3)})`;
       lab.beginPath(); lab.arc(L.x, L.y, 1.6, 0, Math.PI * 2); lab.fill();
-      lab.fillStyle = `rgba(233, 230, 223, ${(0.8 * la).toFixed(3)})`;
+      lab.fillStyle = `rgba(${rgb}, ${(0.8 * la).toFixed(3)})`;
       lab.fillText(L.text, L.x + 8, L.y);
     }
     lab.shadowBlur = 0;
@@ -1753,7 +1773,7 @@ export class Scene3D {
     // Distance to the surface, like the HUD's Nearest row (radius in frame units).
     const rad = sel.kind === 'star' ? this._modelFor(sel.idx).radiusAu * u / AU_PER_PC : e && !e.atInfinity ? e.spec.arriveAu(e.o) * u / AU_PER_PC : 0;
     const surf = d > 0 ? rel.map((v) => v * Math.max(0, d - rad) / d) : rel;
-    const name = sel.kind === 'star' ? this._starName(sel.idx) : sel.kind === 'group' ? this._groups[String(sel.id).replace(/^group:/, '')].name : e.o.name;
+    const name = sel.kind === 'star' ? this._starName(sel.idx) : sel.kind === 'group' ? this._groups[String(sel.id).replace(/^group:/, '')].name : e ? e.o.name : sel.kind === 'sun' ? 'Sun' : sel.id;   // no entry: a home marker
     const short = name.length > 28 && /^Gaia/i.test(name) ? 'Gaia …' + name.slice(-8) : name;
     const inf = !!(e && e.atInfinity);
     return (this._xh = { name: short, dist: inf ? null : this._fromYou(surf), turn: inf, sel });
@@ -1776,6 +1796,7 @@ export class Scene3D {
       nearName: near2.name, nearText: Number.isFinite(near2.d) ? this._fromYou([near2.d]) : null, xhair: this.locked ? this._xh : null, ev: Math.log2(this.expo),
       limit: this.limit, locked: this.locked, counts: { ...this.counts }, objCounts: this.store.counts(), evidence: this.evidence,
       hostCount: this._hostCountText(), visCounts: vc.counts, visDirect: vc.direct,
+      speedMode: hudSpeed(this.speedPc, this.ap && this.ap.obj).mode, mwGlow: this._mwFade > 0.01,   // mwGlow: the credits line names the Milky Way glow while it shows (section 19.8)
       flying: !!this.ap, selected: this.sel && this._valid(this.sel) ? this._selKey(this.sel) : null,
     };
   }

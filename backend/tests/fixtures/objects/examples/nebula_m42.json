@@ -1,4 +1,18 @@
 {
+  "alt_distances": [
+    {
+      "dist": {
+        "hi": 440,
+        "lo": 360,
+        "src": "Russeil 2003, A&A 397, 133, table3: stellar distance of complex 208.0-19.0 (Sh2-281)",
+        "tier": "inferred",
+        "unit": "pc",
+        "v": 400
+      },
+      "method": "photometric",
+      "reason": "not used: a derived distance; a measured one exists"
+    }
+  ],
   "designations": [
     "M 42",
     "NGC 1976",
@@ -7,7 +21,7 @@
     "MWSC 0582",
     "Great Orion Nebula"
   ],
-  "evidence": "derived",
+  "evidence": "measured",
   "host": null,
   "id": "ongc:NGC1976",
   "kind": "nebula",
@@ -16,15 +30,13 @@
   "position": {
     "dec": -5.3896667,
     "dist": {
-      "hi": 440,
-      "lo": 360,
-      "src": "Russeil 2003, A&A 397, 133, table3: stellar distance of complex 208.0-19.0 (Sh2-281)",
-      "tier": "inferred",
+      "src": "Shen et al. 2025, A&A 696, A67, table2: G209.037-19.377 (Group I): VLBI maser parallax of the associated HMSFR, as adopted by Shen et al. 2025 (table2 gives no per-row reference; §3.2: primarily Reid et al. 2019); uncertainty below the table's 0.01 kpc precision",
+      "tier": "measured",
       "unit": "pc",
-      "v": 400
+      "v": 390
     },
     "epoch": 2000.0,
-    "method": "photometric",
+    "method": "parallax",
     "model": "fixed",
     "ra": 83.8186667,
     "tier": "catalogue"
@@ -92,7 +104,7 @@
       "src": "from angular size and distance",
       "tier": "inferred",
       "unit": "pc",
-      "v": 5.236
+      "v": 5.105
     }
   }
 }

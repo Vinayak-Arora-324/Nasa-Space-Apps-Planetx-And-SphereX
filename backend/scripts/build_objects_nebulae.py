@@ -1,15 +1,18 @@
 """Build the `nebulae` object dataset: OpenNGC nebulae merged with the Sharpless HII catalogue, with Gaia
 parallax distances for planetary nebulae and stellar distances for HII regions.
 
-Design: docs/object-framework.md section 17 (17.2 inputs and licence, 17.3 merge, 17.4 distances).
+Design: docs/object-framework.md section 17 (17.2 inputs and licence, 17.3 merge, 17.4 distances) and section 19.4
+(HII-region distances from Gaia, Phase 4).
 
 Inputs, all committed as gzipped snapshots under `backend/data/sources/nebulae/` (see SOURCE.json):
 - OpenNGC `NGC.csv` and `addendum.csv` at commit 36cb178a (release v20260501), CC BY-SA 4.0 (Mattia Verga);
 - Sharpless 1959 `VII/20` (VizieR), 313 HII regions, positions in B1900 FK4;
 - Chornay & Walton 2021 `J/A+A/656/A110/tablea1` (VizieR), Gaia EDR3 parallaxes of planetary nebula central stars;
 - Russeil 2003 `J/A+A/397/133` table1 and table3 (VizieR), stellar distances of star-forming complexes;
-- `sh2_ongc_overrides.json`, the committed merge override table (hand edited, not pinned; its sha256 goes into the
-  build report).
+- Shen, Hou, Liu & Gao 2025 `J/A+A/696/A67` table2 and tablea1 (VizieR), Gaia DR3 (and maser) distances of 459 HII
+  regions, and their exciting stars;
+- `sh2_ongc_overrides.json` (merge) and `shen_overrides.json` (Shen links), the committed override tables (hand
+  edited, not pinned; their sha256 goes into the build report).
 
     uv run python backend/scripts/build_objects_nebulae.py                # build from the committed snapshots
     uv run python backend/scripts/build_objects_nebulae.py --check        # rebuild in a temp dir, compare, verify
@@ -26,8 +29,9 @@ differs from a fresh build, when the sources folder's LICENSE.md is stale, or wh
 
 Output: one `nebula` record per OpenNGC nebula (PN, HII, EmN, RfN, Neb, SNR, Cl+N, DrkN; Dup and NonEx rows are not
 nebulae) plus one per Sharpless region that was not merged into one of them. Distances: planetary nebulae with a
-reliable Gaia parallax are `measured`; HII regions that Russeil 2003 links to a complex with a stellar distance are
-`derived`; everything else is direction only (`dist` null, evidence `measured`).
+reliable Gaia parallax are `measured`; HII regions take the best of a Shen et al. 2025 distance (a maser parallax or a
+Group I Gaia distance is `measured`, a Group II/III Gaia distance `derived`) and a Russeil 2003 stellar distance
+(`derived`), by the ladder of docs 18.4.2; everything else is direction only (`dist` null, evidence `measured`).
 """
 
 from __future__ import annotations
@@ -58,8 +62,9 @@ DATASET = "nebulae"
 OUT = ROOT / "frontend" / "data" / "objects" / DATASET
 SOURCES = ROOT / "backend" / "data" / "sources" / DATASET
 SCRIPT = "backend/scripts/build_objects_nebulae.py"
-SCRIPT_VERSION = 1
+SCRIPT_VERSION = 2
 OVERRIDES_FILE = "sh2_ongc_overrides.json"
+SHEN_OVERRIDES_FILE = "shen_overrides.json"
 
 # --- pins ------------------------------------------------------------------------------------
 
@@ -99,9 +104,19 @@ INPUTS = {
         "file": "russeil2003-table3.tsv.gz", "vizier": "J/A+A/397/133", "table": "J/A+A/397/133/table3",
         "local": "russeil2003-table3.tsv", "sha256": "e8d0d96c2c992f1658cffd232fb293dfcf1f7d951e7009ebbea60af67bfd9fd6", "rows": 481,
     },
+    "shen-table2": {
+        "file": "shen2025-table2.tsv.gz", "vizier": "J/A+A/696/A67", "table": "J/A+A/696/A67/table2",
+        "local": "shen2025-table2.tsv",
+        "sha256": "8389057ce590409b391bb43a0de73fdfac489eec711e953c06a98b4af5bce5fc", "rows": 459,
+    },
+    "shen-tablea1": {
+        "file": "shen2025-tablea1.tsv.gz", "vizier": "J/A+A/696/A67", "table": "J/A+A/696/A67/tablea1",
+        "local": "shen2025-tablea1.tsv",
+        "sha256": "dbf4febbfaf0685be31d3f639ec47bb24261acfa0cd8c7fd0cc615487441382b", "rows": 1382,
+    },
 }
 ONGC_ROLES = ("openngc", "openngc-addendum")
-VIZIER_ROLES = ("sharpless", "chornay", "russeil-table1", "russeil-table3")
+VIZIER_ROLES = ("sharpless", "chornay", "russeil-table1", "russeil-table3", "shen-table2", "shen-tablea1")
 
 ONGC_COLUMNS = ("Name", "Type", "RA", "Dec", "Const", "MajAx", "MinAx", "PosAng", "B-Mag", "V-Mag", "J-Mag", "H-Mag",
                 "K-Mag", "SurfBr", "Hubble", "Pax", "Pm-RA", "Pm-Dec", "RadVel", "Redshift", "Cstar U-Mag",
@@ -117,14 +132,18 @@ LICENCE_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
 GAIA_CREDIT = "Credit: ESA/Gaia/DPAC"
 GAIA_LICENCE_NAME = "CC BY-NC 3.0 IGO"
 GAIA_LICENCE_URL = "https://creativecommons.org/licenses/by-nc/3.0/igo/"
-MANIFEST_CREDIT = f"{CREDIT}; PN distances from Gaia EDR3: {GAIA_CREDIT}"
-MANIFEST_LICENCE_NAME = f"{LICENCE_NAME} (OpenNGC data); Gaia EDR3-based PN distances {GAIA_LICENCE_NAME}"
+MANIFEST_CREDIT = (f"{CREDIT}; PN distances (Chornay & Walton 2021, Gaia EDR3) and HII-region distances "
+                   f"(Shen et al. 2025, Gaia DR3): {GAIA_CREDIT}")
+MANIFEST_LICENCE_NAME = f"{LICENCE_NAME} (OpenNGC data); Gaia-based PN and HII-region distances {GAIA_LICENCE_NAME}"
 VIZIER_TERMS = "https://cds.unistra.fr/vizier-org/licences_vizier.html"
 CITATIONS = {
     "sharpless": "Sharpless S., 1959, ApJS 4, 257: A Catalogue of H II Regions (1959ApJS....4..257S), VizieR VII/20",
     "chornay": ("Chornay N. & Walton N. A., 2021, A&A 656, A110: One star, two star, red star, blue star: an updated "
                 "planetary nebula central star distance catalogue from Gaia EDR3 (2021A&A...656A.110C), "
                 "doi:10.26093/cds/vizier.36560110, VizieR J/A+A/656/A110"),
+    "shen": ("Shen X.-J., Hou L.-G., Liu Z. & Gao Z.-M., 2025, A&A 696, A67: Parallax-based distances to Galactic HII "
+             "regions: nearby spiral structure (arXiv:2503.01551, 2025A&A...696A..67S), doi:10.1051/0004-6361/202452712, "
+             "VizieR J/A+A/696/A67"),
     "russeil": ("Russeil D., 2003, A&A 397, 133: Star-forming complexes and the spiral structure of our Galaxy "
                 "(2003A&A...397..133R), doi:10.26093/cds/vizier.33970133, VizieR J/A+A/397/133"),
 }
@@ -185,6 +204,18 @@ LINK_MAX_DEG = 1.0        # a Sharpless centre must lie within this of the compl
 JOIN_MAX_DEG = 0.05       # table1 `Name` (l+b) to table3 (GLON, GLAT)
 SH2_REF = re.compile(r"S\s?(\d{1,3})(?!\d)")
 COMPLEX_NAME = re.compile(r"^([+-]?\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)$")
+
+# --- Shen et al. 2025 links and candidates (docs 19.4) ---------------------------------------
+
+SHEN_MAX_MAJOR_ARCMIN = 120.0     # a record this large is a complex of many WISE regions: never linked
+SHEN_SRC = "Shen et al. 2025, A&A 696, A67, table2"
+SHEN_NAME = "Shen et al. 2025"
+RUSSEIL_NAME = "Russeil 2003"
+SHEN_LOW_PRECISION = "uncertainty below the table's 0.01 kpc precision"
+SHEN_MASER_NOTE = ("VLBI maser parallax of the associated HMSFR, as adopted by Shen et al. 2025 (table2 gives no "
+                   "per-row reference; §3.2: primarily Reid et al. 2019)")
+SHEN_M22_NOTE = " (value from Méndez-Delgado et al. 2022, Gaia DR3)"
+MAX_ALT = objects.MAX_ALT_DISTANCES
 
 # --- Chornay & Walton cuts -------------------------------------------------------------------
 
@@ -610,6 +641,121 @@ def russeil_quantity(link: dict) -> dict:
                             None if hi is None else _num(hi, 8))
 
 
+# --- HII region distances (Shen et al. 2025) -------------------------------------------------
+
+def read_shen(rows: list[dict], star_rows: list[dict]) -> tuple[list[dict], dict]:
+    """The usable rows of table2 as dicts (distances in pc), and a report. `tablea1` only counts the exciting stars
+    of each region (the build does not use their values). A row without a distance or a position is skipped."""
+    stars = Counter(r["WISE"] for r in star_rows)
+    out, skipped = [], []
+    for r in rows:
+        dist, ra, dec, rad = _d(r["Dist"]), _d(r["_RA"]), _d(r["_DE"]), _d(r["R"])
+        if dist is None or ra is None or dec is None:
+            skipped.append(r["WISE"])
+            continue
+        e_lo, e_hi = _d(r["e_Dist"]), _d(r["E_Dist"])
+        remarks = {x.strip() for x in r["Remarks"].split(",") if x.strip()}
+        if e_lo is None and e_hi is None or (e_lo == 0 and e_hi == 0):
+            lo = hi = None            # an error below the table's precision (or none given): no interval
+        else:
+            lo = max(dist - (e_lo or 0), Decimal(0)) * 1000
+            hi = (dist + (e_hi or 0)) * 1000
+        out.append({"wise": r["WISE"], "ra": float(ra), "dec": float(dec), "radius_arcsec": float(rad or 0),
+                    "dist": dist * 1000, "lo": lo, "hi": hi, "group": r["Group"].strip(),
+                    "remarks": sorted(remarks), "maser": "maser" in remarks, "m22": "M22" in remarks,
+                    "stars": stars.get(r["WISE"], 0), "cl": r["Cl"]})
+    return out, {"table2_rows": len(rows), "tablea1_rows": len(star_rows), "usable_rows": len(out),
+                 "skipped_rows": skipped}
+
+
+def read_shen_overrides(data: list, shen: list[dict], records: dict[str, dict]) -> dict[str, str | None]:
+    """`{record id: WISE name or None}` from `[{nebula, wise | null, reason}]`; unknown names are an error."""
+    names = {s["wise"] for s in shen}
+    out: dict[str, str | None] = {}
+    for e in data:
+        if set(e) != {"nebula", "wise", "reason"} or not e["reason"]:
+            raise SystemExit(f"{SHEN_OVERRIDES_FILE}: entries are {{nebula, wise|null, reason}}, got {e!r}")
+        if e["nebula"] not in records:
+            raise SystemExit(f"{SHEN_OVERRIDES_FILE}: no nebula record {e['nebula']!r}")
+        if e["wise"] is not None and e["wise"] not in names:
+            raise SystemExit(f"{SHEN_OVERRIDES_FILE}: no Shen region {e['wise']!r}")
+        if e["nebula"] in out:
+            raise SystemExit(f"{SHEN_OVERRIDES_FILE}: {e['nebula']} twice")
+        out[e["nebula"]] = e["wise"]
+    return out
+
+
+def shen_candidates(rec: dict, shen: list[dict]) -> list[dict]:
+    """Shen regions near a record by the link rule: centre separation s <= max(r_N, R_W) (arcmin), best first by
+    s / max(r_N, R_W), then s, then WISE name. Each is `{shen, sep, score}`."""
+    r_n = rec["major"] / 2.0 if rec["major"] else 0.0
+    out = []
+    for w in shen:
+        scale = max(r_n, w["radius_arcsec"] / 60.0)
+        if scale <= 0:
+            continue
+        s = objects.angsep_deg(rec["ra"], rec["dec"], w["ra"], w["dec"]) * 60.0
+        if s <= scale:
+            out.append({"shen": w, "sep": s, "score": s / scale})
+    out.sort(key=lambda c: (c["score"], c["sep"], c["shen"]["wise"]))
+    return out
+
+
+def shen_quantity(w: dict) -> dict:
+    """The distance Quantity of a Shen row: src shapes are parsed by the frontend (docs 19.4.3)."""
+    head = f"{SHEN_SRC}: {w['wise']} (Group {w['group']}): "
+    if w["maser"]:
+        src = head + SHEN_MASER_NOTE
+    elif w["group"] == "I":
+        src = head + "mean Gaia DR3 (Bailer-Jones et al. 2021) distance of its exciting stars"
+    else:
+        src = head + "Gaia DR3 (Bailer-Jones et al. 2021) distance of its exciting star"
+    if w["m22"] and not w["maser"]:
+        src += SHEN_M22_NOTE
+    if w["lo"] is None:
+        src += f"; {SHEN_LOW_PRECISION}"
+    tier = "measured" if w["maser"] or w["group"] == "I" else "inferred"
+    return objects.quantity(_num(w["dist"], 8), src, tier, "pc",
+                            None if w["lo"] is None else _num(w["lo"], 8),
+                            None if w["hi"] is None else _num(w["hi"], 8))
+
+
+def candidate(cat: str, method: str, q: dict) -> dict:
+    """A distance candidate for the ladder: `cls` 0 measured, 1 derived; `frac` the fractional uncertainty or None."""
+    v = q["v"]
+    frac = None
+    if q.get("lo") is not None and q.get("hi") is not None and v:
+        frac = max(v - q["lo"], q["hi"] - v) / v
+    return {"cat": cat, "method": method, "q": q, "cls": 0 if q["tier"] == "measured" else 1, "frac": frac}
+
+
+CAT_ORDER = {"pn": 0, "shen": 1, "russeil": 2}
+CAT_NAME = {"pn": "Chornay & Walton 2021", "shen": SHEN_NAME, "russeil": RUSSEIL_NAME}
+
+
+def rank_key(c: dict):
+    return (c["cls"], 0 if c["frac"] is not None else 1, c["frac"] or 0.0, CAT_ORDER[c["cat"]])
+
+
+def why_not(c: dict, chosen: dict) -> str:
+    name = CAT_NAME[chosen["cat"]]
+    if c["cls"] > chosen["cls"]:
+        return "not used: a derived distance; a measured one exists"
+    if c["frac"] is None and chosen["frac"] is not None:
+        return f"not used: no published uncertainty, the {name} distance has one"
+    if c["frac"] is not None and chosen["frac"] is not None and c["frac"] > chosen["frac"]:
+        return f"not used: larger uncertainty than the {name} distance"
+    return f"not used: ranked below the {name} distance (catalogue order)"
+
+
+def choose(cands: list[dict]) -> tuple[dict | None, list[dict]]:
+    """The adopted candidate and the `alt_distances` entries (docs 18.4.2, applied to nebulae in 19.4.3)."""
+    if not cands:
+        return None, []
+    cs = sorted(cands, key=rank_key)
+    return cs[0], [{"method": c["method"], "dist": c["q"], "reason": why_not(c, cs[0])} for c in cs[1:1 + MAX_ALT]]
+
+
 # --- records ---------------------------------------------------------------------------------
 
 def provenance() -> dict:
@@ -694,19 +840,36 @@ def display_name(n: dict | None, s: dict | None, rid: str) -> str:
     return f"Sh2-{s['n']}"
 
 
-def nebula_record(n: dict | None, s: dict | None, pn: dict | None, russeil: dict | None) -> dict:
+def record_id(n: dict | None, s: dict | None) -> str:
+    return f"ongc:{n['name']}" if n else f"sh2:{s['n']}"
+
+
+def nebula_record(n: dict | None, s: dict | None, pn: dict | None, russeil: dict | None, shen: dict | None = None,
+                  chosen_out: dict | None = None) -> dict:
     """One `nebula` record. `n` is the OpenNGC row (or None), `s` the Sharpless region (or None), `pn` a passing
-    Chornay match, `russeil` a Russeil link with a stellar distance (already restricted to the types that may take it)."""
-    rid = f"ongc:{n['name']}" if n else f"sh2:{s['n']}"
+    Chornay match, `russeil` a Russeil link with a stellar distance and `shen` a linked Shen row (both already
+    restricted to the types that may take them). A PN takes its parallax; otherwise the ladder chooses between the
+    Shen and Russeil distances and the loser goes to `alt_distances`. `chosen_out` receives the chosen candidate."""
+    rid = record_id(n, s)
     ra, dec = (n["ra"], n["dec"]) if n else (s["ra"], s["dec"])
     name = display_name(n, s, rid)
 
     size_ang = size_for(n, s)
-    dist, method, evidence = None, None, "measured"
+    dist, method, evidence, alts = None, None, "measured", []
     if pn is not None:
         dist, method, evidence = pn_dist_quantity(pn), "parallax", "measured"
-    elif russeil is not None:
-        dist, method, evidence = russeil_quantity(russeil), "photometric", "derived"
+    else:
+        cands = []
+        if shen is not None:
+            cands.append(candidate("shen", "parallax" if shen["maser"] else "bailer-jones", shen_quantity(shen)))
+        if russeil is not None:
+            cands.append(candidate("russeil", "photometric", russeil_quantity(russeil)))
+        best, alts = choose(cands)
+        if best is not None:
+            dist, method = best["q"], best["method"]
+            evidence = "measured" if best["cls"] == 0 else "derived"
+        if chosen_out is not None:
+            chosen_out["best"], chosen_out["alts"], chosen_out["cands"] = best, alts, cands
     position: dict = {"model": "fixed", "ra": _num(ra, 12), "dec": _num(dec, 12), "epoch": 2000.0,
                       "tier": "catalogue", "dist": dist}
     if method:
@@ -740,14 +903,18 @@ def nebula_record(n: dict | None, s: dict | None, pn: dict | None, russeil: dict
         mag = _d(n["row"]["V-Mag"]) or _d(n["row"]["B-Mag"])
         if mag is not None:
             render["mag"] = _num(mag, 8)
-    return objects.record(id=rid, kind="nebula", name=name, designations=designations_for(n, s, name),
-                          position=position, size=size, props=props, provenance=provenance(), evidence=evidence,
-                          render=render)
+    rec = objects.record(id=rid, kind="nebula", name=name, designations=designations_for(n, s, name),
+                         position=position, size=size, props=props, provenance=provenance(), evidence=evidence,
+                         render=render)
+    if alts:
+        rec["alt_distances"] = alts
+    return rec
 
 
-def build_records(inputs: dict, overrides: list) -> tuple[list[dict], dict]:
+def build_records(inputs: dict, overrides: list, shen_overrides: list | None = None) -> tuple[list[dict], dict]:
     """Records and the build report from parsed inputs: `ongc` (NGC.csv + addendum rows), `sharpless`, `chornay`,
-    `russeil1`, `russeil3` (lists of row dicts) and the override table (a list)."""
+    `russeil1`, `russeil3`, `shen2` and `shen_a1` (lists of row dicts), the merge override table and the Shen link
+    override table (lists)."""
     neb, report = read_nebulae(inputs["ongc"])
     sh2 = read_sharpless(inputs["sharpless"])
     regions = {s["n"]: s for s in sh2}
@@ -759,8 +926,12 @@ def build_records(inputs: dict, overrides: list) -> tuple[list[dict], dict]:
     chornay_by_png: dict[str, list[dict]] = defaultdict(list)
     for c in inputs["chornay"]:
         chornay_by_png[c["PNG"].strip()].append(c)
+    shen, shen_read = read_shen(inputs.get("shen2", []), inputs.get("shen_a1", []))
+    shen_by_wise = {w["wise"]: w for w in shen}
+
+    # one pass to fix each record's inputs, then the Shen links, then the records
+    items = []
     pn_report = Counter()
-    records = []
     for n in neb:
         s = regions.get(merged_of.get(n["name"]))
         pn = None
@@ -769,23 +940,108 @@ def build_records(inputs: dict, overrides: list) -> tuple[list[dict], dict]:
             pn, why = pn_distance(n["row"], chornay_by_png)
             pn_report[{"ok": "pass", "no PN G id": "no_png_id", "not in Chornay": "not_in_chornay",
                        "Rel": "fail_rel", "S/N": "fail_snr", "RUWE": "fail_ruwe"}[why]] += 1
-        ru = None
-        if pn is None and s is not None and n["type"] in RUSSEIL_TYPES:
-            ru = links.get(s["n"])
-        records.append(nebula_record(n, s, pn, ru))
+        ru = links.get(s["n"]) if pn is None and s is not None and n["type"] in RUSSEIL_TYPES else None
+        items.append({"n": n, "s": s, "pn": pn, "ru": ru, "eligible": n["type"] in RUSSEIL_TYPES})
     sharpless_only = [s for s in sh2 if s["n"] not in pairs]
     for s in sharpless_only:
-        records.append(nebula_record(None, s, None, links.get(s["n"])))
+        items.append({"n": None, "s": s, "pn": None, "ru": links.get(s["n"]), "eligible": True})
+    for it in items:
+        it["id"] = record_id(it["n"], it["s"])
+        ang = size_for(it["n"], it["s"])
+        it["major"] = float(ang["major"]["v"]) if ang else None
+        it["ra"], it["dec"] = (it["n"]["ra"], it["n"]["dec"]) if it["n"] else (it["s"]["ra"], it["s"]["dec"])
+    shen_ov = read_shen_overrides(shen_overrides or [], shen, {it["id"]: it for it in items})
 
-    method = Counter("pn_parallax_measured" if r["position"].get("method") == "parallax"
-                     else "russeil_derived" if r["position"].get("method") == "photometric" else "direction_only"
-                     for r in records)
+    records, link_rows, outcomes = [], [], []
+    excluded_big, no_shen_row = [], 0
+    for it in items:
+        sh_link, rule, cand_list = None, None, []
+        if it["id"] in shen_ov:
+            wise = shen_ov[it["id"]]
+            if wise is not None:
+                w = shen_by_wise[wise]
+                cand_list = shen_candidates(it, shen)
+                sh = next((c for c in cand_list if c["shen"]["wise"] == wise), None)
+                sep = objects.angsep_deg(it["ra"], it["dec"], w["ra"], w["dec"]) * 60.0
+                sh_link = sh or {"shen": w, "sep": sep, "score": None}
+                rule = "override"
+        elif it["eligible"] and it["pn"] is None:
+            if it["major"] is not None and it["major"] >= SHEN_MAX_MAJOR_ARCMIN:
+                excluded_big.append(it["id"])
+            else:
+                cand_list = shen_candidates(it, shen)
+                if cand_list:
+                    sh_link, rule = cand_list[0], "rule"
+        out = {}
+        rec = nebula_record(it["n"], it["s"], it["pn"], it["ru"], sh_link["shen"] if sh_link else None, out)
+        records.append(rec)
+        best = out.get("best")
+        if sh_link is not None:
+            w = sh_link["shen"]
+            ru_q = next((c["q"] for c in out["cands"] if c["cat"] == "russeil"), None)
+            new = best["q"]["v"] if best else None
+            link_rows.append({
+                "id": it["id"], "name": rec["name"], "wise": w["wise"], "group": w["group"],
+                "remarks": w["remarks"], "rule": rule,
+                "score": None if sh_link["score"] is None else round(sh_link["score"], 4),
+                "sep_arcmin": round(sh_link["sep"], 3), "shen_pc": _num(w["dist"], 8),
+                "other_candidates": [{"wise": c["shen"]["wise"], "group": c["shen"]["group"],
+                                      "dist_pc": _num(c["shen"]["dist"], 8), "sep_arcmin": round(c["sep"], 3),
+                                      "score": round(c["score"], 4)}
+                                     for c in cand_list if c["shen"]["wise"] != w["wise"]],
+                "old_pc": None if ru_q is None else ru_q["v"], "new_pc": new,
+                "winner": best["cat"] if best else None})
+        outcomes.append((it, sh_link, best, out))
+
+    # counts
+    adopted = [l for l in link_rows if l["winner"] == "shen"]
+    by_group = Counter(l["group"] for l in adopted)
+    by_remark = Counter(",".join(l["remarks"]) or "(blank)" for l in adopted)
+    replaced = [l for l in adopted if l["old_pc"] is not None]
+    placed = [l for l in adopted if l["old_pc"] is None]
+    kept_reasons = Counter()
+    for it, sh_link, best, out in outcomes:
+        if best is None or best["cat"] != "russeil":
+            continue
+        if sh_link is not None:
+            kept_reasons["Shen row linked, lost on the ladder: " + out["alts"][0]["reason"].removeprefix("not used: ")] += 1
+        elif it["id"] in excluded_big:
+            kept_reasons[f"record major axis >= {SHEN_MAX_MAJOR_ARCMIN:g} arcmin (not linked)"] += 1
+        else:
+            kept_reasons["no Shen region within the link rule"] += 1
+    changes = []
+    for l in replaced:
+        rel = l["new_pc"] / l["old_pc"] - 1.0
+        changes.append({**{k: l[k] for k in ("id", "name", "wise", "group", "remarks", "old_pc", "new_pc")},
+                        "change": round(rel, 4)})
+    rel = sorted(c["change"] for c in changes)
+    med = lambda xs: 0.0 if not xs else (xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2)  # noqa: E731
+    shen_report = {
+        **shen_read, "eligible_records": sum(1 for it in items if it["eligible"] and it["pn"] is None),
+        "links": len(link_rows), "link_rows": link_rows,
+        "adopted": len(adopted), "adopted_by_group": {k: by_group.get(k, 0) for k in ("I", "II", "III")},
+        "adopted_by_remark": dict(sorted(by_remark.items())),
+        "russeil_replaced": len(replaced), "direction_only_placed": len(placed),
+        "russeil_kept": sum(kept_reasons.values()), "russeil_kept_by_reason": dict(sorted(kept_reasons.items())),
+        "excluded_major_ge_120_arcmin": sorted(excluded_big),
+        "replaced_change": {"median": round(med(rel), 4), "median_abs": round(med(sorted(abs(x) for x in rel)), 4),
+                            "over_20pct": sum(1 for x in rel if abs(x) > 0.2),
+                            "over_50pct": sum(1 for x in rel if abs(x) > 0.5)},
+        "changes_over_50pct": sorted((c for c in changes if abs(c["change"]) > 0.5), key=lambda c: c["id"]),
+        "overrides": len(shen_ov),
+    }
+
+    method = Counter("pn_parallax_measured" if it["pn"] is not None
+                     else {"shen": "shen", "russeil": "russeil_derived"}.get(out["best"]["cat"] if out.get("best") else "",
+                                                                         "direction_only")
+                     for it, _, _, out in outcomes)
     by = lambda f: dict(sorted(Counter(f(r) for r in records).items()))  # noqa: E731
     report.update({
         "sharpless_rows": len(sh2), "merges": merge_report["by_rule"], "merged_pairs": merge_report["merged_pairs"],
         "forbidden_by_override": merge_report["forbidden_by_override"],
         "sharpless_only": len(sharpless_only),
-        "distances": {k: method.get(k, 0) for k in ("pn_parallax_measured", "russeil_derived", "direction_only")},
+        "distances": {k: method.get(k, 0) for k in ("pn_parallax_measured", "shen", "russeil_derived", "direction_only")},
+        "shen": shen_report,
         "planetary_nebula_cuts": {k: pn_report.get(k, 0) for k in
                                   ("rows", "no_png_id", "not_in_chornay", "fail_rel", "fail_snr", "fail_ruwe", "pass")},
         "russeil": russeil_report,
@@ -803,12 +1059,12 @@ def license_text(which: str) -> str:
         folder = "backend/data/sources/nebulae/"
         covered = (
             "- the gzipped input snapshots (`*.gz`): OpenNGC `NGC.csv` and `addendum.csv` exactly as published at "
-            f"commit `{OPENNGC_SHA}`, and the four VizieR tables (Sharpless, Chornay & Walton, Russeil) without their "
-            "`#` header lines;\n"
+            f"commit `{OPENNGC_SHA}`, and the six VizieR tables (Sharpless, Chornay & Walton, Russeil, Shen et al. "
+            "`table2` and `tablea1`) without their `#` header lines;\n"
             f"- `SOURCE.json`, the list of those inputs with their hashes, URLs and retrieval dates;\n"
-            f"- `{OVERRIDES_FILE}`, the hand-written merge override table;\n"
+            f"- `{OVERRIDES_FILE}` and `{SHEN_OVERRIDES_FILE}`, the hand-written merge and Shen link override tables;\n"
             "- this file.")
-        derived = ("The OpenNGC files are unmodified copies. The three VizieR tables are unmodified copies too, "
+        derived = ("The OpenNGC files are unmodified copies. The six VizieR tables are unmodified copies too, "
                    "redistributed with the credit below under VizieR's terms of use "
                    f"({VIZIER_TERMS}); CC BY-SA 4.0 does not relicense them.")
     else:
@@ -816,7 +1072,7 @@ def license_text(which: str) -> str:
         covered = ("- `manifest.json`;\n- `tiles/*.json`, the nebula records;\n- this file.")
         derived = ("These files are derived from OpenNGC: its objects, coordinates, sizes, magnitudes, names and "
                    "identifiers were merged with the Sharpless catalogue (matched by identifier, a committed override "
-                   "table and position), given distances from Chornay & Walton 2021 and Russeil 2003, and converted "
+                   "table and position), given distances from Chornay & Walton 2021, Shen et al. 2025 and Russeil 2003, and converted "
                    "to Space Maps' record format. The OpenNGC-derived values are licensed under the same CC BY-SA 4.0 licence; the exception is below.")
     return f"""# Licence and credits: nebulae data
 
@@ -835,11 +1091,18 @@ The OpenNGC data, and the data derived from it, are licensed under **{LICENCE_NA
 
 ## Values with other terms
 
-The distances of the 59 planetary nebulae and their central-star identifiers come from Chornay & Walton 2021, who
-derived them from Gaia EDR3. They are Gaia EDR3-derived values under **{GAIA_LICENCE_NAME}**
-({GAIA_LICENCE_URL}), with the credit "PN distances from Gaia EDR3: {GAIA_CREDIT}". ESA's terms ask for
-authorisation (data.licences@esa.int) before commercial use. They are **not** relicensed by {LICENCE_NAME}: each
-value keeps the terms of its source.
+Two sets of values are Gaia-derived. (1) The distances of the 59 planetary nebulae and their central-star
+identifiers come from Chornay & Walton 2021, who derived them from Gaia EDR3 parallaxes. (2) The HII-region distances
+taken from Shen et al. 2025 whose `src` says "Gaia DR3" (their Group I, II and III rows without a maser remark, some
+of them values from Mendez-Delgado et al. 2022 based on Gaia DR3) are Bailer-Jones et al. 2021 distances of exciting
+stars, from Gaia DR3. Both are under **{GAIA_LICENCE_NAME}** ({GAIA_LICENCE_URL}), with the credit "PN distances
+(Chornay & Walton 2021, Gaia EDR3) and HII-region distances (Shen et al. 2025, Gaia DR3): {GAIA_CREDIT}". ESA's terms
+ask for authorisation (data.licences@esa.int) before commercial use. They are **not** relicensed by {LICENCE_NAME}:
+each value keeps the terms of its source.
+
+The rows of Shen et al. 2025 that adopt a VLBI maser parallax (their `src` says "VLBI maser parallax", never
+"Gaia") are **not** Gaia values: they come from the literature through VizieR (terms: {VIZIER_TERMS}), and so do
+the Russeil 2003 distances.
 
 OpenNGC is at {OPENNGC_URL}, release {OPENNGC_TAG}, commit `{OPENNGC_SHA}`. Changes made here: the rows of the
 types PN, HII, EmN, RfN, Neb, SNR, Cl+N and DrkN were selected, merged with the Sharpless catalogue, given
@@ -853,6 +1116,7 @@ distances and re-encoded as JSON records (see `docs/object-framework.md`, sectio
 
 - {CITATIONS['sharpless']}
 - {CITATIONS['chornay']}
+- {CITATIONS['shen']}
 - {CITATIONS['russeil']}
 
 VizieR terms of use: {VIZIER_TERMS}
@@ -912,10 +1176,14 @@ def load_inputs(sources: Path, local: Path | None) -> dict:
         check_rows(role, rows)
         parsed[role] = rows
     ov_bytes = (sources / OVERRIDES_FILE).read_bytes()   # hand-edited and committed: not pinned, see the report
+    sov_bytes = (sources / SHEN_OVERRIDES_FILE).read_bytes()
     return {"inputs": {"ongc": parsed["openngc"] + parsed["openngc-addendum"], "sharpless": parsed["sharpless"],
                        "chornay": parsed["chornay"], "russeil1": parsed["russeil-table1"],
-                       "russeil3": parsed["russeil-table3"]},
-            "overrides": json.loads(ov_bytes.decode("utf-8")), "overrides_sha256": sha256(ov_bytes), "files": info, "meta": meta}
+                       "russeil3": parsed["russeil-table3"], "shen2": parsed["shen-table2"],
+                       "shen_a1": parsed["shen-tablea1"]},
+            "overrides": json.loads(ov_bytes.decode("utf-8")), "overrides_sha256": sha256(ov_bytes),
+            "shen_overrides": json.loads(sov_bytes.decode("utf-8")), "shen_overrides_sha256": sha256(sov_bytes),
+            "files": info, "meta": meta}
 
 
 def provenance_full(files: dict) -> dict:
@@ -924,17 +1192,19 @@ def provenance_full(files: dict) -> dict:
     return {"catalogue": CATALOGUE, "version": VERSION, "openngc_commit": OPENNGC_SHA, "url": OPENNGC_URL,
             "credit": MANIFEST_CREDIT, "licence_name": MANIFEST_LICENCE_NAME, "licence": LICENCE_URL,
             "citation": " | ".join(["OpenNGC (Mattia Verga), " + OPENNGC_URL, *CITATIONS.values()]),
-            "data_licence_note": ("OpenNGC-derived data: CC BY-SA 4.0. PN distances and central-star ids: Gaia EDR3-derived, "
-                                  f"{GAIA_LICENCE_NAME} ({GAIA_LICENCE_URL}). Sharpless, Chornay & Walton and Russeil tables "
-                                  f"via VizieR: {VIZIER_TERMS}"),
+            "data_licence_note": ("OpenNGC-derived data: CC BY-SA 4.0. PN distances and central-star ids (Chornay & Walton 2021) and "
+                                  "the HII-region distances of Shen et al. 2025 whose src says Gaia DR3: Gaia-derived, "
+                                  f"{GAIA_LICENCE_NAME} ({GAIA_LICENCE_URL}); Shen's maser-parallax rows are not Gaia values. "
+                                  f"Sharpless, Chornay & Walton, Russeil and Shen tables via VizieR: {VIZIER_TERMS}"),
             "vizier_terms": VIZIER_TERMS, "inputs": inputs}
 
 
 def build(out_dir: Path, sources: Path = SOURCES, local: Path | None = None) -> dict:
     """Build the dataset (and its LICENSE.md) into `out_dir` from the committed snapshots, or from raw downloads."""
     loaded = load_inputs(sources, local)
-    records, report = build_records(loaded["inputs"], loaded["overrides"])
+    records, report = build_records(loaded["inputs"], loaded["overrides"], loaded["shen_overrides"])
     report["overrides_sha256"] = loaded["overrides_sha256"]    # --check catches drift between overrides and data
+    report["shen"]["overrides_sha256"] = loaded["shen_overrides_sha256"]
     manifest = objects_static.write_dataset(
         records, out_dir, dataset=DATASET, kinds=["nebula"], provenance=provenance_full(loaded["files"]),
         build={"script": SCRIPT, "script_version": SCRIPT_VERSION, "report": report},
@@ -999,7 +1269,12 @@ def source_json(files: list[dict]) -> dict:
             "files": files + [{"role": "overrides", "file": OVERRIDES_FILE, "kind": "committed",
                                "note": ("hand-edited merge override table, committed, not downloaded and not pinned "
                                         "here; its sha256 is in manifest.build.report.overrides_sha256"),
-                               "licence": f"{LICENCE_NAME}, {LICENCE_URL}"}]}
+                               "licence": f"{LICENCE_NAME}, {LICENCE_URL}"},
+                              {"role": "shen-overrides", "file": SHEN_OVERRIDES_FILE, "kind": "committed",
+                               "note": ("hand-edited table of Shen link overrides [{nebula, wise|null, reason}], committed, "
+                                        "not downloaded and not pinned here; its sha256 is in "
+                                        "manifest.build.report.shen.overrides_sha256"),
+                               "licence": "MIT (the repository licence)"}]}
 
 
 def refresh(directory: Path, local: Path | None = None) -> None:
@@ -1019,12 +1294,13 @@ def refresh(directory: Path, local: Path | None = None) -> None:
             f.update(source="OpenNGC", commit=OPENNGC_SHA, release=OPENNGC_TAG, licence=f"{LICENCE_NAME}, {LICENCE_URL}",
                      citation=CREDIT)
         else:
-            cite = CITATIONS["sharpless" if role == "sharpless" else "chornay" if role == "chornay" else "russeil"]
+            cite = CITATIONS["sharpless" if role == "sharpless" else "chornay" if role == "chornay"
+                             else "shen" if role.startswith("shen") else "russeil"]
             f.update(source="VizieR", vizier_id=spec["vizier"], table=spec["table"], licence=VIZIER_TERMS, citation=cite)
         files.append(f)
-    ov = directory / OVERRIDES_FILE
-    if not ov.exists():
-        raise SystemExit(f"{ov} is missing (it is committed by hand)")
+    for name in (OVERRIDES_FILE, SHEN_OVERRIDES_FILE):
+        if not (directory / name).exists():
+            raise SystemExit(f"{directory / name} is missing (it is committed by hand)")
     directory.mkdir(parents=True, exist_ok=True)
     for old in list(directory.glob("*.gz")):
         old.unlink()
@@ -1051,6 +1327,10 @@ def _print_report(m: dict) -> None:
     ru = r["russeil"]
     print(f"Russeil: {ru['links']} links, {ru['links_dropped_by_1deg_filter']} dropped by the 1 deg filter, "
           f"{ru['regions_with_stellar_distance']} regions with a stellar distance")
+    sh = r["shen"]
+    print(f"Shen: {sh['usable_rows']} rows, {sh['links']} links, adopted {sh['adopted']} (groups {sh['adopted_by_group']}, "
+          f"remarks {sh['adopted_by_remark']}); Russeil replaced {sh['russeil_replaced']}, direction-only placed "
+          f"{sh['direction_only_placed']}, Russeil kept {sh['russeil_kept']}; >50% changes {len(sh['changes_over_50pct'])}")
     print(f"wrote {r['records_written']} records in {len(m['tiles'])} tiles; evidence {r['by_evidence']}")
 
 

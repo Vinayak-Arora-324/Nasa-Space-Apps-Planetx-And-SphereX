@@ -92,11 +92,48 @@
       "vizier_id": "J/A+A/397/133"
     },
     {
+      "bytes": 81131,
+      "citation": "Shen X.-J., Hou L.-G., Liu Z. & Gao Z.-M., 2025, A&A 696, A67: Parallax-based distances to Galactic HII regions: nearby spiral structure (arXiv:2503.01551, 2025A&A...696A..67S), doi:10.1051/0004-6361/202452712, VizieR J/A+A/696/A67",
+      "file": "shen2025-table2.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-20",
+      "role": "shen-table2",
+      "rows": 459,
+      "sha256": "8389057ce590409b391bb43a0de73fdfac489eec711e953c06a98b4af5bce5fc",
+      "source": "VizieR",
+      "table": "J/A+A/696/A67/table2",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FA%2BA%2F696%2FA67%2Ftable2&-out.all&-out.max=unlimited",
+      "vizier_id": "J/A+A/696/A67"
+    },
+    {
+      "bytes": 337655,
+      "citation": "Shen X.-J., Hou L.-G., Liu Z. & Gao Z.-M., 2025, A&A 696, A67: Parallax-based distances to Galactic HII regions: nearby spiral structure (arXiv:2503.01551, 2025A&A...696A..67S), doi:10.1051/0004-6361/202452712, VizieR J/A+A/696/A67",
+      "file": "shen2025-tablea1.tsv.gz",
+      "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+      "mirror": "vizier.cfa.harvard.edu",
+      "retrieved": "2026-11-20",
+      "role": "shen-tablea1",
+      "rows": 1382,
+      "sha256": "dbf4febbfaf0685be31d3f639ec47bb24261acfa0cd8c7fd0cc615487441382b",
+      "source": "VizieR",
+      "table": "J/A+A/696/A67/tablea1",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FA%2BA%2F696%2FA67%2Ftablea1&-out.all&-out.max=unlimited",
+      "vizier_id": "J/A+A/696/A67"
+    },
+    {
       "file": "sh2_ongc_overrides.json",
       "kind": "committed",
       "licence": "CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/",
       "note": "hand-edited merge override table, committed, not downloaded and not pinned here; its sha256 is in manifest.build.report.overrides_sha256",
       "role": "overrides"
+    },
+    {
+      "file": "shen_overrides.json",
+      "kind": "committed",
+      "licence": "MIT (the repository licence)",
+      "note": "hand-edited table of Shen link overrides [{nebula, wise|null, reason}], committed, not downloaded and not pinned here; its sha256 is in manifest.build.report.shen.overrides_sha256",
+      "role": "shen-overrides"
     }
   ],
   "note": "Pinned inputs of backend/scripts/build_objects_nebulae.py. Regenerate with --refresh. `sha256` is of the uncompressed committed bytes: OpenNGC exactly as published at the pinned commit; VizieR tables without their # comment lines and empty lines (the lines carry the request date)."

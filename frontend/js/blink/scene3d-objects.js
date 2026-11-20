@@ -85,7 +85,7 @@
 //       For nebulae `project` must return null only for points behind the camera (not for off-screen ones). Cluster items are unchanged.
 //   nebulaItem, skyFade, infinityPickable, INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN   re-exported from scene3d-nebula.js. skyFade(cam) =
 //       1 / (1 + (dSun_pc / 800)^2); MW_FADE_PC (800) is the shared constant: scene3d.js imports it from here for the Milky Way glow
-//   lensingItems(visible, cam, { evidence, pxPerRad, project }) -> item[]   section 17.9, see its comment at the end of the file (LENS_MIN_PX = 9)
+//   lensingItems(visible, cam, { evidence, pxPerRad, project, items }) -> item[]   section 17.9, see its comment at the end of the file (LENS_MIN_PX = 9)
 //       (PHASE 2: an item's own markerAlpha, when present, replaces that alpha; 'lensing' entries get a marker too, the Evidence view's only look.)
 //   markerPoints(visible, groups, cam, items = [], { groupPx = 8, groupRgb }) -> Float32Array   the dynamic-points data of the galaxy
 //       frame: 8 floats per point (x y z size alpha r g b, camera-relative), one per ungrouped 'marker' entry, one per grouped host
@@ -131,6 +131,25 @@
 //       { type: 'look', dir }, the Milky Way { type: 'fly-point', pc, lookAtPc, normal, arrivePc: 0 } (pc: MW_GO_PC = 60 kpc from the centre along the
 //       north Galactic pole; the flight ends in cosmos). The target may be an entry, a record or a { kind, id } sel with get
 //   starCreditItem(hasGaia) -> item | null; creditItems / creditsLine(sources, counts, extra = [])   extra: client-side items appended after the datasets
+//
+// PHASE 4 (docs/object-framework.md section 19)
+//   lensingItems(..., { items })   items: this frame's billboardItems. A supermassive black hole whose parent galaxy has an item that is not `inside` is capped to LENS_CAP
+//       (0.05) of that item's semiMajorPx; below LENS_FLOOR_PX (1.5) it is a marker only: no item, but an entry of the result's `.markerOnly` array ({ id, markerOnly: true, truePx,
+//       factor: null, capPx, parentId, parentName, rel, dist, screen? }). item.factor = px / truePx of what is drawn; item.capPx is null when uncapped.
+//       RENDERER: this._lens = new Map([...lens, ...lens.markerOnly].map((it) => [it.id, it])) feeds the card's ctx.lensing (it reads enlarged, factor, truePx, markerOnly,
+//       parentName); lensVisible(visible, lens, evidence) -> entries is what markerPoints should get in place of the filter on renderer !== 'lensing' (the marker-only black
+//       holes keep their marker, everything else as before); the in-cone pick rule is unchanged.
+//   store.setEvidence(on) -> bool; visibleObjects(store, ctx) calls it with ctx.evidence   the line-of-sight spread of group members (section 19.3.4): a galaxy with
+//       position.method 'group-member' and props.group_radius is placed at D + losOffsetPc(o) in the normal view and exactly at D in the Evidence view, and a supermassive
+//       black hole follows its parent galaxy's offset. entry.galPc, store.placement(id).galPc (and .losPc, the offset in force), framePos, picking, planGo, labels, fromYou and
+//       markers all read the active position, so the renderer only has to call visibleObjects (or setEvidence) after toggling the Evidence view and rebuild what it caches.
+//   losOffsetPc(o) -> pc (signed)   hashUnit(id, 'los') + hashUnit(id, 'los2') - 1 times min(group_radius, D - lo, hi - D); 0 without group_radius or when not a group member
+//   smbhVisible(entry, items, { selectedId, inCone, forward })   a parent galaxy behind the camera (item.screen === null, or rel . forward <= 0 given `forward`) counts only
+//       when the camera is inside it (item.dist <= item.radiusUnits)
+//   homeMarkers(cam, { project, galaxyFade, store, evidence }) -> [{ id, sel, text, rel, screen, alpha, merged, rgb }]   section 19.3.9: the Sun ('ss:sun', sel { kind: 'sun' }) and
+//       the Milky Way centre ('gal:milky_way', sel { kind: 'galaxy' }); alpha 1 in cosmos, 1 - galaxyFade in the galaxy frame (nothing at 0), never in a system frame; one merged
+//       item 'Milky Way · the Sun is here' when they are under HOME_MERGE_PX (30) apart on screen. Labels and picks are the renderer's to draw.
+//   card ctx.lensing  { enlarged, factor, truePx, markerOnly?, parentName? } (scene3d-registry.js documents the notes); ctx.parentName as before
 //
 // STAR CARDS (section 16.8)
 //   mergeStarSystem(system, rec) -> system'   the star model's `system` input for a star that has an archive star record (rec) and
@@ -184,7 +203,7 @@
 import { kindSpec, kinds, SCHEMA_MAJOR, toPc, toKm, rendererOf, clusterRgb, layerOf, UNIT_KM, isAccreting, preferredStarDistance, preferredFields, isSupermassive, isMilkyWay, GAIA_CREDIT } from './scene3d-registry.js';
 import * as F from './scene3d-frames.js';
 import { radecToXyz, smoothstep, KM_PER_AU } from './scene3d-math.js';
-import { orbitPlacement, J2000_MJD } from './scene3d-orbits.js';
+import { orbitPlacement, J2000_MJD, hashUnit } from './scene3d-orbits.js';
 import { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, relOfEntry, nebulaItem, projectAxes } from './scene3d-nebula.js';
 import { galaxyItem, milkyWayItem, galaxyFade, galacticAxes } from './scene3d-galaxy.js';
 export { INF_PC, MW_FADE_PC, SKY_FADE_PC, SKY_PICK_MIN, skyFade, infinityPickable, nebulaItem, projectAxes, galaxyItem, milkyWayItem, galaxyFade, preferredStarDistance };
@@ -194,15 +213,49 @@ const SUN = 'ss:sun', EARTH = 'ss:earth';
 const kindOrder = () => new Map(kinds().map((s, i) => [s.kind, i]));
 const hasXyz = (p) => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite);
 
+/**
+ * The illustrative line-of-sight offset (pc, signed) of a record placed at a group distance (section 19.3.4, 19.14 item 4): 0 unless position.method is
+ * 'group-member' and props.group_radius is a Quantity (Mpc or any length unit). delta = b * (u1 + u2 - 1), u1 = hashUnit(id, 'los'), u2 = hashUnit(id, 'los2'): a
+ * smooth bell on (-1, 1) with no edge, the same on every load. b = min(group_radius, D - lo, hi - D) in pc (a missing end of the interval does not bound it), so the
+ * drawn point never leaves the record's own interval or the group radius.
+ */
+export function losOffsetPc(o) {
+  const p = o && o.position, g = o && o.props && o.props.group_radius;
+  if (!p || p.method !== 'group-member' || !p.dist) return 0;
+  const R = toPc(g), D = toPc(p.dist);
+  if (!(R > 0) || !(D > 0)) return 0;
+  const k = toPc({ v: 1, unit: p.dist.unit }), lo = Number.isFinite(p.dist.lo) ? p.dist.lo * k : null, hi = Number.isFinite(p.dist.hi) ? p.dist.hi * k : null;
+  let b = R;
+  if (lo != null) b = Math.min(b, D - lo);
+  if (hi != null) b = Math.min(b, hi - D);
+  if (!(b > 0)) return 0;
+  return b * (hashUnit(o.id, 'los') + hashUnit(o.id, 'los2') - 1);
+}
+
 export class ObjectStore {
-  constructor(opts = {}) { this.opts = opts; this._clear(); }
+  constructor(opts = {}) { this.opts = opts; this._evidence = false; this._clear(); }
   _clear() {
     this.byId = new Map(); this.byKind = new Map(); this.recs = []; this._place = new Map(); this.stars = new Map();
     this.earth = null; this.query = null; this.kindStatus = {}; this.skipped = 0; this._earthAu = [0, 0, 0]; this._idx = null;
   }
   get hasSolar() { return !!this.earth; }
   get(id) { return this.byId.get(id) || null; }
-  placement(id) { const r = this._place.get(id); return r ? { sysAu: r.sysAu, galPc: r.galPc, dir: r.dir, orbit: r.orbit } : null; }
+  placement(id) { const r = this._place.get(id); return r ? { sysAu: r.sysAu, galPc: r.galPc, dir: r.dir, orbit: r.orbit, losPc: r.galPcSpread && !this._evidence ? r.losPc : 0 } : null; }
+  /**
+   * The Evidence view flag of the placements (section 19.3.4): records placed at a group distance with props.group_radius (and the black holes of such a galaxy)
+   * are drawn at D + losOffsetPc in the normal view and at the exact distance D when `on`. Re-points every spread record's galPc (cheap; a no-op when the flag
+   * is unchanged). visibleObjects(store, ctx) calls it with ctx.evidence, so the renderer needs no call of its own; picking, planGo, labels, fromYou and markers
+   * all read the placement, so they follow. Returns true when anything moved.
+   */
+  setEvidence(on) {
+    on = !!on;
+    if (on === this._evidence) return false;
+    this._evidence = on;
+    let moved = false;
+    for (const r of this.recs) if (r.galPcSpread) { r.galPc = on ? r.galPcExact : r.galPcSpread; moved = true; }
+    return moved;
+  }
+  get evidence() { return this._evidence; }
   resolveHost(hostId) {
     if (!hostId || hostId === SUN || !this._resolver) return hostId || null;
     return this._resolver.key(hostId) || hostId;
@@ -266,6 +319,7 @@ export class ObjectStore {
       this._placeRecord(rec, e);
       this.recs.push(rec); this._place.set(o.id, rec);
     }
+    this._spread();
     return { ok: true, unknownKinds };
   }
   _placeRecord(rec, earthAu) {
@@ -287,6 +341,18 @@ export class ObjectStore {
       const d = p.dist ? toPc(p.dist) : null;
       if (Number.isFinite(d)) rec.galPc = radecToXyz(p.ra, p.dec, d);
       else if (!p.dist) rec.dir = radecToXyz(p.ra, p.dec, 1);
+    }
+  }
+  _spread() {   // section 19.3.4: the illustrative line-of-sight depth within a group; a supermassive black hole takes its galaxy's offset
+    for (const rec of this.recs) {
+      rec.galPcExact = rec.galPc; rec.galPcSpread = null; rec.losPc = 0;
+      const p = rec.o.position;
+      if (!rec.galPc || !p || p.model !== 'fixed') continue;
+      const host = rec.kind === 'black_hole' && isSupermassive(rec.o) && rec.o.parent ? this.byId.get(rec.o.parent) : rec.o;
+      const off = host ? losOffsetPc(host) : 0, d = toPc(p.dist);
+      if (!off || !(d > 0)) continue;
+      rec.losPc = off; rec.galPcSpread = radecToXyz(p.ra, p.dec, d + off);
+      if (!this._evidence) rec.galPc = rec.galPcSpread;
     }
   }
   counts() {
@@ -323,6 +389,7 @@ export const GALAXY_PICK_MIN = 0.25;   // below this a record that fades with ga
 export const presenceOf = (e) => (e.galaxyFade != null ? e.galaxyFade : e.mwFade != null ? e.mwFade : 1);
 
 export function visibleObjects(store, ctx) {
+  if (typeof store.setEvidence === 'function') store.setEvidence(!!ctx.evidence);   // the group-member line-of-sight spread is off in the Evidence view
   const out = [], layers = ctx.layers || {}, ev = { evidence: !!ctx.evidence, layers };
   const gf = ctx.galaxyFade != null ? ctx.galaxyFade : ctx.cam ? galaxyFade(ctx.cam) : null, hostedFrame = F.isHosted(ctx.frame);
   for (const r of store.recs) {
@@ -352,16 +419,21 @@ export function visibleObjects(store, ctx) {
 /**
  * Supermassive black holes show only when resolved (section 18.8.3). entry: a visibleObjects entry; items: the billboardItems of the same frame;
  * opts { selectedId, inCone } (inCone: boolean, default entry.o.in_cone === true). Any other entry is true. An SMBH is shown when it is in the cone, is
- * selected, or its parent galaxy's item is `inside` or at least 40 px in semi-major axis; for the Milky Way the camera must also be 40 kpc or more
+ * selected, or its parent galaxy's item is `inside` or at least 40 px in semi-major axis AND in front of the camera (section 19.3.8: item.screen null means behind;
+ * opts.forward, a unit vector, adds the test rel . forward > 0 for callers whose projector clips); for the Milky Way the camera must also be 40 kpc or more
  * from the Sun (the item's galaxyFade is 0), so Sgr A* near the Sun keeps its cone rule.
  */
-export function smbhVisible(entry, items, { selectedId = null, inCone } = {}) {
+export function smbhVisible(entry, items, { selectedId = null, inCone, forward = null } = {}) {
   if (!entry || entry.kind !== 'black_hole' || !isSupermassive(entry.o)) return true;
   if (selectedId != null && selectedId === entry.id) return true;
   if (inCone != null ? inCone : entry.o.in_cone === true) return true;
   const it = (items || []).find((i) => i.id === entry.o.parent);
   if (!it) return false;
   if (it.billboard === 'milky_way' && !(it.galaxyFade === 0)) return false;
+  // Section 19.3.8: a galaxy behind the camera does not count. project() returns null only for points behind the camera, so an item with screen === null (or, given
+  // opts.forward, a centre with rel . forward <= 0) is behind; it still counts when the camera is inside it (its distance within its semi-major axis).
+  const behind = it.screen === null || (Array.isArray(forward) && Array.isArray(it.rel) && it.rel[0] * forward[0] + it.rel[1] * forward[1] + it.rel[2] * forward[2] <= 0);
+  if (behind) return !!(it.inside && Number.isFinite(it.dist) && Number.isFinite(it.radiusUnits) && it.dist <= it.radiusUnits);
   return !!(it.inside || (it.semiMajorPx != null && it.semiMajorPx >= 40));
 }
 /** visible.filter(smbhVisible) with the items built from the same list: the renderer's one-liner. */
@@ -745,32 +817,82 @@ export function starSignature(stars) {
   return s;
 }
 
-// ------------------------------------------------------------------ lensing (section 17.9)
+// ------------------------------------------------------------------ lensing (section 17.9, 19.3.3)
 export const LENS_MIN_PX = 9, SHADOW_PER_RS = 2.598;   // the shadow's radius is sqrt(27) GM / c^2 = 2.598 r_s
+export const LENS_FLOOR_PX = 1.5, LENS_CAP = 0.05;     // below LENS_FLOOR_PX a capped look is a marker only; the cap is LENS_CAP of the parent's drawn semi-major axis
 /**
  * Items for the lensing renderer (pure data; the renderer draws a screen quad of radius 4 * px per item). Entries whose renderer is 'lensing' with a
  * size.radius (r_s); none in the Evidence view (marker only, markerPoints draws it). item = { id, kind, rel, dist, rShadow, truePx, px, enlarged,
- * factor, disc, incl, inclAssumed, screen? }
- *   rShadow  2.598 r_s in frame units (system: AU, galaxy: pc);  truePx  atan(rShadow / dist) * pxPerRad;  px  max(truePx, LENS_MIN_PX)
- *   enlarged truePx < LENS_MIN_PX, factor LENS_MIN_PX / truePx (1 when not enlarged): the card says "Drawn enlarged ×3e9: ..."
+ * factor, disc, incl, inclAssumed, capPx, screen? }
+ *   rShadow  2.598 r_s in frame units (system: AU, galaxy: pc);  truePx  atan(rShadow / dist) * pxPerRad;  px  max(truePx, LENS_MIN_PX), capped below
+ *   enlarged px > truePx;  factor  px / truePx, what is drawn over the truth (1 when not enlarged): the card says "Drawn enlarged ×3e9: ..."
  *   disc     the state is accreting (isAccreting);  incl  degrees, i_deg when known else 60 (illustrative; inclAssumed)
+ * opts.items (the billboardItems of the frame): a supermassive black hole whose parent galaxy has an item that is not `inside` (the camera is outside that galaxy) is
+ * capped to LENS_CAP (a twentieth) of that item's semiMajorPx: px = min(max(truePx, 9), capPx), so the whole look (radius 4 px) stays within a fifth of the galaxy.
+ * Sgr A* inside the Milky Way (its item `inside`) and stellar-mass black holes are never capped. Below LENS_FLOOR_PX no item is made: the black hole is a marker.
+ * The result array carries `.markerOnly`: those black holes as { id, kind, markerOnly: true, truePx, px: 0, factor: null, enlarged: false, capPx, parentId,
+ * parentName, rel, dist, screen? }. The renderer keeps their markers (lensVisible) and passes the entry to the card as ctx.lensing, like a drawn item.
  */
-export function lensingItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null } = {}) {
-  if (evidence) return [];
-  const out = [], upc = F.unitsPerPc(cam);
+export function lensingItems(visible, cam, { evidence = false, pxPerRad = 1000, project = null, items = [] } = {}) {
+  const out = [], marks = [], upc = F.unitsPerPc(cam);
+  out.markerOnly = marks;
+  if (evidence) return out;
   for (const e of visible) {
     if (e.renderer !== 'lensing') continue;
     const rel = framePos(e, cam), rs = toKm(e.o.size && e.o.size.radius);
     if (!rel || !(rs > 0)) continue;
     const rShadow = SHADOW_PER_RS * (rs / (F.AU_PER_PC * KM_PER_AU)) * upc, dist = Math.hypot(rel[0], rel[1], rel[2]);
-    const truePx = dist > 0 ? Math.atan(rShadow / dist) * pxPerRad : Infinity, enlarged = truePx < LENS_MIN_PX;
-    const iq = e.o.position && e.o.position.elements && e.o.position.elements.i_deg, known = !!iq && Number.isFinite(iq.v);
-    const item = { id: e.id, kind: e.kind, rel, dist, rShadow, truePx, px: Math.max(truePx, LENS_MIN_PX), enlarged, factor: enlarged ? LENS_MIN_PX / truePx : 1,
+    const truePx = dist > 0 ? Math.atan(rShadow / dist) * pxPerRad : Infinity;
+    let px = Math.max(truePx, LENS_MIN_PX), capPx = null, parent = null;
+    if (isSupermassive(e.o) && e.o.parent && Number.isFinite(truePx)) {
+      parent = items.find((i) => i.id === e.o.parent) || null;
+      if (parent && !parent.inside && Number.isFinite(parent.semiMajorPx)) { capPx = LENS_CAP * parent.semiMajorPx; px = Math.min(px, capPx); } else parent = null;
+    }
+    if (capPx != null && px < LENS_FLOOR_PX) {
+      const pe = visible.find((v) => v.id === e.o.parent), m = { id: e.id, kind: e.kind, markerOnly: true, truePx, px: 0, factor: null, enlarged: false, capPx, parentId: e.o.parent,
+        parentName: pe ? pe.o.name : null, rel, dist, alpha: presenceOf(e) };
+      if (project) m.screen = project(rel);
+      marks.push(m);
+      continue;
+    }
+    const iq = e.o.position && e.o.position.elements && e.o.position.elements.i_deg, known = !!iq && Number.isFinite(iq.v), enlarged = px > truePx;
+    const item = { id: e.id, kind: e.kind, rel, dist, rShadow, truePx, px, enlarged, factor: enlarged ? px / truePx : 1, capPx,
       disc: isAccreting(e.o), incl: known ? iq.v : 60, inclAssumed: !known, alpha: presenceOf(e) };
     if (project) item.screen = project(rel);
     out.push(item);
   }
   return out;
+}
+/** The entries whose marker is drawn: every non-lensing entry; lensing entries in the Evidence view and the ones lensingItems made a marker only (`lens` is its result). */
+export const lensVisible = (visible, lens, evidence = false) => {
+  const only = new Set(((lens && lens.markerOnly) || []).map((m) => m.id));
+  return visible.filter((e) => e.renderer !== 'lensing' || evidence || only.has(e.id));
+};
+
+// ------------------------------------------------------------------ "you came from here" (section 19.3.9)
+export const HOME_MERGE_PX = 30, SUN_ID = 'ss:sun', MW_ID = 'gal:milky_way';
+export const HOME_SUN_TEXT = 'Sun · you started here', HOME_MW_TEXT = 'Milky Way centre · Sgr A*', HOME_MERGED_TEXT = 'Milky Way · the Sun is here';
+/**
+ * The two "you came from here" markers: [{ id, sel: { kind, id }, text, rel, screen, alpha, merged, rgb }], pure. opts { project, galaxyFade (number, galaxyFade(cam)),
+ * store, evidence }. The Sun (id 'ss:sun', sel { kind: 'sun' }: its card) at the galaxy-frame origin; the Milky Way's centre (id 'gal:milky_way', sel { kind: 'galaxy' }:
+ * the Milky Way card) at store.placement('gal:milky_way').galPc, left out when the store lacks it. In cosmos alpha is 1; in the galaxy frame 1 - galaxyFade (nothing
+ * at 0); never in a system frame. A marker the projector cannot place (behind the camera) is left out. When both are on screen and less than HOME_MERGE_PX apart they
+ * merge into one item { id: 'gal:milky_way', text: 'Milky Way · the Sun is here', merged: true } at the centre. The Evidence view keeps both (both placements are
+ * measured); `evidence` is accepted for symmetry. Label priority is the caller's: these come ahead of galaxies.
+ */
+export function homeMarkers(cam, { project = null, galaxyFade: gf = 0, store = null, evidence = false } = {}) {
+  if (!cam || F.isHosted(cam.frame)) return [];
+  const alpha = cam.frame === 'cosmos' ? 1 : 1 - gf;
+  if (!(alpha > 0)) return [];
+  const mk = (id, kind, text, pc, rgb) => {
+    const rel = F.relFromCam(cam, pc), screen = project ? project(rel) : null;
+    return project && !screen ? null : { id, sel: { kind, id }, text, rel, screen, alpha, merged: false, rgb };
+  };
+  const sun = mk(SUN_ID, 'sun', HOME_SUN_TEXT, [0, 0, 0], [1, 0.95, 0.8]);
+  const pl = store && typeof store.placement === 'function' ? store.placement(MW_ID) : null;
+  const mw = pl && pl.galPc ? mk(MW_ID, 'galaxy', HOME_MW_TEXT, pl.galPc, [0.9, 0.92, 1]) : null;
+  if (sun && mw && sun.screen && mw.screen && Math.hypot(sun.screen[0] - mw.screen[0], sun.screen[1] - mw.screen[1]) < HOME_MERGE_PX) return [{ ...mw, text: HOME_MERGED_TEXT, merged: true }];
+  return [sun, mw].filter(Boolean);
 }
 
 // ------------------------------------------------------------------ credits line (section 17.2)

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as R from '../js/blink/scene3d-registry.js';
 import * as F from '../js/blink/scene3d-format.js';
 import * as M from '../js/blink/scene3d-math.js';
+import fs from 'node:fs';
 
 const stub = (init) => { const m = new Map(init ? [['blink.scene3d.layers', init]] : []); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), m }; };
 const throwing = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
@@ -143,8 +144,10 @@ test('sphere spec reproduces the old planet drawing', () => {
   assert.deepEqual(at('Mars').features, { ring: 0, band: 0, atm: 0 });
   assert.deepEqual(at('Jupiter').pole, [268.06, 64.5]); assert.equal(at('Venus').pole, null);
   assert.deepEqual(at('Mars').rgb, [1.0, 0.5, 0.35]); assert.deepEqual(at('Pluto?').rgb, [0.8, 0.8, 0.8]);
-  assert.equal(at('Saturn', true).features.ring, 1, 'Phase 0: the Evidence view still shows the features');
-  assert.equal(R.EVIDENCE_HIDES_FEATURES, false); assert.equal(R.FEATURE_TIER, 'illustrative');
+  assert.deepEqual(at('Saturn', true).features, { ring: 0, band: 0, atm: 0 }, 'Phase 4 (section 19.3.1): the Evidence view hides rings, bands and atmospheres');
+  assert.deepEqual(at('Jupiter', true).features, { ring: 0, band: 0, atm: 0 }); assert.deepEqual(at('Earth', true).features, { ring: 0, band: 0, atm: 0 });
+  assert.deepEqual(at('Saturn', true).rgb, at('Saturn').rgb, 'the disc keeps its display colour'); assert.equal(at('Saturn').features.ring, 1, 'the normal view is unchanged');
+  assert.equal(R.EVIDENCE_HIDES_FEATURES, true); assert.equal(R.FEATURE_TIER, 'illustrative');
   assert.deepEqual(R.kindSpec('moon').sphere({ name: 'Moon' }, {}).rgb, [0.8, 0.8, 0.8]);
 });
 
@@ -231,7 +234,7 @@ test('layer map reaches visible(): cluster candidates are hidden unless clusterC
 test('exoplanet card: rows with tiers and sources, in the section 16.7 order', () => {
   const o = exoRec(), c = R.kindSpec('exoplanet').card(o, ctx({ place: placeOf(o), hostName: 'TRAPPIST-1' }));
   assert.equal(c.title, 'TRAPPIST-1 b'); assert.equal(c.subtitle, 'Exoplanet');
-  assert.deepEqual(c.rows.map((r) => r[0]), ['Host star', 'Orbital period', 'Semi-major axis', 'Eccentricity', 'Inclination', 'Mass', 'Radius', 'Discovered', 'From its star now', 'From you']);
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Host star', 'Orbital period', 'Semi-major axis', 'Eccentricity', 'Inclination', 'Mass', 'Radius', 'Discovered', 'From its star now', 'From you', 'Data']);
   assert.deepEqual(rowOf(c, 'Host star'), ['Host star', 'TRAPPIST-1', 'catalogue', 'NASA Exoplanet Archive pscomppars']);
   assert.deepEqual(rowOf(c, 'Orbital period'), ['Orbital period', '1.510826 ± 0.000006 d', 'measured', NEA + 'Agol et al. 2021']);   // the digits its interval supports
   assert.deepEqual(rowOf(c, 'Semi-major axis').slice(1, 3), ['0.0115 AU', 'catalogue']);
@@ -479,7 +482,7 @@ test('black hole card, fixed (Sgr A*): type, state, mass, distance, r_s inferred
 test('black hole card, hosted: companion distance, orbit rows with their evidence, no disc for a dormant black hole', () => {
   const host = { position: { dist: { v: 478.47, lo: 473.93, hi: 483.09, unit: 'pc', src: 'El-Badry et al. 2023, Table 1', tier: 'measured' } } };
   const c = R.kindSpec('black_hole').card(bhRec(), ctx({ hostName: 'Gaia BH1 companion', hostRecord: host, place: { sysAu: [1, 0.5, 0.2], galPc: [100, 100, 100], orbit: null } }));
-  assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (its companion\'s)', 'Event horizon (r_s)', 'Orbital period', 'Eccentricity', 'Inclination', 'Orbit evidence', 'Companion', 'From its companion now', 'From you', 'Look']);
+  assert.deepEqual(c.rows.map((r) => r[0]), ['Type', 'State', 'Mass', 'Distance (its companion\'s)', 'Event horizon (r_s)', 'Orbital period', 'Eccentricity', 'Inclination', 'Orbit evidence', 'Companion', 'From its companion now', 'From you', 'Look', 'Data']);
   assert.deepEqual(row(c, 'Distance (its companion\'s)').slice(1, 3), ['478 ± 5 pc', 'measured']);
   assert.deepEqual(row(c, 'Orbital period').slice(1, 3), ['186 d', 'measured']); assert.deepEqual(row(c, 'Eccentricity').slice(1, 3), ['0.451', 'measured']); assert.equal(row(c, 'Inclination')[1], '127°');
   assert.deepEqual(row(c, 'Orbit evidence').slice(1, 3), ['measured orbit', 'measured']); assert.match(row(c, 'Orbit evidence')[3], /El-Badry/);
@@ -654,4 +657,116 @@ test('supermassive black hole card: rescaled mass, published mass and distance n
 test('the Gaia Data row for star cards', () => {
   assert.deepEqual(R.gaiaDataRow().slice(0, 3), ['Data', 'Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO', 'catalogue']); assert.equal(R.GAIA_CREDIT, R.gaiaDataRow()[1]);
   assert.equal(R.evidenceRows([R.gaiaDataRow()], true).length, 1, 'never dropped in the Evidence view');
+});
+
+// ------------------------------------------------------------------ Phase 4 (section 19)
+const gpos = (method, dist, extra = {}) => ({ position: { ...m31().position, method, dist }, alt_distances: undefined, ...extra });
+const GSRC_SMALL = 'Placed at the distance of its group (Cosmicflows-4 group 1PGC 36487, 121 galaxies: DMzp 34.796 ± 0.036, converted by Space Maps), whose average is more precise than its own Tully–Fisher distance; the interval adds the group radius 0.42 Mpc (rms projected distance of its Cosmicflows-4 members) along the line of sight in quadrature';
+const GSRC_RICH = 'Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220: DMzp 31.048 ± 0.008, converted by Space Maps), whose average is more precise than its own Tully–Fisher distance; the interval adds the cluster radius 1.7 Mpc along the line of sight in quadrature';
+const GSRC_FLOW = 'Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220: DMzp 31.048 ± 0.008), because its velocity mostly reflects its motion inside the cluster';
+
+test('galaxy card (section 19.5): the three group-member distance notes, the group radius row and note, the own distance as a "not used" row', () => {
+  const spec = R.kindSpec('galaxy'), gd = (src) => ({ v: 91.2, lo: 90, hi: 92, unit: 'Mpc', src, tier: 'inferred' });
+  const small = spec.card(m31(gpos('group-member', gd(GSRC_SMALL))), gctxr());
+  assert.equal(small.notes[0], 'Placed at the distance of its group (Cosmicflows-4 group 36487, 121 galaxies), whose average is more precise than its own Tully–Fisher distance.');
+  const rich = spec.card(m31(gpos('group-member', gd(GSRC_RICH))), gctxr());
+  assert.equal(rich.notes[0], 'Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220), whose average is more precise than its own Tully–Fisher distance.');
+  const flow = spec.card(m31(gpos('group-member', gd(GSRC_FLOW))), gctxr());
+  assert.equal(flow.notes[0], 'Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220), because its velocity mostly reflects its motion inside the cluster.');
+  assert.equal(R.groupNote(GSRC_SMALL.replace('Tully–Fisher', 'fundamental-plane')), 'Placed at the distance of its group (Cosmicflows-4 group 36487, 121 galaxies), whose average is more precise than its own fundamental-plane distance.');
+  assert.match(R.groupNote(GSRC_RICH.replace('Virgo', 'Abell 1367')), /^Placed at the distance of the Abell 1367 cluster \(Cosmicflows-4 group 41220\), whose average/);
+  // the galaxy's own TF distance is a generic "not used" row
+  const own = { method: 'tully-fisher', dist: { v: 95, lo: 80, hi: 110, unit: 'Mpc', src: 'Cosmicflows-4 table2: DMtf 34.89 ± 0.4', tier: 'inferred' }, reason: 'not used: larger uncertainty than its group\'s distance' };
+  const c = spec.card(m31({ ...gpos('group-member', gd(GSRC_SMALL)), alt_distances: [own], props: { ...m31().props, group_radius: { v: 0.42, unit: 'Mpc', src: 'rms projected distance of the 121 Cosmicflows-4 members', tier: 'inferred' } } }), gctxr());
+  const alt = c.rows.find((r) => r[0] === 'Other distances · not used');
+  assert.match(alt[1], /^Tully–Fisher relation: 95 ± 15 Mpc · not used: larger uncertainty than its group's distance$/);
+  const gr = c.rows.find((r) => r[0] === 'Group radius'); assert.deepEqual(gr.slice(1, 3), ['0.42 Mpc', 'inferred']); assert.match(gr[3], /rms projected/);
+  assert.ok(c.notes.includes('Drawn depth within its group is illustrative; the distance above is its group\'s.'));
+  assert.ok(!spec.card(m31(gpos('group-member', gd(GSRC_SMALL))), gctxr()).notes.some((n) => /Drawn depth/.test(n)), 'no group_radius: no note');
+  assert.ok(c.rows.find((r) => r[0] === 'Group radius'), 'kept in the Evidence view'); assert.ok(spec.card(m31({ props: { ...m31().props, group_radius: { v: 0.4, unit: 'Mpc', src: 't', tier: 'catalogue' } } }), gctxr({ evidence: true })).rows.find((r) => r[0] === 'Group radius'));
+});
+
+test('black hole card (section 19.3.3): the drawn enlargement and the marker-only note', () => {
+  const spec = R.kindSpec('black_hole'), m = { id: 'bh:M31*', kind: 'black_hole', name: 'M31*', host: null, parent: 'ongc:NGC0224', evidence: 'measured', render: {},
+    position: { model: 'fixed', ra: 10, dec: 41, method: 'cepheid', tier: 'catalogue', dist: { v: 0.759, unit: 'Mpc', src: 'Cosmicflows-4 table2', tier: 'measured' } },
+    size: { radius: { v: 4e8, unit: 'km', src: 't', tier: 'inferred' }, angular: null }, props: { type: pcq('supermassive', ''), mass: { v: 1.4e8, unit: 'Msun', src: 'Bender', tier: 'measured' } } };
+  const drawn = spec.card(m, { fromYou: null, evidence: false, lensing: { enlarged: true, factor: 1.9e10, truePx: 4.7e-10 } });
+  assert.ok(drawn.notes.includes('Drawn enlarged ×2e10: its shadow would be 5e-10 px from here.'));
+  const only = spec.card(m, { fromYou: null, evidence: false, parentName: 'Andromeda Galaxy', lensing: { markerOnly: true, factor: null, truePx: 1e-7 } });
+  assert.ok(only.notes.includes('Too small to draw against Andromeda Galaxy from here: shown as a marker; its shadow would be 1e-7 px.'), only.notes.join('|'));
+  assert.ok(!only.notes.some((n) => /Drawn enlarged/.test(n)));
+  assert.match(R.markerOnlyNote({ truePx: 3e-9, parentName: 'M31' }), /^Too small to draw against M31 from here: shown as a marker; its shadow would be 3e-9 px\.$/);
+  assert.equal(spec.card(m, { fromYou: null, evidence: false, parentName: 'X', lensing: { markerOnly: true, truePx: 1e-7, parentName: 'M31' } }).notes[0], 'Too small to draw against M31 from here: shown as a marker; its shadow would be 1e-7 px.');
+});
+
+const nebD = (src, tier, evidence, method, extra = {}) => nebRec({ evidence, position: { ...nebRec().position, method, dist: { v: 410, lo: 400, hi: 421, unit: 'pc', src, tier } }, ...extra });
+const SHEN_I = 'Shen et al. 2025, A&A 696, A67, table2: G005.987-01.191 (Group I): mean Gaia DR3 (Bailer-Jones et al. 2021) distance of its exciting stars';
+const SHEN_II = 'Shen et al. 2025, A&A 696, A67, table2: G012.345+00.678 (Group II): mean Gaia DR3 (Bailer-Jones et al. 2021) distance of its exciting star';
+const SHEN_M22 = `${SHEN_I} (value from Méndez-Delgado et al. 2022, Gaia DR3)`;
+const SHEN_MASER = 'Shen et al. 2025, A&A 696, A67, table2: G209.037-19.377 (Group I): VLBI maser parallax of the associated HMSFR, as adopted by Shen et al. 2025 (table2 gives no per-row reference; §3.2: primarily Reid et al. 2019)';
+
+test('nebula card (section 19.4): Shen Gaia, derived and maser notes, method words, the "not used" rows, the Data row', () => {
+  const spec = R.kindSpec('nebula'), row = (c, l) => c.rows.find((r) => r[0] === l);
+  const g1 = spec.card(nebD(SHEN_I, 'measured', 'measured', 'bailer-jones'), ctx());
+  assert.equal(row(g1, 'Distance (Gaia DR3 parallaxes of its exciting stars)')[2], 'measured');
+  assert.equal(g1.notes[0], 'Distance of its exciting stars from their Gaia DR3 parallaxes (Shen et al. 2025).');
+  assert.equal(row(g1, 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Sharpless 1959 via VizieR; Shen et al. 2025 via VizieR; Gaia: Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
+  const g2 = spec.card(nebD(SHEN_II, 'inferred', 'derived', 'bailer-jones'), ctx());
+  assert.equal(g2.notes[0], 'Distance of its one exciting star from its Gaia DR3 parallax (Shen et al. 2025): the parallax is measured, but tying the region to a single star is an inference, so the placement is derived.');
+  assert.match(row(g2, 'Data')[1], /Gaia: Credit: ESA\/Gaia\/DPAC/);
+  const m22 = spec.card(nebD(SHEN_M22, 'measured', 'measured', 'bailer-jones'), ctx()); assert.match(row(m22, 'Data')[1], /Gaia: Credit/);
+  const ms = spec.card(nebD(SHEN_MASER, 'measured', 'measured', 'parallax'), ctx());
+  assert.equal(ms.notes[0], 'Distance from the VLBI parallax of a maser in the region (Shen et al. 2025).'); assert.ok(row(ms, 'Distance (VLBI maser parallax)'));
+  assert.equal(row(ms, 'Data')[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Sharpless 1959 via VizieR; Shen et al. 2025 via VizieR'); assert.ok(!/Gaia/.test(row(ms, 'Data')[1]), 'a maser row takes no Gaia credit');
+  // Russeil keeps its derived note; the Gaia value it lost is a "not used" row, and still gets the Gaia credit because the card shows it
+  const ru = spec.card(nebD('Russeil 2003, A&A 397, 133, table3: stellar distance of complex 208.0-19.0 (Sh2-281)', 'inferred', 'derived', 'photometric', {
+    alt_distances: [{ method: 'bailer-jones', dist: { v: 380, lo: 370, hi: 390, unit: 'pc', src: SHEN_II, tier: 'inferred' }, reason: 'not used: its Group II distance depends on one star' }] }), ctx());
+  assert.match(ru.notes[0], /^Distance from the stars of its star-forming complex \(Russeil 2003\)/);
+  const nu = row(ru, 'Other distances · not used'); assert.match(nu[1], /^Gaia DR3 parallaxes of its exciting stars: 380 ± 10 pc · not used: its Group II/); assert.equal(nu[2], 'inferred');
+  assert.match(row(ru, 'Data')[1], /Gaia: Credit/);
+  // the Russeil row alone: no Gaia credit
+  assert.ok(!/Gaia/.test(row(spec.card(nebD('Russeil 2003, A&A 397, 133, table3', 'inferred', 'derived', 'photometric'), ctx()), 'Data')[1]));
+  // the evidence view keeps the Data and the not-used rows
+  const ev = spec.card(nebD(SHEN_I, 'measured', 'measured', 'bailer-jones', { alt_distances: ru.rows.length ? [{ method: 'photometric', dist: { v: 450, unit: 'pc', src: 'Russeil 2003', tier: 'inferred' }, reason: 'not used: Gaia' }] : [] }), ctx({ evidence: true }));
+  assert.ok(row(ev, 'Data') && row(ev, 'Other distances · not used'));
+});
+
+test('dataRow (section 19.8): one Data row per card, naming each credit whose values the card shows (every fixture, every kind)', () => {
+  const dir = new URL('../../backend/tests/fixtures/objects/examples/', import.meta.url), read = (f) => JSON.parse(fs.readFileSync(new URL(f, dir), 'utf8'));
+  const hostRec = read('star_gaia_bh1_companion.json');
+  const owned = (o, c) => c.rows.filter((r) => r[0] === 'Data');
+  const names = { cluster: [/Hunt & Reffert 2024/, /ESA\/Gaia\/DPAC/], exoplanet: [/NASA Exoplanet Archive/], nebula: [/OpenNGC/] };
+  let walked = 0, withData = 0;
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+    const o = read(f), spec = R.kindSpec(o.kind);
+    if (!spec || spec.builtin || !spec.card) continue;
+    const c = spec.card(o, { fromYou: null, evidence: false, fmtNum: R.fmtNum, hostRecord: hostRec, hostName: 'host', place: null }), data = owned(o, c);
+    walked++; assert.ok(data.length <= 1, `${f}: one Data row at most`);
+    const shown = c.rows.map((r) => String(r[3] || '')).join(' | '), text = data.length ? data[0][1] : '';
+    const need = (re, credit, why) => { if (re.test(shown)) { assert.ok(data.length === 1, `${f}: a Data row (${why})`); assert.match(text, credit, `${f}: ${why}`); } };
+    need(/Gaia/, /Gaia/, 'a Gaia value is shown');
+    need(/Cosmicflows-4/, /Cosmicflows-4/, 'a CF4 value is shown');
+    need(/OpenNGC/, /OpenNGC|UNGC/, 'an OpenNGC value is shown');
+    need(/Pietrzy/, /Pietrzy/, 'a curated value');
+    if (names[o.kind]) { assert.equal(data.length, 1, f); for (const re of names[o.kind]) assert.match(text, re, f); }
+    if (data.length) withData++;
+    const ev = spec.card(o, { fromYou: null, evidence: true, fmtNum: R.fmtNum, hostRecord: hostRec, place: null }); assert.equal(owned(o, ev).length, data.length, `${f}: the Evidence view keeps the Data row`);
+  }
+  assert.ok(walked >= 15 && withData >= 10, `${walked} ${withData}`);
+  // exact credits
+  assert.equal(R.dataRow(read('cluster.json'))[1], 'Hunt & Reffert 2024, from Gaia DR3 · Credit: ESA/Gaia/DPAC'); assert.equal(R.dataRow(read('exoplanet.json'))[1], 'NASA Exoplanet Archive');
+  assert.equal(R.dataRow(read('nebula_m57.json'))[1], 'OpenNGC (Mattia Verga), CC BY-SA 4.0; Gaia: Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO'); assert.ok(!/Gaia/.test(R.dataRow(read('nebula_m42.json'))[1]));
+  assert.equal(R.dataRow(read('planet.json')), null);
+  // black holes: a stellar-mass one names its paper and, with a Gaia companion, Gaia; a supermassive one only the parts its distance src uses
+  const bh1 = R.dataRow(read('bh_gaia_bh1.json'), { hostRecord: hostRec }); assert.match(bh1[1], /^El-Badry et al\. 2023, MNRAS 518, 1057; Gaia DR3/);
+  assert.ok(!/Gaia/.test(R.dataRow({ ...read('bh_gaia_bh1.json'), host: null }, {})[1]), 'without a Gaia companion on the card, no Gaia credit');
+  const smbh = (src, parent = 'ongc:NGC4486') => ({ id: 'bh:M87*', kind: 'black_hole', parent, position: { dist: { v: 16.8, unit: 'Mpc', src, tier: 'measured' } }, props: { type: { v: 'supermassive' } } });
+  assert.equal(R.dataRow(smbh('Cosmicflows-4 (Tully et al. 2023), table2 PGC 41361'))[1], 'Placed at its galaxy: OpenNGC (Mattia Verga), CC BY-SA 4.0; Cosmicflows-4 (Tully et al. 2023), EDD terms');
+  assert.equal(R.dataRow(smbh('the distance of its host galaxy'))[1], 'Placed at its galaxy: OpenNGC (Mattia Verga), CC BY-SA 4.0');
+  assert.equal(R.dataRow(smbh('GRAVITY 2022', 'gal:milky_way')), null, 'Sgr A*: nothing from OpenNGC or CF4 is shown');
+  const mw = read('galaxy_milky_way.json'); assert.equal(R.kindSpec('galaxy').card(mw, ctx()).rows.filter((r) => r[0] === 'Data').length, 1);
+  // a group-member galaxy: CF4 named from the distance src
+  assert.match(R.dataRow(m31(gpos('group-member', { v: 91, unit: 'Mpc', src: GSRC_SMALL, tier: 'inferred' })))[1], /Cosmicflows-4/);
+  // a card never gets two Data rows: the cluster card of a record whose own card already adds one
+  assert.equal(R.kindSpec('cluster').card(read('cluster.json'), ctx()).rows.filter((r) => r[0] === 'Data').length, 1);
 });

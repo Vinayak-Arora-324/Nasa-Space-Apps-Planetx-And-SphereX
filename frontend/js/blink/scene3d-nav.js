@@ -46,6 +46,20 @@ export class Autopilot {
 
   cancel() { this.active = false; this.done = true; }
 
+  /**
+   * The trip's peak speed (frame units per second) over the travel phase, from the same law step() uses: v(s) = r(s) L ease'(s) / dur with r(s) = stopAt exp(L (1 - ease(s))),
+   * ease'(s) = 6 s (1 - s). Cheap (256 samples), cached by (L, dur, stopAt), so the HUD may ask every frame. 0 for an idle autopilot.
+   */
+  peakSpeed() {
+    if (!this.active) return 0;
+    const key = `${this.L}|${this.dur}|${this.stopAt}`;
+    if (this._peakKey === key) return this._peak;
+    let best = 0;
+    for (let i = 1; i < 256; i++) { const s = i / 256, v = this.stopAt * Math.exp(this.L * (1 - easeInOut(s))) * this.L * 6 * s * (1 - s) / this.dur; if (v > best) best = v; }
+    this._peakKey = key; this._peak = best;
+    return best;
+  }
+
   /** Update a moving target. During travel the remaining distance stays continuous. */
   retarget(to) {
     this.to = to.slice();
@@ -75,6 +89,51 @@ export class Autopilot {
     if (this.s >= 1) { this.active = false; this.done = true; }
     return { pos: this.pos.slice(), dir: u, done: this.done };
   }
+}
+
+// ------------------------------------------------------------------ the HUD speed (docs/object-framework.md section 19.3.6)
+/**
+ * Why the HUD once read "0.0000000068 AU/s" with the autopilot flying. The readout is the camera's measured world speed smoothed with a 0.1 s time constant, and the
+ * HUD called anything above 1e-15 pc/s "moving". An autopilot trip starts from exact rest: its turn phase (0.8 s) does not move the camera, so the smoothed speed decays
+ * to a tail of e^-8, and the travel phase then eases in from zero (ease'(0) = 0), so for a frame or two the true speed is a few 1e-14 pc/s, 1e-15 of the trip's peak,
+ * and the log-scale readout printed it as a speed. The same happens on the last approach (a trip ends at a few AU after covering parsecs: the speed falls by a factor of
+ * 1e8) and as the tail after every stop. Nothing in the autopilot or the frame switch is at fault (scene3d-speed.test.mjs).
+ * The fix is to say "at rest" or "turning" there: a speed below SPEED_REL_FLOOR of the recent peak (the smoothed speed, or the autopilot's own peakSpeed() while it flies)
+ * is not shown as a speed. SpeedTracker keeps the measure; hudSpeed turns it into what the HUD prints.
+ */
+export const SPEED_TAU_S = 0.1, SPEED_REL_FLOOR = 1e-6, SPEED_QUIET_S = 1;
+export class SpeedTracker {
+  constructor() { this.reset(); }
+  reset() { this.last = null; this.smoothed = 0; this.speedPc = 0; this.peak = 0; this.quiet = 0; }
+  /**
+   * worldPc: the camera's world position (pc, doubles) this frame; dt seconds; apPeakPc: the flying autopilot's peakSpeed() in pc/s (0 when none; trips run in world pc
+   * so its units are pc). Returns (and keeps in .speedPc) the speed to show, pc/s: the smoothed speed, or 0 while that is below SPEED_REL_FLOOR of the peak. The
+   * smoothed state itself is cleared when the raw speed is below the floor too (a stop's tail); the peak is forgotten after SPEED_QUIET_S of that, so a slow flight
+   * after a fast one is shown again.
+   */
+  update(worldPc, dt, apPeakPc = 0) {
+    const w = worldPc;
+    if (this.last && dt > 0) {
+      const v = Math.hypot(w[0] - this.last[0], w[1] - this.last[1], w[2] - this.last[2]) / dt;
+      this.smoothed = smoothSpeed(this.smoothed, v, dt);
+      this.peak = Math.max(this.peak, this.smoothed, apPeakPc || 0);
+      const floor = SPEED_REL_FLOOR * this.peak;
+      if (v < floor && this.smoothed < floor) { this.smoothed = 0; this.quiet += dt; if (this.quiet > SPEED_QUIET_S) this.peak = 0; } else this.quiet = 0;
+      this.speedPc = this.smoothed < floor ? 0 : this.smoothed;
+    }
+    this.last = w.slice();
+    return this.speedPc;
+  }
+}
+/** One step of the HUD's smoothing: prev + (v - prev) (1 - e^(-dt / 0.1 s)). */
+export const smoothSpeed = (prev, v, dt) => prev + (v - prev) * (1 - Math.exp(-dt / SPEED_TAU_S));
+/**
+ * What the HUD prints for the speed: { mode: 'moving' | 'rest' | 'turning', speedPc }. 'turning': an autopilot trip in its turn phase (the camera does not move; the
+ * HUD says so). 'rest': no speed above 1e-15 pc/s (the HUD reads '0 · cruise ...'). 'moving': speedPc as measured. ap: the Autopilot (or null).
+ */
+export function hudSpeed(speedPc, ap = null) {
+  if (ap && ap.active && ap.t < TURN_SECONDS) return { mode: 'turning', speedPc: 0 };
+  return speedPc > 1e-15 ? { mode: 'moving', speedPc } : { mode: 'rest', speedPc: 0 };
 }
 
 /**

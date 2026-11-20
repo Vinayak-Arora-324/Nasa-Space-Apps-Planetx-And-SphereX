@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ObjectStore, visibleObjects, framePos, groupState, pickObjects, choosePick, labelCandidates, planGo, kindsPhrase, groupTarget, pickPriority, billboardItems, markerPoints, markerSize, isHollowSize, mergeStarSystem, countPhrase, capNotes, hostCountText, bpRpFromTeff, objectStarParams, starValuesFromRecord, resolveStarAliases, starSignature,
   skyFade, INF_PC, MW_FADE_PC, SKY_FADE_PC, nebulaItem, lensingItems, LENS_MIN_PX, fromYouFor, visibleCounts, creditItems, creditsLine, datasetCounts,
-  preferredStarDistance, preferredStarPlacement, galaxyFade, smbhVisible, withSmbh, starCreditItem, skyFadeOf } from '../js/blink/scene3d-objects.js';
+  preferredStarDistance, preferredStarPlacement, galaxyFade, smbhVisible, withSmbh, starCreditItem, skyFadeOf,
+  LENS_FLOOR_PX, lensVisible, homeMarkers, losOffsetPc } from '../js/blink/scene3d-objects.js';
 import { galacticAxes } from '../js/blink/scene3d-galaxy.js';
 import { preferredDistanceRows, beyondKinds } from '../js/blink/scene3d-registry.js';
 import { orbitPlacement, hashUnit } from '../js/blink/scene3d-orbits.js';
@@ -1216,4 +1217,138 @@ test('credits: the Gaia star item goes on the line, once, only when the star pay
   assert.equal(creditsLine(src, { nebulae: 3 }, [starCreditItem(false)]), 'Credits: OpenNGC · CC BY-SA 4.0');
   assert.equal(creditsLine([], {}, [starCreditItem(true), starCreditItem(true)]), 'Stars: Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO');
   assert.equal(creditsLine(src, { nebulae: 3 }), 'Credits: OpenNGC · CC BY-SA 4.0'); assert.equal(creditItems(src, { nebulae: 3 }, starCreditItem(true)).length, 2);
+});
+
+// ------------------------------------------------------------------ Phase 4 (section 19)
+const mpc = (v, o = {}) => ({ v, unit: 'Mpc', src: 't', tier: 'inferred', ...o });
+const m31Bh = (o = {}) => smbh('bh:M31*', 'ongc:NGC0224', { position: { ...sgr().position, ra: 10.6847917, dec: 41.2690556, dist: mpc(0.759, { tier: 'measured' }) },
+  size: { radius: { v: 4.1e8, unit: 'km', src: 't', tier: 'inferred' }, angular: null }, ...o });
+const m31G = () => galRec('ongc:NGC0224', 10.6847917, 41.2690556, 759, 177.8, 69.7, 35);
+const lensAt = (items, o = m31Bh(), cam = camAtPc([0, 0, 0], 'galaxy')) => {
+  const s = store([m31G(), o]), vis = visibleObjects(s, gctx({ cam }));
+  return lensingItems(vis, cam, { pxPerRad: 1000, items });
+};
+
+test('lensingItems cap (section 19.3.3): M31* from the Sun is a marker only, drawn at 200 px with the factor of what is drawn, Sgr A* inside the Milky Way is uncapped', () => {
+  assert.equal(LENS_FLOOR_PX, 1.5);
+  const far = lensAt([{ id: 'ongc:NGC0224', semiMajorPx: 20, inside: false }]);   // seen from the Sun: M31 is about 20 px in semi-major axis
+  assert.equal(far.length, 0); assert.equal(far.markerOnly.length, 1);
+  const m = far.markerOnly[0];
+  assert.equal(m.id, 'bh:M31*'); assert.equal(m.markerOnly, true); assert.equal(m.factor, null); assert.equal(m.capPx, 1); assert.equal(m.parentName, 'ongc:NGC0224'); assert.ok(m.truePx > 0 && m.truePx < 1e-6);
+  const near = lensAt([{ id: 'ongc:NGC0224', semiMajorPx: 200, inside: false }]);
+  assert.equal(near.length, 1); assert.equal(near.markerOnly.length, 0);
+  const it = near[0]; assert.equal(it.px, 9); assert.equal(it.capPx, 10); assert.equal(it.enlarged, true); assert.ok(Math.abs(it.factor - 9 / it.truePx) / it.factor < 1e-12);
+  const tight = lensAt([{ id: 'ongc:NGC0224', semiMajorPx: 120, inside: false }])[0];   // the cap (6 px) is under the minimum look: px = cap, factor = cap / truePx
+  assert.equal(tight.px, 6); assert.ok(Math.abs(tight.factor - 6 / tight.truePx) / tight.factor < 1e-12);
+  assert.equal(lensAt([{ id: 'ongc:NGC0224', semiMajorPx: 30, inside: false }]).length, 1, 'cap 1.5 px is not under the floor: drawn');
+  assert.equal(lensAt([{ id: 'ongc:NGC0224', semiMajorPx: 29, inside: false }]).length, 0, '1.45 px: a marker');
+  assert.equal(lensAt([{ id: 'ongc:NGC0224', semiMajorPx: null, inside: true }])[0].px, 9, 'the camera inside the parent: no cap');
+  assert.equal(lensAt([])[0].px, 9, 'no parent item: no cap');
+  // Sgr A* from the Sun: the Milky Way's item is inside, so uncapped
+  const sg = lensingItems(visibleObjects(store([mwG(), smbh('bh:Sgr A*', 'gal:milky_way', { position: sgr().position, size: sgr().size })]), gctx({ cam: camAtPc([0, 0, 0]) })), camAtPc([0, 0, 0]),
+    { pxPerRad: 1000, items: [{ id: 'gal:milky_way', semiMajorPx: null, inside: true, billboard: 'milky_way' }] });
+  assert.equal(sg.length, 1); assert.equal(sg[0].px, 9);
+  // a stellar-mass black hole has no galaxy parent and is unchanged
+  const st = lensingItems(visibleObjects(store([{ ...sgr(), id: 'bh:s', parent: 'ongc:NGC0224' }]), gctx({ cam: camAtPc([0, 0, 0]) })), camAtPc([0, 0, 0]), { pxPerRad: 1000, items: [{ id: 'ongc:NGC0224', semiMajorPx: 20, inside: false }] });
+  assert.equal(st.length, 1); assert.equal(st[0].capPx, null);
+  // the Evidence view: nothing, with an empty markerOnly list; lensVisible keeps the marker-only black hole's marker
+  const ev = lensingItems(visibleObjects(store([m31G(), m31Bh()]), gctx({ cam: camAtPc([0, 0, 0]), evidence: true })), camAtPc([0, 0, 0]), { evidence: true, items: [] });
+  assert.equal(ev.length, 0); assert.deepEqual(ev.markerOnly, []);
+  const vis = visibleObjects(store([m31G(), m31Bh()]), gctx({ cam: camAtPc([0, 0, 0]) }));
+  assert.deepEqual(lensVisible(vis, far, false).map((e) => e.id).sort(), ['bh:M31*', 'ongc:NGC0224']); assert.deepEqual(lensVisible(vis, near, false).map((e) => e.id), ['ongc:NGC0224']);
+  assert.ok(lensVisible(vis, near, true).some((e) => e.id === 'bh:M31*'));
+  const withName = lensingItems(vis, camAtPc([0, 0, 0]), { pxPerRad: 1000, items: [{ id: 'ongc:NGC0224', semiMajorPx: 20, inside: false }] });
+  assert.equal(withName.markerOnly[0].parentName, 'ongc:NGC0224', 'the parent entry names it');
+});
+
+test('smbhVisible (section 19.3.8): a parent galaxy behind the camera does not count; one the camera is inside still does', () => {
+  const m87 = smbh('bh:M87*', 'ongc:NGC4486'), e = { id: m87.id, kind: 'black_hole', o: m87 }, big = { id: 'ongc:NGC4486', semiMajorPx: 300, inside: false };
+  assert.equal(smbhVisible(e, [{ ...big, screen: [10, 10] }]), true, 'in front: counted');
+  assert.equal(smbhVisible(e, [{ ...big, screen: null }]), false, 'its centre is behind the camera');
+  assert.equal(smbhVisible(e, [{ id: 'ongc:NGC4486', semiMajorPx: null, inside: true, screen: null, dist: 3, radiusUnits: 10 }]), true, 'the camera is inside it, looking away');
+  assert.equal(smbhVisible(e, [{ id: 'ongc:NGC4486', semiMajorPx: null, inside: true, screen: null, dist: 3e3, radiusUnits: 10 }]), false, 'inside is also reported for a centre behind the camera: not near enough');
+  assert.equal(smbhVisible(e, [{ ...big, rel: [0, 0, -5] }], { forward: [0, 0, 1] }), false, 'rel . forward <= 0');
+  assert.equal(smbhVisible(e, [{ ...big, rel: [0, 0, 5] }], { forward: [0, 0, 1] }), true);
+  // through the real items: a galaxy behind a pinhole camera
+  const g = galRec('ongc:NGC4486', 187.7, 12.39, 16858, 600, 500, 0), s = store([g, smbh('bh:M87*', 'ongc:NGC4486')]);
+  const cam = camAtPc([0, 0, 0]), vis = visibleObjects(s, gctx({ cam })), tgt = M.radecToXyz(187.7, 12.39, 16858);
+  const back = billboardItems(vis, cam, { pxPerRad: 1000, project: lookAt(cam, tgt.map((v) => -v)) }), front = billboardItems(vis, cam, { pxPerRad: 1000, project: lookAt(cam, tgt) });
+  const ent = vis.find((x) => x.id === 'bh:M87*');
+  assert.equal(smbhVisible(ent, back), false); assert.equal(smbhVisible(ent, front), front[0].semiMajorPx >= 40 || !!front[0].inside);
+});
+
+// ---- the line-of-sight spread of group members (section 19.3.4, 19.14 item 4)
+const grp = (id, ra, dec, D, lo, hi, gr, o = {}) => galRec(id, ra, dec, null, 5, 4, 10, { position: { model: 'fixed', ra, dec, epoch: 2000, method: 'group-member', tier: 'inferred',
+  dist: { v: D, lo, hi, unit: 'Mpc', src: 'its group', tier: 'inferred' } }, props: { type: gq('Galaxy', ''), ...(gr == null ? {} : { group_radius: { v: gr, unit: 'Mpc', src: 'rms', tier: 'inferred' } }) }, ...o });
+const distPc = (pc) => Math.hypot(...pc);
+
+test('line-of-sight spread: deterministic, bounded by the radius and the interval, a bell with no edge, zero in the Evidence view', () => {
+  const g1 = grp('ongc:NGC4501', 187.4, 14.4, 16.5, 15.1, 17.9, 1.7);
+  const a = store([g1]), b = store([JSON.parse(JSON.stringify(g1))]);
+  const pa = a.placement('ongc:NGC4501'), pb = b.placement('ongc:NGC4501');
+  assert.deepEqual(pa.galPc, pb.galPc, 'the same place on every load'); assert.deepEqual(a.placement('ongc:NGC4501').galPc, pa.galPc, 'and twice in one store');
+  const off = distPc(pa.galPc) - 16.5e6; assert.ok(off !== 0 && Math.abs(off) <= 1.4e6 + 1e-6, `${off}`); assert.ok(Math.abs(pa.losPc - off) < 1e-3);
+  assert.equal(losOffsetPc(g1), pa.losPc);
+  // the Evidence view: the exact group distance; toggling back restores the spread
+  assert.equal(a.setEvidence(true), true); assert.ok(Math.abs(distPc(a.placement('ongc:NGC4501').galPc) - 16.5e6) < 1e-3); assert.equal(a.placement('ongc:NGC4501').losPc, 0);
+  assert.equal(a.setEvidence(true), false); assert.equal(a.setEvidence(false), true); assert.deepEqual(a.placement('ongc:NGC4501').galPc, pa.galPc);
+  // visibleObjects carries the flag, so an entry's galPc, framePos and planGo follow
+  const cam = camAtPc([0, 0, 0], 'cosmos'), ctx = (evidence) => cosmosCtx({ evidence, cam });
+  const evD = distPc(visibleObjects(a, ctx(true)).find((e) => e.id === 'ongc:NGC4501').galPc), nD = distPc(visibleObjects(a, ctx(false)).find((e) => e.id === 'ongc:NGC4501').galPc);
+  assert.ok(Math.abs(evD - 16.5e6) < 1e-3 && Math.abs(nD - 16.5e6 - off) < 1e-3);
+  const e = visibleObjects(a, ctx(false)).find((x) => x.id === 'ongc:NGC4501'), rel = framePos(e, cam);
+  assert.ok(Math.abs(Math.hypot(...rel) - nD * 1e-6) < 1e-9, 'framePos is the drawn place');
+  // the bound over many ids, with a wide and a tight interval; the distribution is a bell (more mass near 0 than near the edge), and reaches near both edges
+  let max = 0, inner = 0, outer = 0, n = 4000;
+  for (let i = 0; i < n; i++) {
+    const o = grp(`ongc:T${i}`, 10, 10, 16.5, 15.1, 17.9, 1.7), d = losOffsetPc(o) / 1e6; max = Math.max(max, Math.abs(d));
+    assert.ok(Math.abs(d) <= 1.4 + 1e-12, `${d}`); if (Math.abs(d) < 0.35) inner++; if (Math.abs(d) > 1.05) outer++;
+    const tight = losOffsetPc(grp(`ongc:U${i}`, 10, 10, 16.5, 16.3, 16.9, 1.7)) / 1e6;   // the interval ends 0.2 and 0.4 Mpc away, less than the group radius
+    assert.ok(tight >= -0.2 - 1e-12 && tight <= 0.4 + 1e-12 && Math.abs(tight) <= 0.2 + 1e-12, `${tight}`);   // b = min(1.7, 0.2, 0.4) = 0.2 on both sides
+    const noLo = losOffsetPc(grp(`ongc:V${i}`, 10, 10, 16.5, null, 16.9, 1.7)) / 1e6; assert.ok(Math.abs(noLo) <= 0.4 + 1e-12);
+    const noEnds = losOffsetPc({ ...grp(`ongc:W${i}`, 10, 10, 16.5, null, null, 0.8), position: { ...grp('x', 0, 0, 16.5, null, null, 0.8).position, dist: { v: 16.5, unit: 'Mpc', src: 't', tier: 'inferred' } } }) / 1e6;
+    assert.ok(Math.abs(noEnds) <= 0.8 + 1e-12);
+  }
+  assert.ok(max > 1.3, `reaches near the bound: ${max}`); assert.ok(inner / n > 0.4 && outer / n < 0.09, `bell: ${inner / n} ${outer / n}`);
+  // no spread without group_radius, or when not a group member
+  assert.equal(losOffsetPc(grp('ongc:N1', 1, 1, 16.5, 15, 18, null)), 0);
+  const nogr = store([grp('ongc:N1', 1, 1, 16.5, 15, 18, null)]); assert.ok(Math.abs(distPc(nogr.placement('ongc:N1').galPc) - 16.5e6) < 1e-3); assert.equal(nogr.placement('ongc:N1').losPc, 0);
+  assert.equal(losOffsetPc(grp('ongc:N2', 1, 1, 16.5, 15, 18, 1.7, { position: { ...grp('x', 1, 1, 16.5, 15, 18, 1.7).position, method: 'tully-fisher' } })), 0);
+});
+
+test('line-of-sight spread: a hosted supermassive black hole is drawn at its galaxy\'s offset centre, picking and planGo use the drawn place', () => {
+  const g = grp('ongc:NGC4889', 195.03, 27.98, 100, 90, 110, 3), bhr = smbh('bh:NGC4889*', 'ongc:NGC4889', { position: { ...sgr().position, ra: 195.03, dec: 27.98, dist: { v: 100, unit: 'Mpc', src: 'its galaxy', tier: 'inferred' } },
+    size: { radius: { v: 6e10, unit: 'km', src: 't', tier: 'inferred' }, angular: null } });
+  const s = store([g, bhr]), pg = s.placement('ongc:NGC4889'), pb = s.placement('bh:NGC4889*');
+  assert.ok(pg.losPc !== 0); assert.ok(Math.abs(pg.losPc) <= 3e6); assert.ok(Math.abs(distPc(pb.galPc) - distPc(pg.galPc)) < 1e-3, 'same drawn distance'); assert.equal(pb.losPc, pg.losPc);
+  s.setEvidence(true); assert.ok(Math.abs(distPc(s.placement('bh:NGC4889*').galPc) - 100e6) < 1e-3);
+  s.setEvidence(false);
+  // a galaxy-less black hole and a galaxy without a radius do not move
+  const lone = store([smbh('bh:Q*', 'ongc:none', { position: { ...sgr().position, dist: mpc(50) } })]); assert.ok(Math.abs(distPc(lone.placement('bh:Q*').galPc) - 50e6) < 1e-3);
+  // pick and the go plan read the same place: the entry's galPc
+  const cam = camAtPc([0, 0, 0], 'cosmos'), vis = visibleObjects(s, cosmosCtx({ cam })), e = vis.find((x) => x.id === 'ongc:NGC4889');
+  assert.deepEqual(e.galPc, s.placement('ongc:NGC4889').galPc);
+  const pk = pickObjects([e], {}, 5, 5, 3, { project: (rel) => [5, 5], framePos: (x) => framePos(x, cam) }); assert.equal(pk.sel.id, 'ongc:NGC4889');
+  assert.equal(planGo(e, { camFrame: 'cosmos', placement: (id) => s.placement(id), get: (id) => s.get(id) }).type, 'fly-galaxy');
+});
+
+// ---- "you came from here" (section 19.3.9)
+test('homeMarkers: the Sun and the Milky Way centre, faded with the stars, merged under 30 px, kept in the Evidence view, never in a system frame', () => {
+  const s = store([mwG()]), proj = (px) => (rel) => (rel[2] > 0 || rel[0] !== 0 ? [rel[0] * px, rel[1] * px] : [0, 0]);
+  const cam = camAtPc([0, 0, 3e4], 'galaxy');
+  const at = (c, o = {}) => homeMarkers(c, { project: (rel) => [rel[0] * 100, rel[1] * 100], galaxyFade: 0.3, store: s, evidence: false, ...o });
+  const g = at(cam); assert.deepEqual(g.map((m) => m.id), ['ss:sun', 'gal:milky_way']); assert.ok(g.every((m) => Math.abs(m.alpha - 0.7) < 1e-12));
+  assert.deepEqual(g[0].sel, { kind: 'sun', id: 'ss:sun' }); assert.deepEqual(g[1].sel, { kind: 'galaxy', id: 'gal:milky_way' });
+  assert.equal(g[0].text, 'Sun · you started here'); assert.equal(g[1].text, 'Milky Way centre · Sgr A*');
+  assert.deepEqual(at(cam, { galaxyFade: 1 }), [], 'nothing while the stars are at full strength');
+  assert.equal(at(cam, { galaxyFade: 0.999 }).length, 2);
+  const sys = F.makeCam({ pos: [0, 0, 0], frame: 'system', host: { idx: 0, key: 'ss:sun', pc: [0, 0, 0] } }); assert.deepEqual(at(sys, { galaxyFade: 0 }), []);
+  assert.equal(at(cam, { evidence: true }).length, 2, 'both are measured: kept in the Evidence view');
+  const c = camAtPc([0, 0, 1e-6 * 0 + 0.1], 'cosmos');   // Mpc: alpha 1 whatever galaxyFade says
+  const cc = at(c, { galaxyFade: 1, project: (rel) => [rel[0] * 1e4, rel[1] * 1e4] }); assert.ok(cc.length >= 1 && cc.every((m) => m.alpha === 1));
+  const merged = at(camAtPc([0, 0, 30e3 * 1e-6], 'cosmos'), { project: (rel) => [rel[0] * 1e-4, rel[1] * 1e-4], galaxyFade: 1 });   // 8.3 kpc apart, tiny on screen
+  assert.equal(merged.length, 1); assert.equal(merged[0].text, 'Milky Way · the Sun is here'); assert.equal(merged[0].merged, true); assert.equal(merged[0].id, 'gal:milky_way');
+  assert.equal(at(camAtPc([0, 0, 30e3 * 1e-6], 'cosmos'), { project: (rel) => [rel[0] * 1e4, rel[1] * 1e4], galaxyFade: 1 }).length, 2, 'far apart on screen: two');
+  assert.deepEqual(at(cam, { store: store([]) }).map((m) => m.id), ['ss:sun'], 'no Milky Way record: only the Sun');
+  assert.deepEqual(at(cam, { project: () => null }), [], 'behind the camera: nothing');
 });

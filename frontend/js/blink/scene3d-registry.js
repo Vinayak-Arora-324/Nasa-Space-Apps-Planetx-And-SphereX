@@ -8,7 +8,7 @@
 //   SCHEMA_MAJOR = 1                 object schema major the page understands (payload.schema 'space-maps.objects/<major>')
 //   MAX_BODY_LABELS = 12             cap on small-body labels
 //   FEATURE_TIER = 'illustrative'    tier of planet bands, atmospheres and rings
-//   EVIDENCE_HIDES_FEATURES = false  when true, sphere() returns all features as 0 in the Evidence view (a later follow-up)
+//   EVIDENCE_HIDES_FEATURES = true   sphere() returns all features as 0 in the Evidence view: bands, rings and atmospheres are drawn from no data (section 19.3.1)
 //   UNIT_KM                          kilometres per unit: km, au, pc, Mpc, Rearth, Rjup, Rsun
 //   toAu(q) / toPc(q) -> number|null a Quantity {v, unit} in AU / parsecs (null for a missing, non-numeric or unknown unit)
 //   fmtNum(v, sig = 3)               number text for cards (the same as scene3d.js's; from scene3d-format.js)
@@ -111,6 +111,19 @@
 //   black_hole card  a supermassive one (props.type 'supermassive') with props.mass_published shows 'Mass (rescaled ×1.0035)' and 'Published mass · not used',
 //                    with props.dist_published a 'Published distance · not used' row, props.ring_diameter a 'Ring diameter' row, and the note the record
 //                    carries when it is not rescaled (props.mass_note, a string Quantity) in notes; Phase 2 black-hole cards are unchanged
+//
+// PHASE 4 (docs/object-framework.md section 19)
+//   black_hole card ctx.lensing   the lensing item of lensingItems (scene3d-objects.js) OR one of its `markerOnly` entries: { enlarged, factor, truePx, markerOnly?,
+//                    parentName? }. enlarged: note 'Drawn enlarged ×N: its shadow would be X px from here.' (N = px drawn / true px, the cap of section 19.3.3 included).
+//                    markerOnly: note 'Too small to draw against <galaxy> from here: shown as a marker; its shadow would be X px.' (<galaxy> = lensing.parentName, else
+//                    ctx.parentName, else 'its galaxy'). Cards without ctx.lensing are unchanged.
+//   galaxy card      props.group_radius (Quantity, Mpc): a 'Group radius' row and the note 'Drawn depth within its group is illustrative; the distance above is its group's.'
+//                    Group-member distance notes by the shape of the distance src (cluster Hubble flow, small group, rich cluster; section 19.5).
+//   nebula card      'Other distances · not used' rows from alt_distances, notes by distance src (Gaia, maser, Russeil), the Gaia method words (section 19.4)
+//   dataRow(o, ctx = {}) -> ['Data', text, 'catalogue', url] | null   section 19.8: the one Data row of a card, from o.provenance.dataset and the src of the values the card shows
+//                    (cluster, exoplanet, nebula, galaxy, supermassive and stellar-mass black holes). null when the card shows nothing that needs a credit. ctx.hostRecord
+//                    (the companion star record) counts for a stellar-mass black hole. Every card appends it itself; callers add nothing.
+//   NEBULA_GAIA_CREDIT, SHEN_CREDIT, CLUSTER_CREDIT, NEA_CREDIT, EDD_TERMS, markerOnlyNote({ truePx, parentName })   the pieces
 import { KM_PER_AU } from './scene3d-math.js';
 import { AU_PER_PC } from './scene3d-frames.js';
 import { fmtNum, fmtQuantity } from './scene3d-format.js';
@@ -118,7 +131,7 @@ import { fmtNum, fmtQuantity } from './scene3d-format.js';
 export const SCHEMA_MAJOR = 1;
 export const MAX_BODY_LABELS = 12;
 export const FEATURE_TIER = 'illustrative';
-export const EVIDENCE_HIDES_FEATURES = false;
+export const EVIDENCE_HIDES_FEATURES = true;
 
 const PC_KM = AU_PER_PC * KM_PER_AU;
 export const UNIT_KM = { km: 1, au: KM_PER_AU, pc: PC_KM, Mpc: PC_KM * 1e6, Rearth: 6371, Rjup: 71492, Rsun: 695700 };
@@ -320,6 +333,7 @@ function exoplanetCard(o, ctx) {
   rows.push(['Discovered', disc || 'n/a', (m && m.tier) || 'catalogue', srcOf(m)]);
   if (place && place.sysAu) rows.push(['From its star now', `${f(hypot3(place.sysAu))} AU`, 'illustrative', 'where it is drawn on its orbit is illustrative']);
   rows.push(...fromYouRow(ctx));
+  pushData(rows, o, ctx);
   const notes = [];
   if (!hasV(el.node_deg)) notes.push('Where it is drawn on its orbit is illustrative: the orbit\'s orientation on the sky is not known.');
   if (orb) {
@@ -351,6 +365,69 @@ export function clusterRgb(o) {
   return S[i][1].map((v, c) => v + (S[i + 1][1][c] - v) * k);
 }
 
+
+// ------------------------------------------------------------------ Phase 4: one Data row per card (section 19.8)
+export const CLUSTER_CREDIT = 'Hunt & Reffert 2024, from Gaia DR3 · Credit: ESA/Gaia/DPAC', NEA_CREDIT = 'NASA Exoplanet Archive';
+export const NEBULA_GAIA_CREDIT = 'Gaia: Credit: ESA/Gaia/DPAC · CC BY-NC 3.0 IGO', SHEN_CREDIT = 'Shen et al. 2025 via VizieR', EDD_TERMS = 'EDD terms';
+const NEA_URL = 'https://exoplanetarchive.ipac.caltech.edu/', CC_SA_URL = 'https://creativecommons.org/licenses/by-sa/4.0/';
+const GAIA_URL_ = 'https://www.cosmos.esa.int/web/gaia/dr3';
+const srcs = (...qs) => qs.map((q) => (q && typeof q.src === 'string' ? q.src : '')).join(' | ');
+const altQuantities = (o) => (Array.isArray(o.alt_distances) ? o.alt_distances : []).filter((a) => a && hasV(a.dist)).map((a) => a.dist);
+/** Which catalogue a distance came from, by its src: 'Cosmicflows-4' | 'UNGC' | 'McConnachie 2012' | 'curated' | null. */
+const distCatalogue = (src) => (/Cosmicflows-4|CF4/i.test(src || '') ? 'Cosmicflows-4' : /UNGC/.test(src || '') ? 'UNGC' : /McConnachie/i.test(src || '') ? 'McConnachie 2012'
+  : /Pietrzy|Graczyk/.test(src || '') ? 'curated' : null);
+const CURATED_CREDIT = 'curated (Pietrzyński et al. 2019; Graczyk et al. 2020)';
+const paperOf = (o) => {   // the paper behind a curated record: its citation, else the head of its mass src ('El-Badry et al. 2023, MNRAS 518, 1057'), else its catalogue
+  const c = o.provenance && o.provenance.citation;
+  if (typeof c === 'string' && c && !/^Curated by hand/.test(c)) return c;
+  const m = prop(o, 'mass'), head = m && typeof m.src === 'string' ? m.src.split(/ \(|: |, (?:Table|Sec\.)/)[0].trim() : '';
+  return head && !/^placeholder/i.test(head) ? head : (o.provenance && o.provenance.catalogue) || null;
+};
+/**
+ * The one Data row of a card (section 19.8): ['Data', credits joined with '; ', 'catalogue', url] built from o.provenance.dataset and the src of the values the card
+ * shows, or null when the card shows nothing that needs a credit. Never dropped in the Evidence view (finish keeps catalogue rows).
+ */
+export function dataRow(o, ctx = {}) {
+  if (!o) return null;
+  const d = o.position && o.position.dist;
+  switch (o.kind) {
+    case 'cluster': return ['Data', CLUSTER_CREDIT, 'catalogue', GAIA_URL_];
+    case 'exoplanet': return ['Data', NEA_CREDIT, 'catalogue', NEA_URL];
+    case 'nebula': {
+      const t = srcs(d, ...altQuantities(o)), parts = [hasSh2(o) ? `${NEBULA_CREDIT}; ${SH2_CREDIT}` : NEBULA_CREDIT];
+      if (/Shen et al/.test(t)) parts.push(SHEN_CREDIT);   // a maser row's src has no 'Gaia' in it: it takes this credit alone
+      if (/Gaia/.test(t)) parts.push(NEBULA_GAIA_CREDIT);
+      return ['Data', parts.join('; '), 'catalogue', CC_SA_URL];
+    }
+    case 'galaxy': {
+      if (isMilkyWay(o)) return null;
+      const ungcOnly = /^ungc:/.test(o.id || ''), credits = ungcOnly ? [UNGC_CREDIT] : [NEBULA_CREDIT];
+      for (const dc of [distCatalogue(d && d.src), ...altQuantities(o).map((q) => distCatalogue(q.src))]) {
+        const c = dc === 'Cosmicflows-4' ? CF4_CREDIT : dc === 'UNGC' ? UNGC_CREDIT : dc === 'McConnachie 2012' ? MCCONNACHIE_CREDIT : dc === 'curated' ? CURATED_CREDIT : null;
+        if (c && !credits.includes(c)) credits.push(c);
+      }
+      return ['Data', credits.join('; '), 'catalogue', ungcOnly ? 'https://cdsarc.cds.unistra.fr/viz-bin/cat/J/AJ/145/101' : CC_SA_URL];
+    }
+    case 'black_hole': {
+      if (isSupermassive(o)) {   // placed at its galaxy: its position is OpenNGC's, its distance the galaxy's own
+        const parts = [], dc = distCatalogue(d && d.src);
+        if (/^ongc:/.test(o.parent || '')) parts.push(NEBULA_CREDIT);
+        if (dc === 'Cosmicflows-4') parts.push(`${CF4_CREDIT}, ${EDD_TERMS}`);
+        else if (dc === 'UNGC') parts.push(UNGC_CREDIT); else if (dc === 'McConnachie 2012') parts.push(MCCONNACHIE_CREDIT);
+        return parts.length ? ['Data', `Placed at its galaxy: ${parts.join('; ')}`, 'catalogue', CC_SA_URL] : null;
+      }
+      const h = ctx.hostRecord, gaia = /Gaia/.test(srcs(d, h && h.position && h.position.dist, h && prop(h, 'gaia_parallax'), h && prop(h, 'gmag'))) || /^gdr3:/.test(`${o.host || ''}${h ? h.id : ''}`) || /^Gaia DR3/.test(((h && h.provenance) || {}).catalogue || '');
+      const paper = paperOf(o);
+      return paper || gaia ? ['Data', [paper, gaia ? GAIA_CREDIT : null].filter(Boolean).join('; '), 'catalogue', gaia ? GAIA_URL_ : null] : null;
+    }
+    default: return null;
+  }
+}
+/** The 'Other distances · not used' rows of a card (galaxies and nebulae): one per alt_distances entry. fmt(Quantity) -> text; word(method, src) -> method words. */
+const altRows = (o, fmt, word) => (Array.isArray(o.alt_distances) ? o.alt_distances : []).filter((a) => a && hasV(a.dist))
+  .map((a) => ['Other distances · not used', `${word(a.method, a.dist.src)}: ${fmt(a.dist)} · ${a.reason || 'not used'}`, a.dist.tier || 'measured', srcOf(a.dist)]);
+const pushData = (rows, o, ctx) => { if (!rows.some((r) => r[0] === 'Data')) { const dr = dataRow(o, ctx); if (dr) rows.push(dr); } };
+
 function clusterCard(o, ctx) {
   const p = o.position || {}, d = p.dist, r = o.size && o.size.radius;
   const rows = [];
@@ -365,6 +442,7 @@ function clusterCard(o, ctx) {
   if (cls) rows.push(['Class', typeof cls.v === 'boolean' ? (cls.v ? 'bound cluster' : 'moving group') : String(cls.v), cls.tier || 'catalogue', srcOf(cls)]);
   const mass = prop(o, 'mass'); if (hasV(mass)) rows.push(['Mass', fq(mass, mass.unit === 'Msun' || !mass.unit ? 'M☉' : mass.unit), mass.tier || 'inferred', srcOf(mass)]);
   rows.push(...fromYouRow(ctx));
+  pushData(rows, o, ctx);
   const notes = [];
   if ((d && d.tier === 'inferred') || o.evidence === 'derived') notes.push('The distance is prior-dominated (parallax S/N < 5), so the cluster is drawn as a hollow marker.');
   if (qu && qu.v === 'candidate') notes.push('Candidate: it does not pass the catalogue\'s reliability cut and may not be a real cluster.');
@@ -403,12 +481,16 @@ export const NEBULA_CREDIT = 'OpenNGC (Mattia Verga), CC BY-SA 4.0', SH2_CREDIT 
 const hasSh2 = (o) => /^sh2:/.test(o.id || '') || (Array.isArray(o.designations) && o.designations.some((d) => /^Sh2-/i.test(d)));
 const arcminText = (q, f) => `${f(arcminOf(q))}′`;
 
+/** The nebula card's words for a distance method: Shen et al.'s Gaia rows ('bailer-jones') and maser rows ('parallax' of a maser), else the method as is. */
+const nebulaMethodWord = (m, src) => (m === 'bailer-jones' ? 'Gaia DR3 parallaxes of its exciting stars' : m === 'parallax' && /maser/i.test(src || '') ? 'VLBI maser parallax' : methodWord(m));
+
 function nebulaCard(o, ctx) {
   const f = num(ctx), p = o.position || {}, d = p.dist, dirOnly = !d, ang = (o.size && o.size.angular) || {};
   const rows = [], ty = prop(o, 'type');
   rows.push(['Type', (ty && ty.v) || 'Nebula', (ty && ty.tier) || 'catalogue', srcOf(ty)]);
   if (dirOnly) rows.push(['Distance', 'unknown · drawn on the sky as seen from the Sun', 'catalogue', 'no distance in the adopted catalogues']);
-  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${p.method})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
+  else { const dq = unitScaled(d, 'pc') || d; rows.push(qtyRow(p.method ? `Distance (${nebulaMethodWord(p.method, d.src)})` : 'Distance', dq, (q) => fq(q, 'pc'), 'measured')); }
+  rows.push(...altRows(o, (q) => fq(unitScaled(q, 'pc') || q, 'pc'), nebulaMethodWord));
   if (hasV(ang.major)) {
     const sz = hasV(ang.minor) ? `${arcminText(ang.major, f)} × ${arcminText(ang.minor, f)}` : `${arcminText(ang.major, f)} across`;
     rows.push(['Angular size', `${sz}, ${hasV(ang.pa) ? `PA ${f(ang.pa.v)}°` : 'PA unknown'}`, ang.major.tier || 'catalogue', srcOf(ang.major)]);
@@ -422,10 +504,16 @@ function nebulaCard(o, ctx) {
   const cs = prop(o, 'central_star'); if (cs && cs.v) rows.push(['Central star', String(cs.v), cs.tier || 'catalogue', srcOf(cs)]);
   if (!dirOnly) rows.push(...fromYouRow(ctx));
   rows.push(['Look', 'illustrative, generated from its type and size', 'illustrative', 'colour, noise and the depth of the glow are drawn by the renderer, not catalogued']);
-  rows.push(['Data', hasSh2(o) ? `${NEBULA_CREDIT}; ${SH2_CREDIT}` : NEBULA_CREDIT, 'catalogue', 'https://creativecommons.org/licenses/by-sa/4.0/']);
+  pushData(rows, o, ctx);
   const notes = [];
   if (dirOnly) notes.push('No distance is known, so it is drawn at infinity in its catalogue direction. It fades when you fly far from the Sun.');
-  else if (o.evidence === 'derived' || (d && d.tier === 'inferred')) notes.push('Distance from the stars of its star-forming complex (Russeil 2003): a photometric estimate, so the marker is hollow and the outline dashed.');
+  else {
+    const src = String(d.src || ''), derived = o.evidence === 'derived' || d.tier === 'inferred', shen = /Shen et al/.test(src);
+    if (shen && /maser/i.test(src)) notes.push('Distance from the VLBI parallax of a maser in the region (Shen et al. 2025).');
+    else if (shen && derived) notes.push('Distance of its one exciting star from its Gaia DR3 parallax (Shen et al. 2025): the parallax is measured, but tying the region to a single star is an inference, so the placement is derived.');
+    else if (shen) notes.push('Distance of its exciting stars from their Gaia DR3 parallaxes (Shen et al. 2025).');
+    else if (derived) notes.push('Distance from the stars of its star-forming complex (Russeil 2003): a photometric estimate, so the marker is hollow and the outline dashed.');
+  }
   if (hasV(ang.major) && !hasV(ang.pa)) notes.push('The catalogue gives no orientation, so the glow is drawn at an arbitrary angle and the Evidence outline is a dashed circle.');
   return finish(ctx, { title: o.name, subtitle: (ty && ty.v) || 'Nebula', rows, notes: notes.length ? notes : null });
 }
@@ -496,9 +584,20 @@ const kpcOrMpc = (q) => {   // a distance Quantity in kpc below 1 Mpc, else in M
   if (!pq) return 'n/a';
   return pq.v < 1e6 ? fq(pq, 'kpc', { scale: 1e-3 }) : fq(pq, 'Mpc', { scale: 1e-6 });
 };
-/** Which catalogue a distance came from, by its src: 'Cosmicflows-4' | 'UNGC' | 'McConnachie 2012' | 'curated' | null. */
-const distCatalogue = (src) => (/Cosmicflows-4|CF4/i.test(src || '') ? 'Cosmicflows-4' : /UNGC/.test(src || '') ? 'UNGC' : /McConnachie/i.test(src || '') ? 'McConnachie 2012'
-  : /Pietrzy|Graczyk/.test(src || '') ? 'curated' : null);
+/**
+ * The card note of a group-member distance, by the shape of its src (sections 18.4.6 and 19.5): a cluster's Hubble flow ('its velocity mostly reflects its motion
+ * inside the cluster'), a small group or a rich cluster whose average beats the galaxy's own Tully-Fisher / fundamental-plane distance ('whose average is more precise
+ * than its own ... distance'). The group id loses its '1PGC ' prefix.
+ */
+export function groupNote(src) {
+  const t = String(src || ''), gr = /group\s+(?:1PGC\s+)?(\d+)/i.exec(t), own = /whose average is more precise than its own ([^\s,;.]+) distance/.exec(t);
+  const cl = /(?:^|\bof )the (.+?) cluster/.exec(t) || /([A-Z][a-z]+) cluster/.exec(t), n = /(\d[\d,]*) galaxies/.exec(t);
+  const group = `Cosmicflows-4 group ${gr ? gr[1] : ''}`.trim();
+  if (!cl && /its group/.test(t) && own) return `Placed at the distance of its group (${group}${n ? `, ${n[1]} galaxies` : ''}), whose average is more precise than its own ${own[1]} distance.`;
+  const where = `${cl ? `the ${cl[1]} cluster` : 'its galaxy cluster'}${gr ? ` (Cosmicflows-4 group ${gr[1]})` : ''}`;
+  if (own) return `Placed at the distance of ${where}, whose average is more precise than its own ${own[1]} distance.`;
+  return `Placed at the distance of ${where}, because its velocity mostly reflects its motion inside the cluster.`;
+}
 
 function galaxyCard(o, ctx) {
   if (isMilkyWay(o)) return milkyWayCard(o, ctx);
@@ -509,10 +608,7 @@ function galaxyCard(o, ctx) {
   const dc = d ? distCatalogue(d.src) : null;
   if (dirOnly) rows.push(['Distance', 'unknown · drawn on the sky as seen from the Sun', 'catalogue', 'no distance in the adopted catalogues']);
   else rows.push(qtyRow(`Distance (${[p.method ? methodWord(p.method) : null, dc].filter(Boolean).join(', ') || 'catalogue'})`, d, (q) => kpcOrMpc(q), 'measured'));
-  for (const a of Array.isArray(o.alt_distances) ? o.alt_distances : []) {
-    if (!a || !hasV(a.dist)) continue;
-    rows.push(['Other distances · not used', `${methodWord(a.method)}: ${kpcOrMpc(a.dist)} · ${a.reason || 'not used'}`, a.dist.tier || 'measured', srcOf(a.dist)]);
-  }
+  rows.push(...altRows(o, kpcOrMpc, (m) => methodWord(m)));
   const vh = prop(o, 'v_helio'), z = prop(o, 'redshift'), vc = prop(o, 'v_cmb');
   if (hasV(vh)) rows.push(['Velocity', `${fq(vh, 'km/s')} (heliocentric)${hasV(z) ? ` · z ${fmtNum(z.v, 3)}` : ''}`, vh.tier || 'catalogue', srcOf(vh)]);
   if (hasV(vc)) rows.push(['Velocity (CMB frame)', fq(vc, 'km/s'), vc.tier || 'inferred', srcOf(vc)]);
@@ -522,25 +618,22 @@ function galaxyCard(o, ctx) {
   } else rows.push(['Angular size', 'n/a', 'catalogue', null]);
   const rad = !dirOnly && o.size && unitScaled(o.size.radius, 'pc');
   if (rad) rows.push(['Diameter (from angular size and distance)', fq(rad, 'kpc', { scale: 2e-3 }), rad.tier || 'inferred', srcOf(rad)]);
+  const grp = prop(o, 'group_radius');
+  if (hasV(grp)) rows.push(['Group radius', fq(grp, 'Mpc'), grp.tier || 'inferred', srcOf(grp)]);
   const mb = prop(o, 'mag_b'); if (hasV(mb)) rows.push(['B magnitude', fq(mb, 'mag'), mb.tier || 'catalogue', srcOf(mb)]);
   const sb = prop(o, 'surface_brightness'); if (hasV(sb)) rows.push(['Surface brightness', fq(sb, 'mag/arcsec²'), sb.tier || 'catalogue', srcOf(sb)]);
   rows.push(...childRows(ctx));
   if (!dirOnly) rows.push(...fromYouRow(ctx));
   rows.push(['Look', 'illustrative, generated from its type and brightness', 'illustrative', 'colour, arms, bar and the tilt towards you are drawn by the renderer, not catalogued']);
-  const ungcOnly = /^ungc:/.test(o.id || ''), credits = ungcOnly ? [UNGC_CREDIT] : [NEBULA_CREDIT];
-  if (dc === 'Cosmicflows-4') credits.push(CF4_CREDIT);
-  else if (dc === 'UNGC' && !credits.includes(UNGC_CREDIT)) credits.push(UNGC_CREDIT);
-  else if (dc === 'McConnachie 2012') credits.push(MCCONNACHIE_CREDIT);
-  else if (dc === 'curated') credits.push('curated (Pietrzyński et al. 2019; Graczyk et al. 2020)');
-  rows.push(['Data', credits.join('; '), 'catalogue', ungcOnly ? 'https://cdsarc.cds.unistra.fr/viz-bin/cat/J/AJ/145/101' : 'https://creativecommons.org/licenses/by-sa/4.0/']);
+  const dr = dataRow(o, ctx);
+  if (dr) rows.push(dr);
   const m = p.method;
   if (dirOnly) notes.push('No distance is known, so it is drawn at infinity in its catalogue direction. It fades when you fly far from the Sun.');
   else if (m === 'redshift') notes.push('From its velocity with H0 = 74.6 km/s/Mpc (Cosmicflows-4 scale) and a 300 km/s allowance for its own motion; Planck\'s 67.4 would place it about 11 % farther.');
-  else if (m === 'group-member') {
-    const cl = /([A-Z][a-z]+) cluster/.exec(d.src || ''), gr = /group\s+(\d+)/i.exec(d.src || '');
-    notes.push(`Placed at the distance of ${cl ? `the ${cl[1]} cluster` : 'its galaxy cluster'}${gr ? ` (Cosmicflows-4 group ${gr[1]})` : ''}, because its velocity mostly reflects its motion inside the cluster.`);
-  } else if (DERIVED_METHODS.includes(m)) notes.push(`A derived distance (${methodWord(m)}), so its marker is hollow and its outline dashed.`);
+  else if (m === 'group-member') notes.push(groupNote(d && d.src));
+  else if (DERIVED_METHODS.includes(m)) notes.push(`A derived distance (${methodWord(m)}), so its marker is hollow and its outline dashed.`);
   if (d && dc === 'UNGC' && !Number.isFinite(d.lo)) notes.push('UNGC gives no uncertainty for this distance and rounds it to 0.01 Mpc, so none is shown.');
+  if (hasV(grp)) notes.push('Drawn depth within its group is illustrative; the distance above is its group\'s.');
   if (hasV(ang.major) && !hasV(ang.pa)) notes.push('The catalogue gives no orientation, so the glow is drawn at an arbitrary angle and the Evidence outline is a dashed circle.');
   return finish(ctx, { title: o.name, subtitle: (ty && ty.v) || 'Galaxy', rows, notes: notes.length ? notes : null });
 }
@@ -582,6 +675,9 @@ const sci = (x) => (Number.isFinite(x) ? x.toExponential(0).replace('e+', 'e') :
 /** The enlargement note of a lensing item { factor, truePx }: 'Drawn enlarged ×3e9: its shadow would be 3e-9 px from here.' */
 export const enlargementNote = ({ factor, truePx }) => `Drawn enlarged ×${sci(factor)}: its shadow would be ${sci(truePx)} px from here.`;
 
+/** The note of a supermassive black hole too small to draw against its galaxy (section 19.3.3). */
+export const markerOnlyNote = ({ truePx, parentName }) => `Too small to draw against ${parentName || 'its galaxy'} from here: shown as a marker; its shadow would be ${sci(truePx)} px.`;
+
 function blackHoleCard(o, ctx) {
   const f = num(ctx), place = ctx.place || null, p = o.position || {}, el = p.elements || {}, rows = [], hosted = isHostedBh(o);
   const ty = prop(o, 'type'), st = prop(o, 'state'), mass = prop(o, 'mass'), r = o.size && o.size.radius;
@@ -616,8 +712,10 @@ function blackHoleCard(o, ctx) {
   } else { const cp = prop(o, 'companion'); if (cp && cp.v) rows.push(['Companion', String(cp.v), cp.tier || 'catalogue', srcOf(cp)]); }
   rows.push(...fromYouRow(ctx));
   rows.push(['Look', 'illustrative: a shadow, a photon ring and a halo' + (isAccreting(o) ? ', and an accretion disc' : ''), 'illustrative', 'drawn by the renderer, not catalogued']);
+  pushData(rows, o, ctx);
   const notes = [];
-  if (ctx.lensing && ctx.lensing.enlarged) notes.push(enlargementNote(ctx.lensing));
+  if (ctx.lensing && ctx.lensing.markerOnly) notes.push(markerOnlyNote({ truePx: ctx.lensing.truePx, parentName: ctx.lensing.parentName || ctx.parentName }));
+  else if (ctx.lensing && ctx.lensing.enlarged) notes.push(enlargementNote(ctx.lensing));
   notes.push('The disc and ring are illustrative.');
   if (smbh) {
     if (rescaled) notes.push(`The mass paper assumed ${hasV(dpub) ? fq(dpub, dpub.unit || 'Mpc') : 'another distance'}; the galaxy's catalogue distance is used so the black hole sits at its galaxy's centre, and a dynamical mass scales with the distance, so it is rescaled by ×${Number(factor.toPrecision(5))}.`);

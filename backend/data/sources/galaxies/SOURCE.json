@@ -47,7 +47,7 @@
       "vizier_id": "J/AJ/145/101"
     },
     {
-      "bytes": 8381936,
+      "bytes": 8828966,
       "citation": "Tully R. B., Courtois H. M., Sorce J. G., 2023, ApJ 944, 94: Cosmicflows-4 (arXiv:2209.11238), VizieR J/ApJ/944/94; Extragalactic Distance Database: Tully R. B. et al., 2009, AJ 138, 323",
       "columns": [
         "PGC",
@@ -71,22 +71,23 @@
         "DMmas",
         "e_DMmas",
         "RAJ2000",
-        "DEJ2000"
+        "DEJ2000",
+        "1PGC"
       ],
       "file": "cf4-table2.tsv.gz",
       "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
       "mirror": "vizier.cfa.harvard.edu",
-      "retrieved": "2026-11-19",
+      "retrieved": "2026-11-20",
       "role": "cf4-table2",
       "rows": 55877,
-      "sha256": "d82aa6186bf8517404e5f3f45d028d22ce9e5d3ae1f6496a9d5b7302c70261d7",
+      "sha256": "85e4fe3a2f5ea9045d0be32c4c6a2c0d1506b1dba191fc2ecf7cf596ff420149",
       "source": "VizieR",
       "table": "J/ApJ/944/94/table2",
-      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Ftable2&-out=PGC,Vcmb,DM,e_DM,DMsnIa,e_DMsnIa,DMtf,e_DMtf,DMfp,e_DMfp,DMsbf,e_DMsbf,DMsnII,e_DMsnII,DMtrgb,e_DMtrgb,DMceph,e_DMceph,DMmas,e_DMmas,RAJ2000,DEJ2000&-out.max=unlimited",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Ftable2&-out=PGC,Vcmb,DM,e_DM,DMsnIa,e_DMsnIa,DMtf,e_DMtf,DMfp,e_DMfp,DMsbf,e_DMsbf,DMsnII,e_DMsnII,DMtrgb,e_DMtrgb,DMceph,e_DMceph,DMmas,e_DMmas,RAJ2000,DEJ2000,1PGC&-out.max=unlimited",
       "vizier_id": "J/ApJ/944/94"
     },
     {
-      "bytes": 1446103,
+      "bytes": 2131099,
       "citation": "Tully R. B., Courtois H. M., Sorce J. G., 2023, ApJ 944, 94: Cosmicflows-4 (arXiv:2209.11238), VizieR J/ApJ/944/94; Extragalactic Distance Database: Tully R. B. et al., 2009, AJ 138, 323",
       "columns": [
         "1PGC",
@@ -94,18 +95,20 @@
         "DMzp",
         "e_DMzp",
         "Vh",
-        "V3k"
+        "V3k",
+        "RAJ2000",
+        "DEJ2000"
       ],
       "file": "cf4-groups.tsv.gz",
       "licence": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
       "mirror": "vizier.cfa.harvard.edu",
-      "retrieved": "2026-11-19",
+      "retrieved": "2026-11-20",
       "role": "cf4-groups",
       "rows": 38053,
-      "sha256": "37d617fbf0d743c461a86b8c51efd433a3f6a9976535bb8d49047c54017a4d36",
+      "sha256": "424303e6f87d770886c73c80079e03b89dc0d0a0665eae083a51ce69fc21c0bc",
       "source": "VizieR",
       "table": "J/ApJ/944/94/groups",
-      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Fgroups&-out=1PGC,Ngal,DMzp,e_DMzp,Vh,V3k&-out.max=unlimited",
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J%2FApJ%2F944%2F94%2Fgroups&-out=1PGC,Ngal,DMzp,e_DMzp,Vh,V3k,RAJ2000,DEJ2000&-out.max=unlimited",
       "vizier_id": "J/ApJ/944/94"
     },
     {

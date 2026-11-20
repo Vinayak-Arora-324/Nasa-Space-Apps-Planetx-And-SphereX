@@ -1,31 +1,253 @@
 {
   "format": "space-maps.galaxy-clusters/1",
   "curated": "2026-11-19",
-  "about": "Rich nearby clusters whose members' velocities are dominated by motion inside the cluster (object framework sections 18.4.6 and 18.18 item 3). A galaxy that would otherwise get a Hubble-flow distance is a member when it lies within `radius_deg` of the cluster centre on the sky and its heliocentric velocity is within 3 sigma of the CF4 group's heliocentric velocity (Colless & Dunn 1996 selected Coma members by 3-sigma clipping). A member is placed at the CF4 group distance, method group-member (derived), with the interval widened in quadrature by the cluster radius along the line of sight. Every number carries `src` and `where`, read in the paper text on 2026-11-19. Centaurus (Abell 3526) is left out: no radius was found in a paper (Stein et al. 1997 give none).",
+  "about": "Rich nearby clusters whose members' velocities are dominated by motion inside the cluster (object framework sections 18.4.6 and 18.18 item 3). A galaxy that would otherwise get a Hubble-flow distance is a member when it lies within `radius_deg` of the cluster centre on the sky and its heliocentric velocity is within 3 sigma of the CF4 group's heliocentric velocity (Colless & Dunn 1996 selected Coma members by 3-sigma clipping). A member is placed at the CF4 group distance, method group-member (derived), with the interval widened in quadrature by the cluster radius along the line of sight. Every number carries `src` and `where`, read in the paper text on 2026-11-19. Centaurus, Abell 1367, Hercules and Hydra were added on 2026-11-20 (object framework 19.6): radii r200 from Reiprich & Boehringer 2002 Table 4, dispersions from Fadda et al. 1996, read in the arXiv texts.",
   "papers": {
-    "kashibadze2020": {"cite": "Kashibadze, Karachentsev & Karachentseva 2020, A&A 635, A135", "arxiv": "2002.12820", "doi": "10.1051/0004-6361/201936172"},
-    "drinkwater2001": {"cite": "Drinkwater, Gregg & Colless 2001, ApJ 548, L139", "arxiv": "astro-ph/0012415", "doi": "10.1086/319113"},
-    "colless1996": {"cite": "Colless & Dunn 1996, ApJ 458, 435", "arxiv": "astro-ph/9508070", "doi": "10.1086/176827"},
-    "lokas2003": {"cite": "Łokas & Mamon 2003, MNRAS 343, 401", "arxiv": "astro-ph/0302461", "doi": "10.1046/j.1365-8711.2003.06684.x"},
-    "meusinger2020": {"cite": "Meusinger et al. 2020, A&A 640, A30", "arxiv": "2006.07631", "doi": "10.1051/0004-6361/202037574"},
-    "cf4": {"cite": "Tully et al. 2023, ApJ 944, 94 (Cosmicflows-4), groups table", "arxiv": "2209.11238", "doi": "10.3847/1538-4357/ac94d8"}
+    "kashibadze2020": {
+      "cite": "Kashibadze, Karachentsev & Karachentseva 2020, A&A 635, A135",
+      "arxiv": "2002.12820",
+      "doi": "10.1051/0004-6361/201936172"
+    },
+    "drinkwater2001": {
+      "cite": "Drinkwater, Gregg & Colless 2001, ApJ 548, L139",
+      "arxiv": "astro-ph/0012415",
+      "doi": "10.1086/319113"
+    },
+    "colless1996": {
+      "cite": "Colless & Dunn 1996, ApJ 458, 435",
+      "arxiv": "astro-ph/9508070",
+      "doi": "10.1086/176827"
+    },
+    "lokas2003": {
+      "cite": "Łokas & Mamon 2003, MNRAS 343, 401",
+      "arxiv": "astro-ph/0302461",
+      "doi": "10.1046/j.1365-8711.2003.06684.x"
+    },
+    "meusinger2020": {
+      "cite": "Meusinger et al. 2020, A&A 640, A30",
+      "arxiv": "2006.07631",
+      "doi": "10.1051/0004-6361/202037574"
+    },
+    "cf4": {
+      "cite": "Tully et al. 2023, ApJ 944, 94 (Cosmicflows-4), groups table",
+      "arxiv": "2209.11238",
+      "doi": "10.3847/1538-4357/ac94d8"
+    },
+    "reiprich2002": {
+      "cite": "Reiprich & Böhringer 2002, ApJ 567, 716 (HIFLUGCS)",
+      "arxiv": "astro-ph/0111285",
+      "doi": "10.1086/338753"
+    },
+    "fadda1996": {
+      "cite": "Fadda, Girardi, Giuricin, Mardirossian & Mezzetti 1996, ApJ 473, 670",
+      "arxiv": "astro-ph/9606098",
+      "doi": "10.1086/178180"
+    }
   },
   "clusters": [
-    {"name": "Virgo cluster", "centre": "ongc:NGC4486", "cf4_group": 41220,
-     "sigma": {"v": 638, "lo": 603, "hi": 673, "unit": "km/s", "src": "kashibadze2020", "where": "Table of cluster parameters (Sect. 5): 'σp 638 ± 35 km/s' (Local Group frame, 398 galaxies)"},
-     "radius_deg": {"v": 6.0, "unit": "deg", "src": "kashibadze2020", "where": "Sect. 1: '6° = 1.7 Mpc is the cluster virial radius' (at 16.5 Mpc)"},
-     "radius_mpc": {"v": 1.7, "unit": "Mpc", "src": "kashibadze2020", "where": "Sect. 1: '6° = 1.7 Mpc is the cluster virial radius'"}},
-    {"name": "Fornax cluster", "centre": "ongc:NGC1399", "cf4_group": 13418,
-     "sigma": {"v": 374, "lo": 348, "hi": 400, "unit": "km/s", "src": "drinkwater2001", "where": "Sect. 3: 'The total sample has a mean velocity of 1493±36 km s−1 and a velocity dispersion of 374± 26 km s−1'"},
-     "radius_deg": {"v": 2.005, "unit": "deg", "src": "drinkwater2001", "where": "Sect. 3: 'a virial radius of 0.7 Mpc', at the paper's 'we adopt a cluster distance of 20 Mpc': 0.7/20 rad = 2.005 deg (Space Maps arithmetic)"},
-     "radius_mpc": {"v": 0.7, "unit": "Mpc", "src": "drinkwater2001", "where": "Sect. 3: 'a virial radius of 0.7 Mpc'"}},
-    {"name": "Coma cluster", "centre": "ongc:NGC4874", "cf4_group": 44715,
-     "sigma": {"v": 1038, "lo": 978, "hi": 1098, "unit": "km/s", "src": "colless1996", "where": "Sect. 3.1: cz = 6917 ± 47 km/s and σ = 1038 ± 60 km/s for 465 members after 3σ clipping"},
-     "radius_deg": {"v": 1.6167, "unit": "deg", "src": "lokas2003", "where": "Sect. 5: 'the virial radius for the total mass is ... 97′ or 2.9 Mpc' (97′ = 1.6167 deg)"},
-     "radius_mpc": {"v": 2.9, "unit": "Mpc", "src": "lokas2003", "where": "Sect. 5: '97′ or 2.9 Mpc'"}},
-    {"name": "Perseus cluster", "centre": "ongc:NGC1275", "cf4_group": 12429,
-     "sigma": {"v": 1163, "lo": 1114, "hi": 1212, "unit": "km/s", "src": "meusinger2020", "where": "Table 2, 'SCGS all' (286 members): σv = 1163 ± 49 km/s"},
-     "radius_deg": {"v": 2.168, "unit": "deg", "src": "meusinger2020", "where": "Table 2: 'Rvir,200 2.8 ± 0.1 Mpc' at the paper's 'corresponds to a cluster distance of 74 Mpc': 2.8/74 rad = 2.168 deg (Space Maps arithmetic)"},
-     "radius_mpc": {"v": 2.8, "unit": "Mpc", "src": "meusinger2020", "where": "Table 2: 'Rvir,200 2.8 ± 0.1 Mpc'"}}
+    {
+      "name": "Virgo cluster",
+      "centre": "ongc:NGC4486",
+      "cf4_group": 41220,
+      "sigma": {
+        "v": 638,
+        "lo": 603,
+        "hi": 673,
+        "unit": "km/s",
+        "src": "kashibadze2020",
+        "where": "Table of cluster parameters (Sect. 5): 'σp 638 ± 35 km/s' (Local Group frame, 398 galaxies)"
+      },
+      "radius_deg": {
+        "v": 6.0,
+        "unit": "deg",
+        "src": "kashibadze2020",
+        "where": "Sect. 1: '6° = 1.7 Mpc is the cluster virial radius' (at 16.5 Mpc)"
+      },
+      "radius_mpc": {
+        "v": 1.7,
+        "unit": "Mpc",
+        "src": "kashibadze2020",
+        "where": "Sect. 1: '6° = 1.7 Mpc is the cluster virial radius'"
+      }
+    },
+    {
+      "name": "Fornax cluster",
+      "centre": "ongc:NGC1399",
+      "cf4_group": 13418,
+      "sigma": {
+        "v": 374,
+        "lo": 348,
+        "hi": 400,
+        "unit": "km/s",
+        "src": "drinkwater2001",
+        "where": "Sect. 3: 'The total sample has a mean velocity of 1493±36 km s−1 and a velocity dispersion of 374± 26 km s−1'"
+      },
+      "radius_deg": {
+        "v": 2.005,
+        "unit": "deg",
+        "src": "drinkwater2001",
+        "where": "Sect. 3: 'a virial radius of 0.7 Mpc', at the paper's 'we adopt a cluster distance of 20 Mpc': 0.7/20 rad = 2.005 deg (Space Maps arithmetic)"
+      },
+      "radius_mpc": {
+        "v": 0.7,
+        "unit": "Mpc",
+        "src": "drinkwater2001",
+        "where": "Sect. 3: 'a virial radius of 0.7 Mpc'"
+      }
+    },
+    {
+      "name": "Coma cluster",
+      "centre": "ongc:NGC4874",
+      "cf4_group": 44715,
+      "sigma": {
+        "v": 1038,
+        "lo": 978,
+        "hi": 1098,
+        "unit": "km/s",
+        "src": "colless1996",
+        "where": "Sect. 3.1: cz = 6917 ± 47 km/s and σ = 1038 ± 60 km/s for 465 members after 3σ clipping"
+      },
+      "radius_deg": {
+        "v": 1.6167,
+        "unit": "deg",
+        "src": "lokas2003",
+        "where": "Sect. 5: 'the virial radius for the total mass is ... 97′ or 2.9 Mpc' (97′ = 1.6167 deg)"
+      },
+      "radius_mpc": {
+        "v": 2.9,
+        "unit": "Mpc",
+        "src": "lokas2003",
+        "where": "Sect. 5: '97′ or 2.9 Mpc'"
+      }
+    },
+    {
+      "name": "Perseus cluster",
+      "centre": "ongc:NGC1275",
+      "cf4_group": 12429,
+      "sigma": {
+        "v": 1163,
+        "lo": 1114,
+        "hi": 1212,
+        "unit": "km/s",
+        "src": "meusinger2020",
+        "where": "Table 2, 'SCGS all' (286 members): σv = 1163 ± 49 km/s"
+      },
+      "radius_deg": {
+        "v": 2.168,
+        "unit": "deg",
+        "src": "meusinger2020",
+        "where": "Table 2: 'Rvir,200 2.8 ± 0.1 Mpc' at the paper's 'corresponds to a cluster distance of 74 Mpc': 2.8/74 rad = 2.168 deg (Space Maps arithmetic)"
+      },
+      "radius_mpc": {
+        "v": 2.8,
+        "unit": "Mpc",
+        "src": "meusinger2020",
+        "where": "Table 2: 'Rvir,200 2.8 ± 0.1 Mpc'"
+      }
+    },
+    {
+      "name": "Centaurus cluster",
+      "centre": "ongc:NGC4696",
+      "cf4_group": 43296,
+      "sigma": {
+        "v": 447,
+        "lo": 411,
+        "hi": 503,
+        "unit": "km/s",
+        "src": "fadda1996",
+        "where": "Table 5 (multipeaked clusters, disjoined peaks): A3526a, 185 galaxies, 121 members, z = 0.0108, sigma = 447 +56/-36 km/s (the Cen 30 peak; Cosmicflows-4 keeps Cen 45 as its own group 43423)"
+      },
+      "radius_deg": {
+        "v": 1.766,
+        "unit": "deg",
+        "src": "reiprich2002",
+        "where": "Table 4 col. (8): A3526 r200 = 1.87 +0.04/-0.03 h50^-1 Mpc (H0 = 50 h50, Omega_m = 1, Sect. 1), over the angular-diameter distance of its Table 3 redshift z = 0.0103 in that cosmology, D_A = (2c/H0)(1 - 1/sqrt(1+z))/(1+z) = 60.7 Mpc: 1.87/60.7 rad = 1.766 deg (Space Maps arithmetic; independent of H0)"
+      },
+      "radius_mpc": {
+        "v": 1.253,
+        "unit": "Mpc",
+        "src": "reiprich2002",
+        "tier": "inferred",
+        "where": "Table 4 col. (8): A3526 r200 = 1.87 h50^-1 Mpc, moved to the Cosmicflows-4 scale H0 = 74.6 (r200 scales as 1/h): 1.87 x 50/74.6 = 1.253 Mpc (Space Maps arithmetic)"
+      }
+    },
+    {
+      "name": "Abell 1367",
+      "centre": "ongc:NGC3842",
+      "cf4_group": 36487,
+      "sigma": {
+        "v": 798,
+        "lo": 730,
+        "hi": 873,
+        "unit": "km/s",
+        "src": "fadda1996",
+        "where": "Table 4 (multipeaked clusters, whole cluster): A1367, 84 members, z = 0.0216, sigma = 798 +75/-68 km/s"
+      },
+      "radius_deg": {
+        "v": 0.983,
+        "unit": "deg",
+        "src": "reiprich2002",
+        "where": "Table 4 col. (8): A1367 r200 = 2.14 +0.08/-0.07 h50^-1 Mpc (H0 = 50 h50, Omega_m = 1, Sect. 1), over the angular-diameter distance of its Table 3 redshift z = 0.0216 in that cosmology, D_A = (2c/H0)(1 - 1/sqrt(1+z))/(1+z) = 124.8 Mpc: 2.14/124.8 rad = 0.983 deg (Space Maps arithmetic; independent of H0)"
+      },
+      "radius_mpc": {
+        "v": 1.434,
+        "unit": "Mpc",
+        "src": "reiprich2002",
+        "tier": "inferred",
+        "where": "Table 4 col. (8): A1367 r200 = 2.14 h50^-1 Mpc, moved to the Cosmicflows-4 scale H0 = 74.6 (r200 scales as 1/h): 2.14 x 50/74.6 = 1.434 Mpc (Space Maps arithmetic)"
+      }
+    },
+    {
+      "name": "Hercules cluster",
+      "centre": "ongc:NGC6041",
+      "cf4_group": 56962,
+      "sigma": {
+        "v": 751,
+        "lo": 682,
+        "hi": 842,
+        "unit": "km/s",
+        "src": "fadda1996",
+        "where": "Table 2: A2151 Hercules, 101 galaxies, 57 members, z = 0.0366, sigma = 751 +91/-69 km/s"
+      },
+      "radius_deg": {
+        "v": 0.444,
+        "unit": "deg",
+        "src": "reiprich2002",
+        "where": "Table 4 col. (8): A2151w (centred at 241.1465, 17.7252, on NGC 6041) r200 = 1.61 +0.03/-0.04 h50^-1 Mpc (H0 = 50 h50, Omega_m = 1, Sect. 1), over the angular-diameter distance of its Table 3 redshift z = 0.0369 in that cosmology, D_A = (2c/H0)(1 - 1/sqrt(1+z))/(1+z) = 207.6 Mpc: 1.61/207.6 rad = 0.444 deg (Space Maps arithmetic; independent of H0)"
+      },
+      "radius_mpc": {
+        "v": 1.079,
+        "unit": "Mpc",
+        "src": "reiprich2002",
+        "tier": "inferred",
+        "where": "Table 4 col. (8): A2151w (centred at 241.1465, 17.7252, on NGC 6041) r200 = 1.61 h50^-1 Mpc, moved to the Cosmicflows-4 scale H0 = 74.6 (r200 scales as 1/h): 1.61 x 50/74.6 = 1.079 Mpc (Space Maps arithmetic)"
+      }
+    },
+    {
+      "name": "Hydra cluster",
+      "centre": "ongc:NGC3311",
+      "cf4_group": 31478,
+      "sigma": {
+        "v": 610,
+        "lo": 567,
+        "hi": 662,
+        "unit": "km/s",
+        "src": "fadda1996",
+        "where": "Table 2: A1060 Hydra, 144 galaxies, 82 members, z = 0.0126, sigma = 610 +52/-43 km/s"
+      },
+      "radius_deg": {
+        "v": 1.667,
+        "unit": "deg",
+        "src": "reiprich2002",
+        "where": "Table 4 col. (8): A1060 r200 = 1.95 +0.08/-0.08 h50^-1 Mpc (H0 = 50 h50, Omega_m = 1, Sect. 1), over the angular-diameter distance of its Table 3 redshift z = 0.0114 in that cosmology, D_A = (2c/H0)(1 - 1/sqrt(1+z))/(1+z) = 67.0 Mpc: 1.95/67.0 rad = 1.667 deg (Space Maps arithmetic; independent of H0)"
+      },
+      "radius_mpc": {
+        "v": 1.307,
+        "unit": "Mpc",
+        "src": "reiprich2002",
+        "tier": "inferred",
+        "where": "Table 4 col. (8): A1060 r200 = 1.95 h50^-1 Mpc, moved to the Cosmicflows-4 scale H0 = 74.6 (r200 scales as 1/h): 1.95 x 50/74.6 = 1.307 Mpc (Space Maps arithmetic)"
+      }
+    }
   ]
 }

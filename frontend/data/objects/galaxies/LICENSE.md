@@ -32,7 +32,8 @@ Nothing here is relicensed: each value keeps the terms of its source, named in i
 - **UNGC and McConnachie values**, served by VizieR (CDS), keep VizieR's terms of use (https://cds.unistra.fr/vizier-org/licences_vizier.html) with the
   citations below.
 - **Hubble-flow distances and the cluster rule** are computed by Space Maps from OpenNGC (or UNGC) velocities and
-  the Planck 2018 dipole; the cluster distances use the CF4 groups table.
+  the Planck 2018 dipole; the cluster distances use the CF4 groups table, and the group radii (props.group_radius) are cited cluster radii or the
+  rms projected distance of a CF4 group's members.
 - **The Milky Way record** copies Sgr A*'s position and distance from the black-hole source file (GRAVITY
   Collaboration 2022; Reid & Brunthaler) and holds Bland-Hawthorn & Gerhard 2016 and Hipparcos values, each cited in
   its `src`.

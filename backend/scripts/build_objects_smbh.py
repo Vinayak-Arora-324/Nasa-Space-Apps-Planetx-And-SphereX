@@ -47,7 +47,7 @@ OUT = ROOT / "frontend" / "data" / "objects" / DATASET
 SOURCES = ROOT / "backend" / "data" / "sources" / DATASET
 GALAXIES = ROOT / "frontend" / "data" / "objects" / "galaxies"
 SCRIPT = "backend/scripts/build_objects_smbh.py"
-SCRIPT_VERSION = 1
+SCRIPT_VERSION = 2
 
 CURATED = "smbh.json"
 CURATED_FORMAT = "space-maps.smbh-curated/1"

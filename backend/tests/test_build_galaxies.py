@@ -9,6 +9,7 @@ import gzip
 import importlib.util
 import json
 import math
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -379,9 +380,14 @@ def test_direction_only_records_and_the_threshold(committed):
 
 # --- clusters ---------------------------------------------------------------------------------
 
+CLUSTER_TIERS = {"Virgo cluster": "catalogue", "Fornax cluster": "catalogue", "Coma cluster": "catalogue",
+                 "Perseus cluster": "catalogue", "Centaurus cluster": "inferred", "Abell 1367": "inferred",
+                 "Hercules cluster": "inferred", "Hydra cluster": "inferred"}
+
+
 def test_cluster_members_take_the_cf4_group_distance(committed, inputs):
     rep = committed["report"]["clusters"]
-    assert set(rep) == {"Virgo cluster", "Fornax cluster", "Coma cluster", "Perseus cluster"}
+    assert set(rep) == set(CLUSTER_TIERS)
     assert all(v["members"] == len(v["ids"]) > 0 for v in rep.values())
     groups = {int(r["1PGC"]): r for r in inputs["cf4-groups"]}
     cl = json.loads((b.SOURCES / b.CLUSTERS_FILE).read_text())["clusters"]
@@ -411,9 +417,11 @@ def test_a_galaxy_with_its_own_distance_is_never_a_member(committed):
     for rid, r in committed["recs"].items():
         if r["position"].get("dist") and r["position"]["method"] != "group-member":
             assert rid not in members
-    # UNGC's own group membership (`mem`) is also `group-member`, with its own src
+    # UNGC's own group membership (`mem`) is also `group-member`, with its own src; so are Phase 4's CF4 group distances
     others = [r for r in committed["recs"].values() if r["position"].get("method") == "group-member" and r["id"] not in members]
-    assert others and all("UNGC" in r["position"]["dist"]["src"] for r in others)
+    ungc = [r for r in others if "UNGC" in r["position"]["dist"]["src"]]
+    cf4 = [r for r in others if r["position"]["dist"]["src"].startswith("Placed at the distance of")]
+    assert ungc and cf4 and len(ungc) + len(cf4) == len(others)
 
 
 # --- curated Magellanic Clouds ----------------------------------------------------------------
@@ -606,8 +614,9 @@ def test_source_json_lists_every_input_with_its_pin():
             assert f["mirror"] in b.VIZIER_MIRRORS and not any(l.startswith(b"#") for l in data.splitlines())
     assert files["openngc"]["sha256"] == b.neb.INPUTS["openngc"]["sha256"]
     assert files["openngc-addendum"]["sha256"] == b.neb.INPUTS["openngc-addendum"]["sha256"]
-    assert files["cf4-table2"]["columns"][0] == "PGC" and len(files["cf4-table2"]["columns"]) == 22
-    assert files["cf4-groups"]["columns"] == ["1PGC", "Ngal", "DMzp", "e_DMzp", "Vh", "V3k"]
+    assert files["cf4-table2"]["columns"][0] == "PGC" and files["cf4-table2"]["columns"][-1] == "1PGC"
+    assert len(files["cf4-table2"]["columns"]) == 23
+    assert files["cf4-groups"]["columns"] == ["1PGC", "Ngal", "DMzp", "e_DMzp", "Vh", "V3k", "RAJ2000", "DEJ2000"]
 
 
 def test_vizier_urls_and_mirror_order():
@@ -640,7 +649,7 @@ def test_size_budget_and_the_reported_bytes(committed):
     tiles = {p.name: p.stat().st_size for p in (COMMITTED / "tiles").glob("*.json")}
     assert rep["tile_bytes"] == tiles and rep["tiles_bytes_total"] == sum(tiles.values())
     total = sum(tiles.values()) + (COMMITTED / "manifest.json").stat().st_size
-    assert total <= b.BUDGET_BYTES
+    assert b.BUDGET_BYTES == 8_000_000 and total <= b.BUDGET_BYTES          # Phase 4: 13 MB -> 8 MB
     assert rep["snapshot_bytes_total"] == sum(p.stat().st_size for p in b.SOURCES.glob("*.gz"))
     assert max(tiles.values()) < 600_000
 
@@ -686,3 +695,297 @@ def test_cone_at_m31_finds_m31_m32_and_ngc205_and_the_context_set():
     ids = {r["id"]: r for r in st.cone_query(ds, 10.68, 41.27, 1.0)}
     assert {"ongc:NGC0224", "ongc:NGC0221", "ongc:NGC0205", "gal:milky_way"} <= set(ids)
     assert objects.validate_record(ids["ongc:NGC0224"]) == [] and isinstance(ids["gal:milky_way"], objects.SkyRecord)
+
+
+# --- Phase 4: CF4 group distances (docs 19.5), cited cluster radii (19.6), props.group_radius (19.3.4) -----------
+
+SMALL_SRC = re.compile(r"^Placed at the distance of its group \(Cosmicflows-4 group 1PGC (\d+), (\d+) galaxies: DMzp ([\d.]+) ± "
+                       r"([\d.]+), converted by Space Maps\), whose average is more precise than its own "
+                       r"(Tully–Fisher|fundamental-plane) distance; the interval adds the group radius ([\d.]+) Mpc "
+                       r"\(rms projected distance of its Cosmicflows-4 members\) along the line of sight in quadrature$")
+RICH_SRC = re.compile(r"^Placed at the distance of the (.+) cluster \(Cosmicflows-4 group (\d+): DMzp ([\d.]+) ± ([\d.]+), "
+                      r"converted by Space Maps\), whose average is more precise than its own (Tully–Fisher|fundamental-plane) "
+                      r"distance; the interval adds the cluster radius ([\d.]+) Mpc along the line of sight in quadrature$")
+RADIUS_SRC = re.compile(r"^rms projected distance of the (\d+) Cosmicflows-4 members from their mean position, at the group "
+                        r"distance \(Space Maps\)$")
+
+
+def grow(gid, ngal, dmzp, e, v3k=5000.0, ra=10.0, dec=20.0):
+    return {"1PGC": str(gid), "Ngal": str(ngal), "DMzp": str(dmzp), "e_DMzp": str(e), "Vh": "5000", "V3k": str(v3k),
+            "RAJ2000": str(ra), "DEJ2000": str(dec)}
+
+
+def trow(pgc, gid, ra, dec, vcmb=5000, **dm):
+    r = {c: "" for c in b.INPUTS["cf4-table2"]["columns"]}
+    r.update(PGC=str(pgc), Vcmb=str(vcmb), RAJ2000=str(ra), DEJ2000=str(dec), **{"1PGC": str(gid)})
+    r.update({k: str(v) for k, v in dm.items()})
+    return r
+
+
+def test_the_1pgc_column_joins_table2_to_the_groups(inputs):
+    t2, groups = inputs["cf4-table2"], inputs["cf4-groups"]
+    assert (len(t2), len(groups)) == (55877, 38053)
+    assert "1PGC" in t2[0] and "RAJ2000" in groups[0] and "DEJ2000" in groups[0]
+    from collections import Counter
+    members = Counter(r["1PGC"] for r in t2)
+    gmap = {r["1PGC"]: r for r in groups}
+    assert all(int(gmap[k]["Ngal"]) == n for k, n in members.items() if k in gmap)       # Ngal is the member count of table2
+    assert sum(1 for k in members if k not in gmap) == 12              # 12 table2 rows name a 1PGC the groups table lacks
+    assert members["41220"] == int(gmap["41220"]["Ngal"]) and int(gmap["41220"]["Ngal"]) > 100
+
+
+def test_group_radius_is_the_rms_about_the_members_mean_position():
+    d_pc = 30e6
+    sep_deg = 0.2
+    c = math.cos(math.radians(20.0))
+    pair = [(10.0 - sep_deg / 2 / c, 20.0), (10.0 + sep_deg / 2 / c, 20.0)]
+    mean = b.members_mean(pair)
+    assert mean == pytest.approx((10.0, 20.0), abs=1e-3)
+    # a pair: half the separation, by construction
+    half = math.radians(sep_deg) / 2 * 30.0
+    assert b.rms_radius_mpc(pair, mean, d_pc) == pytest.approx(half, rel=1e-3)
+    assert b.rms_radius_mpc(pair, mean, 2 * d_pc) == pytest.approx(2 * half, rel=1e-3)
+    assert b.rms_radius_mpc([(10.0, 20.0)], b.members_mean([(10.0, 20.0)]), d_pc) == pytest.approx(0.0, abs=1e-6)
+    # across RA 0/360 the mean is on the seam
+    wrap = [(359.9, 0.0), (0.1, 0.0)]
+    m = b.members_mean(wrap)
+    assert min(m[0], 360 - m[0]) < 1e-6 and abs(m[1]) < 1e-9
+    assert b.rms_radius_mpc(wrap, m, d_pc) == pytest.approx(math.radians(0.1) * 30.0, rel=1e-4)
+    # the groups table's own position plays no part: a wrong one changes nothing
+    grp = grow(7, 2, 34.0, 0.05, ra=349.78, dec=18.13)
+    rows = [trow(1, 7, *pair[0]), trow(2, 7, *pair[1])]
+    gc = b.group_candidate(grp, rows, "tully-fisher")
+    d0 = b.group_distance(grp)[0]
+    assert gc["radius_mpc"] == pytest.approx(math.radians(sep_deg) / 2 * d0 * 1e-6, rel=1e-3)
+
+
+def test_the_candidate_is_only_for_tf_and_fp_only_galaxies():
+    row = lambda **dm: b.cf4_candidates(trow(1, 1, 10.0, 20.0, **dm))     # noqa: E731
+    assert b.group_eligible(row(DMtf=34.0, e_DMtf=0.4)) == "tully-fisher"
+    assert b.group_eligible(row(DMtf=34.0, e_DMtf=0.4, DMfp=34.1, e_DMfp=0.2)) == "fundamental-plane"
+    for extra in ({"DMsnIa": 34.0, "e_DMsnIa": 0.1}, {"DMsnII": 34.0, "e_DMsnII": 0.2}, {"DMtrgb": 34.0, "e_DMtrgb": 0.1},
+                  {"DMsbf": 34.0, "e_DMsbf": 0.1}, {"DMceph": 34.0, "e_DMceph": 0.1}, {"DMmas": 34.0, "e_DMmas": 0.1}):
+        assert b.group_eligible(row(DMtf=34.0, e_DMtf=0.4, **extra)) is None, extra
+    ungc = b.ungc_candidate(b.read_ungc([urow("X", dist="20.0", f="TF")])[0])
+    mcc = b.mcc_candidate({"Name": "X", "(m-M)": "24.0", "E_(m-M)": "0.1", "e_(m-M)": "0.1"})
+    assert b.group_eligible(row(DMtf=34.0, e_DMtf=0.4) + [ungc]) is None
+    assert b.group_eligible(row(DMtf=34.0, e_DMtf=0.4) + [mcc]) is None
+    assert b.group_eligible([]) is None
+
+
+def _synthetic_group(e_dmzp, own_e, ngal=3, spread_deg=0.05, gid=7):
+    grp = grow(gid, ngal, 34.0, e_dmzp)
+    members = [trow(100 + i, gid, 10.0 + (i - 1) * spread_deg, 20.0, DMtf=34.5, e_DMtf=own_e) for i in range(ngal)]
+    cands = b.cf4_candidates(members[0])
+    return grp, members, cands, b.group_candidate(grp, members, b.group_eligible(cands))
+
+
+def frac_small(e):
+    return b.frac_of_sigma_mu(e)
+
+
+def test_the_group_wins_on_fractional_uncertainty_and_the_own_distance_is_listed_as_not_used():
+    grp, members, cands, gc = _synthetic_group(e_dmzp=0.05, own_e=0.4)
+    assert gc["frac"] < cands[0]["frac"]
+    best, alts = b.choose_with_group(cands, gc)
+    assert best is gc and best["q"]["tier"] == "inferred" and best["method"] == "group-member"
+    assert [a["method"] for a in alts] == ["tully-fisher"] and alts[0]["reason"] == "not used: larger uncertainty than its group's distance"
+    m = SMALL_SRC.match(best["q"]["src"])
+    assert m and m.group(1) == "7" and m.group(2) == "3" and m.group(5) == "Tully–Fisher"
+    # D from DMzp with the 1/(1+z) step of V3k, interval widened by the radius in quadrature
+    d = 10 ** ((34.0 + 5) / 5) / (1 + 5000.0 / b.C_KMS) * 1e-6
+    assert best["q"]["v"] == pytest.approx(d, rel=1e-4)
+    err = math.hypot(d * (10 ** (0.05 / 5) - 1), gc["radius_mpc"])
+    assert best["q"]["hi"] - best["q"]["v"] == pytest.approx(err, rel=2e-3)
+    assert gc["radius"]["tier"] == "inferred" and gc["radius"]["unit"] == "Mpc" and RADIUS_SRC.match(gc["radius"]["src"]).group(1) == "3"
+    # the other way: a large group modulus error, or a wide group, and the galaxy keeps its own distance
+    grp, members, cands, gc = _synthetic_group(e_dmzp=0.6, own_e=0.05)
+    best, alts = b.choose_with_group(cands, gc)
+    assert best is cands[0] and alts == [] and gc["frac"] > cands[0]["frac"]
+    grp, members, cands, gc = _synthetic_group(e_dmzp=0.05, own_e=0.1, spread_deg=8.0)        # a wide group: the radius dominates
+    assert gc["radius_mpc"] * 1e6 / gc["pc"] > cands[0]["frac"] > frac_small(0.05)
+    assert b.choose_with_group(cands, gc)[0] is cands[0]
+    # fundamental-plane wording, and no candidate means no change
+    fp = b.cf4_candidates(trow(1, 7, 10.0, 20.0, DMfp=34.5, e_DMfp=0.4))
+    g2 = b.group_candidate(grow(7, 2, 34.0, 0.05), [trow(1, 7, 10, 20), trow(2, 7, 10.1, 20)], "fundamental-plane")
+    assert SMALL_SRC.match(g2["q"]["src"]).group(5) == "fundamental-plane"
+    assert b.choose_with_group(fp, None) == b.choose(fp)
+
+
+def test_a_rich_cluster_group_uses_the_cited_radius_and_its_wording():
+    cl = json.loads((b.SOURCES / b.CLUSTERS_FILE).read_text(encoding="utf-8"))
+    virgo = next(c for c in cl["clusters"] if c["name"] == "Virgo cluster")
+    grp = grow(41220, 1000, 31.048, 0.008, v3k=1300.0)
+    members = [trow(1, 41220, 187.7, 12.4)]
+    gc = b.group_candidate(grp, members, "tully-fisher", virgo, cl["papers"])
+    assert gc["radius"] == {"v": 1.7, "unit": "Mpc", "tier": "catalogue", "src": gc["radius"]["src"]}
+    assert "Kashibadze" in gc["radius"]["src"] and "Sect. 1" in gc["radius"]["src"]
+    assert gc["q"]["src"] == ("Placed at the distance of the Virgo cluster (Cosmicflows-4 group 41220: DMzp 31.048 ± 0.008, "
+                              "converted by Space Maps), whose average is more precise than its own Tully–Fisher distance; "
+                              "the interval adds the cluster radius 1.7 Mpc along the line of sight in quadrature")
+    hydra = next(c for c in cl["clusters"] if c["name"] == "Hydra cluster")
+    gh = b.group_candidate(grow(31478, 67, 33.673, 0.046, v3k=3900.0), members, "fundamental-plane", hydra, cl["papers"])
+    assert gh["radius"]["tier"] == "inferred" and gh["radius"]["v"] == 1.307 and "h50" in gh["radius"]["src"]
+    assert RICH_SRC.match(gh["q"]["src"]).group(1) == "Hydra" and "fundamental-plane distance" in gh["q"]["src"]
+
+
+def test_cluster_membership_rule_on_synthetic_rows_for_the_four_new_clusters():
+    cl = json.loads((b.SOURCES / b.CLUSTERS_FILE).read_text(encoding="utf-8"))
+    new = [c for c in cl["clusters"] if c["name"] in ("Centaurus cluster", "Abell 1367", "Hercules cluster", "Hydra cluster")]
+    assert [c["cf4_group"] for c in new] == [43296, 36487, 56962, 31478]
+    assert [c["sigma"]["v"] for c in new] == [447, 798, 751, 610]
+    assert [c["radius_deg"]["v"] for c in new] == [1.766, 0.983, 0.444, 1.667]
+    assert [c["radius_mpc"]["v"] for c in new] == [1.253, 1.434, 1.079, 1.307] and all(c["radius_mpc"]["tier"] == "inferred" for c in new)
+    groups = {int(r["1PGC"]): r for r in b.parse_role("cf4-groups", gzip.decompress((b.SOURCES / "cf4-groups.tsv.gz").read_bytes()))}
+    for c in new:
+        ci = {"c": c, "centre": {"ra": 100.0, "dec": 0.0}, "vh": float(groups[c["cf4_group"]]["Vh"])}
+        r, s3 = c["radius_deg"]["v"], 3 * c["sigma"]["v"]
+        assert b.cluster_member(ci, 100.0 + 0.99 * r, 0.0, ci["vh"] + 0.99 * s3)
+        assert not b.cluster_member(ci, 100.0 + 1.01 * r, 0.0, ci["vh"])             # outside the radius
+        assert not b.cluster_member(ci, 100.0, 0.0, ci["vh"] + 1.01 * s3)            # outside 3 sigma
+        assert not b.cluster_member(ci, 100.0, 0.0, ci["vh"] - 1.01 * s3)
+
+
+def test_the_four_new_clusters_on_the_snapshot(committed):
+    rep, recs = committed["report"]["clusters"], committed["recs"]
+    assert {k: rep[k]["members"] for k in ("Centaurus cluster", "Abell 1367", "Hercules cluster", "Hydra cluster")} == \
+        {"Centaurus cluster": 10, "Abell 1367": 10, "Hercules cluster": 6, "Hydra cluster": 5}
+    assert {k: rep[k]["members"] for k in ("Virgo cluster", "Fornax cluster", "Coma cluster", "Perseus cluster")} == \
+        {"Virgo cluster": 119, "Fornax cluster": 3, "Coma cluster": 35, "Perseus cluster": 21}
+    cl = {c["name"]: c for c in json.loads((b.SOURCES / b.CLUSTERS_FILE).read_text(encoding="utf-8"))["clusters"]}
+    groups = {int(r["1PGC"]): r for r in b.parse_role("cf4-groups", gzip.decompress((b.SOURCES / "cf4-groups.tsv.gz").read_bytes()))}
+    placed = set()
+    for name, info in rep.items():
+        c = cl[name]
+        ra0, dec0 = recs[c["centre"]]["position"]["ra"], recs[c["centre"]]["position"]["dec"]
+        vh = float(groups[c["cf4_group"]]["Vh"])
+        assert info["group_radius_mpc"] == c["radius_mpc"]["v"] and info["group_radius_tier"] == CLUSTER_TIERS[name]
+        for rid in info["ids"]:
+            r = recs[rid]
+            gr = r["props"]["group_radius"]
+            assert (gr["v"], gr["unit"], gr["tier"]) == (c["radius_mpc"]["v"], "Mpc", CLUSTER_TIERS[name])
+            assert gr["src"].startswith(f"{name} ") and "Space Maps" in gr["src"] if gr["tier"] == "inferred" else "as printed" in gr["src"]
+            sep = b.angsep_arcmin(ra0, dec0, __import__("numpy").array([r["position"]["ra"]]), __import__("numpy").array([r["position"]["dec"]]))[0] / 60
+            assert sep <= c["radius_deg"]["v"] and abs(r["props"]["v_helio"]["v"] - vh) <= 3 * c["sigma"]["v"]
+            assert r["position"]["dist"]["src"].startswith(f"Placed at the distance of the {name.replace(' cluster', '')} cluster")
+            placed.add(rid)
+    # nobody who satisfies the rule was left on the Hubble flow
+    import numpy as np
+    for r in committed["recs"].values():
+        if r["position"].get("method") != "redshift":
+            continue
+        for name, c in cl.items():
+            ra0, dec0 = recs[c["centre"]]["position"]["ra"], recs[c["centre"]]["position"]["dec"]
+            sep = b.angsep_arcmin(ra0, dec0, np.array([r["position"]["ra"]]), np.array([r["position"]["dec"]]))[0] / 60
+            assert not (sep <= c["radius_deg"]["v"] and abs(r["props"]["v_helio"]["v"] - float(groups[c["cf4_group"]]["Vh"])) <= 3 * c["sigma"]["v"]), (r["id"], name)
+
+
+def test_group_distances_on_the_snapshot(committed, inputs):
+    recs, rep = committed["recs"], committed["report"]
+    g = rep["group_distances"]
+    moved = [r for r in recs.values() if SMALL_SRC.match((r["position"].get("dist") or {}).get("src", "")) or RICH_SRC.match((r["position"].get("dist") or {}).get("src", ""))]
+    assert g["moved"] == len(moved) == sum(g["moved_by_size"].values())
+    assert g["tf_fp_only_galaxies"] == g["moved"] + g["kept_own_distance"]
+    assert g["kept_own_distance"] == g["kept_own_alone_or_no_group"] + g["kept_own_group_lost"]
+    assert all(g["eligible_by_size"][k] == g["moved_by_size"][k] + g["kept_own_by_size"][k] for k in g["eligible_by_size"])
+    assert g["moved_by_size"] == {"pairs (2)": 405, "3-4": 366, "5-9": 301, "10+": 384, "rich clusters": 196}
+    assert (g["moved"], g["kept_own_distance"], g["kept_own_alone_or_no_group"], g["kept_own_group_lost"]) == (1652, 1469, 1469, 0)
+    assert g["over_20_percent"] == 416 and g["over_50_percent"] == 37 == len(g["moves_over_50_percent"])
+    assert g["median_abs_change"] == pytest.approx(0.1174, abs=1e-4) and abs(g["median_rel_change"]) < 0.01
+    up = g["upstream_group_positions"]
+    assert up["more_than_1_deg_from_members_mean"] >= up["more_than_10_deg"] > 100 and len(up["examples"]) == 5
+    assert up["more_than_1_deg_from_members_mean"] == 195 and up["more_than_10_deg"] == 156
+    t2 = {r["PGC"]: r for r in inputs["cf4-table2"]}
+    groups = {r["1PGC"]: r for r in inputs["cf4-groups"]}
+    rich = {c["cf4_group"] for c in json.loads((b.SOURCES / b.CLUSTERS_FILE).read_text(encoding="utf-8"))["clusters"]}
+    for r in moved:
+        p = r["position"]
+        assert p["method"] == "group-member" and p["dist"]["tier"] == "inferred" and r["evidence"] == "derived"
+        alts = r["alt_distances"]
+        assert alts and {a["method"] for a in alts} <= {"tully-fisher", "fundamental-plane"}
+        assert all(a["reason"] == "not used: larger uncertainty than its group's distance" for a in alts)
+        assert alts[0]["dist"]["src"].startswith("Cosmicflows-4") and "group" not in alts[0]["dist"]["src"].split(":")[0]
+        gr = r["props"]["group_radius"]
+        assert gr["unit"] == "Mpc"
+        m = SMALL_SRC.match(p["dist"]["src"])
+        if m:
+            gid = m.group(1)
+            assert int(gid) not in rich and gr["tier"] == "inferred" and RADIUS_SRC.match(gr["src"]).group(1) == m.group(2)
+            assert gr["v"] == pytest.approx(float(m.group(6)), rel=0.06, abs=0.006)
+            assert groups[gid]["Ngal"] == m.group(2) and groups[gid]["DMzp"] == m.group(3) and groups[gid]["e_DMzp"] == m.group(4)
+        else:
+            m = RICH_SRC.match(p["dist"]["src"])
+            assert int(m.group(2)) in rich and gr["tier"] == CLUSTER_TIERS[next(k for k in CLUSTER_TIERS if k.startswith(m.group(1)))]
+            assert gr["v"] == float(m.group(6))
+    # the group's own CF4 candidate is the TF/FP one: recompute a sample of radii from the inputs
+    import numpy as np
+    from collections import defaultdict
+    by = defaultdict(list)
+    for r in inputs["cf4-table2"]:
+        by[r["1PGC"]].append(r)
+    checked = 0
+    for r in moved:
+        m = SMALL_SRC.match(r["position"]["dist"]["src"])
+        if not m or checked >= 40:
+            continue
+        grp = groups[m.group(1)]
+        pts = np.array([(float(x["RAJ2000"]), float(x["DEJ2000"])) for x in by[m.group(1)]])
+        pos = (float(grp["RAJ2000"]), float(grp["DEJ2000"]))
+        pos = b.members_mean([tuple(x) for x in pts])
+        theta = np.radians(b.angsep_arcmin(pos[0], pos[1], pts[:, 0], pts[:, 1]) / 60)
+        want = math.sqrt(float((theta ** 2).mean())) * r["position"]["dist"]["v"] * (1 + 0.0)   # at the adopted D (Mpc)
+        assert r["props"]["group_radius"]["v"] == pytest.approx(want, rel=1e-3, abs=1e-4), r["id"]
+        checked += 1
+    assert checked == 40
+
+
+def test_measured_sn_and_other_distances_are_untouched_by_the_group_rule(committed):
+    recs = committed["recs"]
+    group_src = ("Placed at the distance of its group", "Placed at the distance of the ")
+    for r in recs.values():
+        p = r["position"]
+        if p.get("method") in b.MEASURED or p.get("method") in ("sn-ia", "sn-ii", "supernova", "brightest-stars", "pnlf"):
+            assert "group_radius" not in r["props"] and not p["dist"]["src"].startswith(group_src)
+    # UNGC's own `mem` distances are not spread either
+    for r in recs.values():
+        if r["position"].get("method") == "group-member" and "UNGC" in r["position"]["dist"]["src"]:
+            assert "group_radius" not in r["props"]
+    # every record that carries a group radius sits at a group-member distance
+    assert all(r["position"]["method"] == "group-member" for r in recs.values() if "group_radius" in r["props"])
+
+
+def test_m31_m87_ngc4258_do_not_change_and_ngc4889_follows_coma(committed):
+    recs = committed["recs"]
+    for rid, method, d in (("ongc:NGC0224", "cepheid", 0.75901), ("ongc:NGC4486", "sbf", 16.768), ("ongc:NGC4258", "maser", 7.5693)):
+        r = recs[rid]
+        assert r["position"]["method"] == method and r["position"]["dist"]["v"] == d and r["evidence"] == "measured"
+        assert "group_radius" not in r["props"]
+        assert not any("group" in a["reason"] for a in r.get("alt_distances", []))
+    r = recs["ongc:NGC4889"]
+    assert r["position"]["method"] == "group-member" and r["position"]["dist"]["v"] == 92.876
+    assert RICH_SRC.match(r["position"]["dist"]["src"]).group(1) == "Coma"
+    assert r["alt_distances"][0]["method"] == "fundamental-plane" and r["alt_distances"][0]["dist"]["v"] == 103.65
+    assert r["props"]["group_radius"]["v"] == 2.9 and r["props"]["group_radius"]["tier"] == "catalogue"
+    smbh = st.load_dataset(ROOT / "frontend" / "data" / "objects" / "smbh-curated")
+    star = {x["id"]: x for x in st._read_tile(smbh, "sky")}["bh:NGC 4889*"]
+    assert star["position"]["dist"]["v"] == 92.876 and "group_radius" not in star["props"]
+
+
+def test_a_targeted_refresh_touches_only_the_named_inputs(tmp_path):
+    src, local = tmp_path / "src", tmp_path / "local"
+    shutil.copytree(b.SOURCES, src)
+    local.mkdir()
+    for role in ("cf4-table2", "cf4-groups"):
+        (local / b.INPUTS[role]["local"]).write_bytes(gzip.decompress((b.SOURCES / b.INPUTS[role]["file"]).read_bytes()))
+    before = {p.name: p.read_bytes() for p in src.glob("*.gz")}
+    b.refresh(src, local, only=("cf4-table2", "cf4-groups"))
+    assert {p.name: p.read_bytes() for p in src.glob("*.gz")} == before                      # the same bytes, byte for byte
+    meta = json.loads((src / "SOURCE.json").read_text())
+    files = {f["role"]: f for f in meta["files"] if f.get("kind") != "committed"}
+    assert set(files) == set(b.INPUTS) and files["ungc"]["mirror"] == "vizier.cfa.harvard.edu"      # untouched entry kept
+    assert files["cf4-table2"]["mirror"] == "(local file)" and files["cf4-table2"]["sha256"] == b.INPUTS["cf4-table2"]["sha256"]
+    with pytest.raises(SystemExit, match="unknown input"):
+        b.refresh(src, local, only=("nope",))
+    (src / "ungc-catalog.tsv.gz").write_bytes(gzip.compress(b"x", mtime=0))
+    with pytest.raises(SystemExit, match="will not touch it"):
+        b.refresh(src, local, only=("cf4-table2",))

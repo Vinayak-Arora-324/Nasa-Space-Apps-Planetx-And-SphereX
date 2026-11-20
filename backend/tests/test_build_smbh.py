@@ -42,7 +42,7 @@ EXPECTED = {
     "bh:Cen A*": ("ongc:NGC5128", 3.5879 / 3.5, 3.5879, 3.5),
     "bh:M81*": ("ongc:NGC3031", 1.0, 3.63, 3.63),
     "bh:M104*": ("ongc:NGC4594", 9.0765 / 9.8, 9.0765, 9.8),
-    "bh:NGC 4889*": ("ongc:NGC4889", 103.65 / 103.2, 103.65, 103.2),
+    "bh:NGC 4889*": ("ongc:NGC4889", 92.876 / 103.2, 92.876, 103.2),   # Phase 4: the Coma group distance (was 103.65 Mpc, FP, x1.00436)
 }
 
 
@@ -153,7 +153,8 @@ def test_m31_is_not_rescaled_and_says_why(cur, recs):
 def test_ngc4889_is_derived_and_its_mass_inferred(recs, hosts):
     r = recs["bh:NGC 4889*"]
     assert hosts["ongc:NGC4889"]["evidence"] == "derived"
-    assert r["evidence"] == "derived" and r["position"]["method"] == "fundamental-plane"
+    assert r["evidence"] == "derived" and r["position"]["method"] == "group-member"     # Phase 4: Coma's CF4 group distance
+    assert "Coma cluster" in r["position"]["dist"]["src"] and "group 44715" in r["position"]["dist"]["src"]
     assert r["position"]["dist"]["tier"] == "inferred"
     assert r["props"]["mass"]["tier"] == "inferred" and "inferred" in r["props"]["mass"]["src"]
     assert r["props"]["mass_published"]["tier"] == "measured"
@@ -161,6 +162,13 @@ def test_ngc4889_is_derived_and_its_mass_inferred(recs, hosts):
     for bid, x in recs.items():     # only the derived host gives an inferred mass
         if bid != "bh:NGC 4889*":
             assert x["props"]["mass"]["tier"] == "measured" and x["evidence"] == "measured", bid
+
+
+def test_black_holes_do_not_carry_a_group_radius_but_their_host_does(recs, hosts):
+    """The frontend makes a black hole follow its galaxy's drawn centre, so only the galaxy carries `group_radius`."""
+    assert all("group_radius" not in r["props"] for r in recs.values())
+    gr = hosts["ongc:NGC4889"]["props"]["group_radius"]
+    assert (gr["v"], gr["unit"], gr["tier"]) == (2.9, "Mpc", "catalogue") and "Coma" in gr["src"]
 
 
 def test_ngc4258_shares_the_maser_distance(recs, hosts):

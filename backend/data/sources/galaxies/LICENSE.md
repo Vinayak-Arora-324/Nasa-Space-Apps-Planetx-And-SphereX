@@ -9,7 +9,7 @@ Applies to **every file in `backend/data/sources/galaxies/`**:
 
 ## Licence
 
-The OpenNGC files are unmodified copies. The VizieR tables are unmodified copies too (the CF4 table keeps only the columns the build uses), redistributed with the citations below under VizieR's terms of use (https://cds.unistra.fr/vizier-org/licences_vizier.html); CC BY-SA 4.0 does not relicense them.
+The OpenNGC files are unmodified copies. The VizieR tables are unmodified copies too (the CF4 table keeps only the columns the build uses, including `1PGC`; the groups table's RAJ2000/DEJ2000 are kept only for the report's upstream note, never used for a value), redistributed with the citations below under VizieR's terms of use (https://cds.unistra.fr/vizier-org/licences_vizier.html); CC BY-SA 4.0 does not relicense them.
 
 The OpenNGC data, and the data derived from it, are licensed under **CC BY-SA 4.0**
 (https://creativecommons.org/licenses/by-sa/4.0/).
@@ -33,7 +33,8 @@ Nothing here is relicensed: each value keeps the terms of its source, named in i
 - **UNGC and McConnachie values**, served by VizieR (CDS), keep VizieR's terms of use (https://cds.unistra.fr/vizier-org/licences_vizier.html) with the
   citations below.
 - **Hubble-flow distances and the cluster rule** are computed by Space Maps from OpenNGC (or UNGC) velocities and
-  the Planck 2018 dipole; the cluster distances use the CF4 groups table.
+  the Planck 2018 dipole; the cluster distances use the CF4 groups table, and the group radii (props.group_radius) are cited cluster radii or the
+  rms projected distance of a CF4 group's members.
 - **The Milky Way record** copies Sgr A*'s position and distance from the black-hole source file (GRAVITY
   Collaboration 2022; Reid & Brunthaler) and holds Bland-Hawthorn & Gerhard 2016 and Hipparcos values, each cited in
   its `src`.

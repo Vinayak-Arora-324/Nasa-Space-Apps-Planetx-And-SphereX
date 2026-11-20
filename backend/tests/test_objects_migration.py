@@ -24,7 +24,9 @@ DATASETS = ("bh-curated", "galaxies", "hr23-clusters", "nea-exoplanets", "nebula
 # DATASET -> the commit whose /1 tiles it must still decode to (the last /1 commit). A dataset whose data changes
 # later in Phase 4 is removed from this dict in that very commit, so the format change and the data changes stay
 # separately provable.
-BASELINE = {name: "3d12c9c" for name in DATASETS}
+BASELINE = {name: "3d12c9c" for name in DATASETS if name not in ("nebulae", "galaxies", "smbh-curated")}
+# nebulae: data changed in Phase 4 (Shen HII distances)
+# galaxies, smbh-curated: data changed in Phase 4 (CF4 group distances)
 
 
 def _records(path: Path) -> dict[str, dict]:

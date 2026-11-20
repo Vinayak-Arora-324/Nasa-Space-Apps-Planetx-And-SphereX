@@ -591,11 +591,15 @@ def _obj_by_id(j, oid):
     return next((o for o in j["objects"] if o["id"] == oid), None)
 
 
-def test_orion_cone_returns_m42_in_cone_with_its_derived_distance(phase2_dir):
+def test_orion_cone_returns_m42_in_cone_with_its_maser_parallax_distance(phase2_dir):
+    # Phase 4 (section 19.4): Shen et al. 2025's maser-parallax row wins; Russeil 2003 is listed as not used
     j = _get(ra=83.82, dec=-5.39, radius=1.0, kinds="nebula").json()
     m42 = _obj_by_id(j, "ongc:NGC1976")
-    assert m42 is not None and m42["in_cone"] is True and m42["evidence"] == "derived"
-    assert m42["position"]["dist"]["tier"] == "inferred" and "Russeil 2003" in m42["position"]["dist"]["src"]
+    assert m42 is not None and m42["in_cone"] is True and m42["evidence"] == "measured"
+    d = m42["position"]["dist"]
+    assert d["v"] == 390 and d["tier"] == "measured" and m42["position"]["method"] == "parallax"
+    assert "Shen et al. 2025" in d["src"] and "Gaia" not in d["src"]
+    assert any("Russeil 2003" in a["dist"]["src"] for a in m42["alt_distances"])
     assert "Sh2-281" in m42["designations"]
     assert all(objects.validate_record(o) == [] for o in j["objects"])
 
@@ -628,8 +632,9 @@ def test_cyg_x1_cone_returns_the_black_hole_and_its_companion(phase2_dir):
 def test_sources_carry_the_credits_the_app_shows(phase2_dir):
     j = _get(ra=83.82, dec=-5.39, radius=1.0, kinds="nebula").json()
     neb = next(s for s in j["sources"] if s["id"] == "static:nebulae")
-    assert neb["provenance"]["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Gaia EDR3-based PN distances CC BY-NC 3.0 IGO"
-    assert neb["provenance"]["credit"] == "Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC; PN distances from Gaia EDR3: Credit: ESA/Gaia/DPAC"
+    assert neb["provenance"]["licence_name"] == "CC BY-SA 4.0 (OpenNGC data); Gaia-based PN and HII-region distances CC BY-NC 3.0 IGO"
+    assert neb["provenance"]["credit"] == ("Credits: Mattia Verga https://github.com/mattiaverga/OpenNGC; PN distances (Chornay & Walton 2021, "
+                                           "Gaia EDR3) and HII-region distances (Shen et al. 2025, Gaia DR3): Credit: ESA/Gaia/DPAC")
     j = _get(ra=266.417, dec=-29.008, radius=0.5, kinds="black_hole").json()
     assert _obj_by_id(j, "bh:Sgr A*")["evidence"] == "measured"
     bh = next(s for s in j["sources"] if s["id"] == "static:bh-curated")
@@ -715,7 +720,8 @@ def test_an_empty_cone_still_gets_the_context_set_once_and_marked_out_of_cone(ph
     assert {"gal:milky_way", "ongc:ESO056-115", "ongc:NGC0292", "ongc:NGC0224", "ongc:NGC4486", "bh:Sgr A*"} <= set(ids)
     assert SMBH_IDS <= set(ids)
     sky = {o["id"] for o in j["objects"] if not o["in_cone"]}
-    assert len([i for i in sky if not i.startswith("bh:")]) == 161 and SMBH_IDS <= sky
+    # 160 since Phase 4: NGC 1058 moved from its own TF 2.34 Mpc to its CF4 group's 8.39 Mpc (section 19.5)
+    assert len([i for i in sky if not i.startswith("bh:")]) == 160 and SMBH_IDS <= sky
     # a cone over M31: M31 is in the sky tile and inside the cone, and is still sent once
     ids = _ids(_kinds3(ra=10.6847, dec=41.2690, radius=3.0))
     assert ids.count("ongc:NGC0224") == 1 and len(ids) == len(set(ids))

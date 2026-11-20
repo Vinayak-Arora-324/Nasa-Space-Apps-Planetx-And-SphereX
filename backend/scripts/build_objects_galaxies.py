@@ -50,7 +50,7 @@ SOURCES = ROOT / "backend" / "data" / "sources" / DATASET
 BH_FILE = ROOT / "backend" / "data" / "sources" / "bh-curated" / "black_holes.json"
 SMBH_FILE = ROOT / "backend" / "data" / "sources" / "smbh-curated" / "smbh.json"
 SCRIPT = "backend/scripts/build_objects_galaxies.py"
-SCRIPT_VERSION = 1
+SCRIPT_VERSION = 2
 
 OPENNGC_SHA, OPENNGC_TAG, OPENNGC_URL = neb.OPENNGC_SHA, neb.OPENNGC_TAG, neb.OPENNGC_URL
 VIZIER_MIRRORS = neb.VIZIER_MIRRORS
@@ -58,9 +58,9 @@ VERSION = f"OpenNGC {OPENNGC_TAG} ({OPENNGC_SHA[:8]})"
 SRC_ONGC = f"OpenNGC {OPENNGC_TAG}"
 CATALOGUE = ("OpenNGC + UNGC (J/AJ/145/101) + Cosmicflows-4 (J/ApJ/944/94) + McConnachie 2012 (J/AJ/144/4)")
 SRC_UNGC = "UNGC (Karachentsev et al. 2013, J/AJ/145/101)"
-# The design budget was 7 MB (about 600 B a record); the record format needs about 1 KB a record (every number is a
-# Quantity object), so the built dataset is about 12.5 MB uncompressed. See the build report and docs 18.11.
-BUDGET_BYTES = 13_000_000
+# The design budget was 7 MB; the first build needed 12.5 MB (every number a Quantity object), so the cap was 13 MB.
+# The compact tile encoding (space-maps.object-tiles/2) brought it back under: Phase 4 sets it to 8 MB. See docs 18.11, 19.7.
+BUDGET_BYTES = 8_000_000
 MAX_DESIGNATIONS = 8
 
 OVERRIDES_FILE = "ungc_ongc_overrides.json"
@@ -78,13 +78,13 @@ INPUTS = {
     "ungc": {"file": "ungc-catalog.tsv.gz", "vizier": "J/AJ/145/101", "table": "J/AJ/145/101/catalog",
              "local": "ungc-catalog.tsv", "columns": None, "sha256": "877b0d658b6e4c49bc53fdf650be668011010d6fa87dc490ec00aee7946eda9d", "rows": 869},
     "cf4-table2": {"file": "cf4-table2.tsv.gz", "vizier": "J/ApJ/944/94", "table": "J/ApJ/944/94/table2",
-                   "local": "cf4-table2.tsv", "sha256": "d82aa6186bf8517404e5f3f45d028d22ce9e5d3ae1f6496a9d5b7302c70261d7", "rows": 55877,
+                   "local": "cf4-table2.tsv", "sha256": "85e4fe3a2f5ea9045d0be32c4c6a2c0d1506b1dba191fc2ecf7cf596ff420149", "rows": 55877,
                    "columns": ("PGC", "Vcmb", "DM", "e_DM", "DMsnIa", "e_DMsnIa", "DMtf", "e_DMtf", "DMfp", "e_DMfp",
                                "DMsbf", "e_DMsbf", "DMsnII", "e_DMsnII", "DMtrgb", "e_DMtrgb", "DMceph", "e_DMceph",
-                               "DMmas", "e_DMmas", "RAJ2000", "DEJ2000")},
+                               "DMmas", "e_DMmas", "RAJ2000", "DEJ2000", "1PGC")},
     "cf4-groups": {"file": "cf4-groups.tsv.gz", "vizier": "J/ApJ/944/94", "table": "J/ApJ/944/94/groups",
-                   "local": "cf4-groups.tsv", "sha256": "37d617fbf0d743c461a86b8c51efd433a3f6a9976535bb8d49047c54017a4d36", "rows": 38053,
-                   "columns": ("1PGC", "Ngal", "DMzp", "e_DMzp", "Vh", "V3k")},
+                   "local": "cf4-groups.tsv", "sha256": "424303e6f87d770886c73c80079e03b89dc0d0a0665eae083a51ce69fc21c0bc", "rows": 38053,
+                   "columns": ("1PGC", "Ngal", "DMzp", "e_DMzp", "Vh", "V3k", "RAJ2000", "DEJ2000")},
     "mcconnachie": {"file": "mcconnachie2012.tsv.gz", "vizier": "J/AJ/144/4", "table": "J/AJ/144/4/catalog",
                     "local": "mcconnachie2012.tsv", "columns": None, "sha256": "730b90243de3389b49c1f6742db692150952bb8914267603ed71db081033a4ed", "rows": 102},
 }
@@ -141,7 +141,7 @@ UNGC_METHODS = {"TRGB": "trgb", "Cep": "cepheid", "SBF": "sbf", "HB": "horizonta
                 "CMD": "cmd", "SN": "supernova", "TF": "tully-fisher", "FP": "fundamental-plane",
                 "BS": "brightest-stars", "PNLF": "pnlf", "mem": "group-member"}
 UNGC_UNUSED = ("h", "h'", "txt", "geom")
-CAT_ORDER = {"cf4": 0, "mcc": 1, "ungc": 2, "curated": -1}
+CAT_ORDER = {"cf4": 0, "cf4group": 0, "mcc": 1, "ungc": 2, "curated": -1}
 HF_SRC = ("Hubble flow from the heliocentric velocity v_helio ({vsrc}, in props) moved to the CMB frame (v_cmb, in props) "
           "with the Planck 2018 solar dipole (369.82 km/s toward l 264.021, b 48.253); H0 = 74.6 km/s/Mpc "
           "(Cosmicflows-4 scale; Planck's 67.4 would place it about 11 % farther), q0 = -0.595, peculiar velocity "
@@ -535,6 +535,123 @@ def hubble_quantity(v_helio: float, vc: float, vsrc: str) -> dict:
     return objects.quantity(num(d, 4), src, "inferred", "Mpc", num(d * (1 - f), 4), num(d * (1 + f), 4))
 
 
+# --- CF4 group distances (docs 19.5) ----------------------------------------------------------
+
+OWN_GROUP_METHODS = ("tully-fisher", "fundamental-plane")
+OWN_LABEL = {"tully-fisher": "Tully–Fisher", "fundamental-plane": "fundamental-plane"}
+SIZE_BUCKETS = ("pairs (2)", "3-4", "5-9", "10+", "rich clusters")
+GROUP_RADIUS_SRC = ("rms projected distance of the {n} Cosmicflows-4 members from their mean position, at the group "
+                    "distance (Space Maps)")
+GROUP_LOSS = "not used: larger uncertainty than its group's distance"
+
+
+def size_bucket(ngal: int, rich: bool) -> str:
+    return "rich clusters" if rich else "pairs (2)" if ngal == 2 else "3-4" if ngal <= 4 else "5-9" if ngal <= 9 else "10+"
+
+
+def rms_radius_mpc(members: list[tuple[float, float]], centre: tuple[float, float], d_pc: float) -> float:
+    """The rms projected distance (Mpc) of `members` (ra, dec in degrees) about `centre`, at distance `d_pc`: the root of
+    the mean squared angular separation, times the distance. About the *group position*, not the members' mean."""
+    ras = np.array([m[0] for m in members])
+    decs = np.array([m[1] for m in members])
+    theta = np.radians(angsep_arcmin(centre[0], centre[1], ras, decs) / 60.0)
+    return float(math.sqrt(float(np.mean(theta ** 2)))) * d_pc * 1e-6
+
+
+def members_mean(members: list[tuple[float, float]]) -> tuple[float, float]:
+    """The spherical mean (ra, dec in degrees) of the members' positions: the centre of a group's rms radius. The CF4
+    groups table's own RAJ2000/DEJ2000 is wrong for some groups (Cen 30, group 43296, is listed at (235.1, -71.7), 50 degrees
+    from NGC 4696), so it is never used for a value; the report counts the disagreements."""
+    v = np.mean([_unit_vec(a, d) for a, d in members], axis=0)
+    v /= np.linalg.norm(v)
+    return math.degrees(math.atan2(v[1], v[0])) % 360.0, math.degrees(math.asin(max(-1.0, min(1.0, float(v[2])))))
+
+
+def fmt_mpc(r: float) -> str:
+    """A radius to two significant figures for a `src`: 0.42, 1.7, 0.012, 120."""
+    t = f"{r:.2g}"
+    return f"{float(t):.0f}" if "e" in t else t
+
+
+def cluster_radius_quantity(c: dict, papers: dict) -> dict:
+    """`props.group_radius` of a record placed at a rich cluster's distance: the cited radius, `catalogue` when the paper's
+    Mpc is used as printed, `inferred` when `clusters.json` marks it (the h50 radii of Reiprich & Boehringer)."""
+    r = c["radius_mpc"]
+    tier = r.get("tier", "catalogue")
+    cite, head = papers[r["src"]]["cite"], r["where"].split(":")[0]
+    name = c["name"]
+    if tier == "catalogue":
+        src = f"{name} radius {r['v']} Mpc as printed: {cite}, {head}"
+    else:
+        src = (f"{name} r200 from {cite}, {head}, moved from h50 units to the Cosmicflows-4 scale (H0 = 74.6) by "
+               f"Space Maps")
+    return objects.quantity(r["v"], src, tier, "Mpc")
+
+
+def cluster_member(ci: dict, ra: float, dec: float, v_helio: float) -> bool:
+    """Docs 18.4.6: within the cluster's cited radius of its centre galaxy on the sky, and a heliocentric velocity within
+    3 sigma of the CF4 group's `Vh`. `ci` is a cluster entry with its centre record and `vh`."""
+    sep = float(angsep_arcmin(ra, dec, np.array([ci["centre"]["ra"]]), np.array([ci["centre"]["dec"]]))[0]) / 60.0
+    return sep <= ci["c"]["radius_deg"]["v"] and abs(v_helio - ci["vh"]) <= 3 * ci["c"]["sigma"]["v"]
+
+
+def group_distance(grp: dict, radius_mpc: float | None = None) -> tuple[float, float, float]:
+    """(D, lo, hi) in pc of a CF4 group from `DMzp ± e_DMzp` and `V3k`; with `radius_mpc` the interval is widened by
+    it (line of sight, in quadrature): (D, D - err, D + err)."""
+    d, lo, hi = dist_from_modulus(float(grp["DMzp"]), float(grp["e_DMzp"]), float(grp["V3k"]))
+    if radius_mpc is None:
+        return d, lo, hi
+    err = math.hypot(max(d - lo, hi - d), radius_mpc * 1e6)
+    return d, d - err, d + err
+
+
+def group_candidate(grp: dict, members: list[dict], own_method: str, cluster: dict | None = None,
+                    cluster_papers: dict | None = None) -> dict:
+    """The `group-member` candidate of a TF/FP-only galaxy in a CF4 group of two or more (docs 19.5). `members` are the
+    group's table2 rows (RAJ2000, DEJ2000 in degrees). `cluster` (a clusters.json entry) gives the radius for the eight
+    rich clusters; otherwise the rms projected distance of the members about the group position times D."""
+    d0, _, _ = group_distance(grp)
+    if cluster is not None:
+        radius = cluster_radius_quantity(cluster, cluster_papers)
+        r_mpc = cluster["radius_mpc"]["v"]
+        label = "the " + cluster["name"].replace(" cluster", "") + " cluster"
+        src = (f"Placed at the distance of {label} (Cosmicflows-4 group {int(grp['1PGC'])}: DMzp {grp['DMzp']} ± "
+               f"{grp['e_DMzp']}, converted by Space Maps), whose average is more precise than its own "
+               f"{OWN_LABEL[own_method]} distance; the interval adds the cluster radius {cluster['radius_mpc']['v']} Mpc "
+               f"along the line of sight in quadrature")
+    else:
+        pts = [(float(m["RAJ2000"]), float(m["DEJ2000"])) for m in members]
+        r_mpc = rms_radius_mpc(pts, members_mean(pts), d0)
+        radius = objects.quantity(num(r_mpc, 4), GROUP_RADIUS_SRC.format(n=len(members)), "inferred", "Mpc")
+        src = (f"Placed at the distance of its group (Cosmicflows-4 group 1PGC {int(grp['1PGC'])}, {grp['Ngal']} "
+               f"galaxies: DMzp {grp['DMzp']} ± {grp['e_DMzp']}, converted by Space Maps), whose average is more precise "
+               f"than its own {OWN_LABEL[own_method]} distance; the interval adds the group radius {fmt_mpc(r_mpc)} Mpc "
+               f"(rms projected distance of its Cosmicflows-4 members) along the line of sight in quadrature")
+    d, lo, hi = group_distance(grp, r_mpc)
+    q = objects.quantity(num(d * 1e-6, 5), src, "inferred", "Mpc", num(lo * 1e-6, 5), num(hi * 1e-6, 5))
+    frac = math.hypot(frac_of_sigma_mu(float(grp["e_DMzp"])), r_mpc * 1e6 / d)
+    return {"cat": "cf4group", "method": "group-member", "cls": 1, "frac": frac, "q": q, "pc": d, "radius": radius,
+            "radius_mpc": r_mpc}
+
+
+def group_eligible(cands: list[dict]) -> str | None:
+    """The best own method when every candidate is a CF4 DMtf and/or DMfp (docs 19.5), else None."""
+    if not cands or any(c["cat"] != "cf4" or c["method"] not in OWN_GROUP_METHODS for c in cands):
+        return None
+    return choose(cands)[0]["method"]
+
+
+def choose_with_group(cands: list[dict], gc: dict | None) -> tuple[dict | None, list[dict]]:
+    """The 18.4.2 ladder with the group candidate added. When the group wins, every own distance goes to
+    `alt_distances` with the group reason; when an own distance wins, the group candidate is not listed."""
+    if gc is None:
+        return choose(cands)
+    best, alts = choose(cands + [gc])
+    if best is gc:
+        return gc, [dict(a, reason=GROUP_LOSS) for a in alts]
+    return choose(cands)
+
+
 # --- curated inputs --------------------------------------------------------------------------
 
 def _need_src(node, papers: dict, path: str, problems: list[str]) -> None:
@@ -671,6 +788,9 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
     cf4_ra = np.array([float(r["RAJ2000"]) for r in inputs["cf4"]])
     cf4_dec = np.array([float(r["DEJ2000"]) for r in inputs["cf4"]])
     cf4_rows = inputs["cf4"]
+    cf4_by_group: dict[int, list[dict]] = {}
+    for r in cf4_rows:
+        cf4_by_group.setdefault(int(r["1PGC"]), []).append(r)
     cf4_pgc_join = Counter()
     cf4_pos_pairs, cf4_pos_conflicts = [], []
 
@@ -725,7 +845,27 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
     clusters = cur["clusters"]
     check_curated(clusters, "clusters.json")
 
-    # first pass: catalogue candidates
+    # clusters: the CF4 group distance of each (the Hubble-flow members below, and the TF/FP-only rule of docs 19.5)
+    by_id = {it["id"]: it for it in items}
+    cl_info = []
+    for c in clusters["clusters"]:
+        centre = by_id.get(c["centre"])
+        grp = groups.get(c["cf4_group"])
+        if centre is None or grp is None:
+            raise CuratedError(f"clusters.json: {c['name']}: centre or CF4 group missing")
+        d_pc, lo_pc, hi_pc = group_distance(grp, c["radius_mpc"]["v"])
+        src = (f"Placed at the distance of the {c['name'].replace(' cluster', '')} cluster (Cosmicflows-4 group "
+               f"{c['cf4_group']}: DMzp {grp['DMzp']} ± {grp['e_DMzp']}, converted by Space Maps), because its velocity "
+               f"mostly reflects its motion inside the cluster: it lies within {c['radius_deg']['v']} deg of the "
+               f"cluster centre and within 3 sigma ({c['sigma']['v']} km/s) of the group's velocity {grp['Vh']} km/s; "
+               f"the interval adds the cluster radius {c['radius_mpc']['v']} Mpc along the line of sight in quadrature")
+        q = objects.quantity(num(d_pc * 1e-6, 5), src, "inferred", "Mpc", num(lo_pc * 1e-6, 5), num(hi_pc * 1e-6, 5))
+        cl_info.append({"c": c, "centre": centre, "vh": float(grp["Vh"]), "q": q, "members": [], "grp": grp,
+                        "radius": cluster_radius_quantity(c, clusters["papers"])})
+    cluster_of_group = {ci["c"]["cf4_group"]: ci for ci in cl_info}
+
+    # first pass: catalogue candidates, and the group candidate of TF/FP-only galaxies
+    gstats = {"eligible": Counter(), "moved": Counter(), "kept_own": Counter(), "alone_or_no_group": 0, "moves": []}
     for it in items:
         cands = []
         if it["cf4"] is not None:
@@ -743,29 +883,34 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
             it["alts"] = [{"method": c["method"], "dist": c["q"],
                            "reason": "not used: the curated eclipsing-binary distance is used for the Magellanic Clouds"}
                           for c in alts]
-        else:
-            it["chosen"], it["alts"] = choose(cands)
+            continue
+        own_method = group_eligible(cands) if it["cf4"] is not None else None
+        gc = bucket = grp = None
+        if own_method is not None:
+            grp = groups.get(int(it["cf4"]["1PGC"]))
+            if grp is None or int(grp["Ngal"]) < 2:
+                gstats["alone_or_no_group"] += 1
+                grp = None
+            else:
+                ci = cluster_of_group.get(int(grp["1PGC"]))
+                gc = group_candidate(grp, cf4_by_group[int(grp["1PGC"])], own_method,
+                                     None if ci is None else ci["c"], clusters["papers"])
+                bucket = size_bucket(int(grp["Ngal"]), ci is not None)
+                gstats["eligible"][bucket] += 1
+        it["chosen"], it["alts"] = choose_with_group(cands, gc)
+        if gc is not None:
+            if it["chosen"] is gc:
+                own = choose(cands)[0]
+                it["group_radius"] = gc["radius"]
+                gstats["moved"][bucket] += 1
+                gstats["moves"].append({"id": it["id"], "group": int(grp["1PGC"]), "ngal": int(grp["Ngal"]),
+                                        "bucket": bucket, "own_method": own["method"],
+                                        "own_mpc": round(own["pc"] * 1e-6, 4), "group_mpc": round(gc["pc"] * 1e-6, 4),
+                                        "rel_change": round((gc["pc"] - own["pc"]) / own["pc"], 4)})
+            else:
+                gstats["kept_own"][bucket] += 1
 
     # velocities, Hubble flow and clusters
-    by_id = {it["id"]: it for it in items}
-    cl_info = []
-    for c in clusters["clusters"]:
-        centre = by_id.get(c["centre"])
-        grp = groups.get(c["cf4_group"])
-        if centre is None or grp is None:
-            raise CuratedError(f"clusters.json: {c['name']}: centre or CF4 group missing")
-        mu, e = float(grp["DMzp"]), float(grp["e_DMzp"])
-        d, lo, hi = dist_from_modulus(mu, e, float(grp["V3k"]))
-        r_pc = c["radius_mpc"]["v"] * 1e6
-        d_pc = d
-        err = math.hypot(max(d - lo, hi - d), r_pc)
-        src = (f"Placed at the distance of the {c['name'].replace(' cluster', '')} cluster (Cosmicflows-4 group "
-               f"{c['cf4_group']}: DMzp {grp['DMzp']} ± {grp['e_DMzp']}, converted by Space Maps), because its velocity "
-               f"mostly reflects its motion inside the cluster: it lies within {c['radius_deg']['v']} deg of the "
-               f"cluster centre and within 3 sigma ({c['sigma']['v']} km/s) of the group's velocity {grp['Vh']} km/s; "
-               f"the interval adds the cluster radius {c['radius_mpc']['v']} Mpc along the line of sight in quadrature")
-        q = objects.quantity(num(d_pc * 1e-6, 5), src, "inferred", "Mpc", num((d_pc - err) * 1e-6, 5), num((d_pc + err) * 1e-6, 5))
-        cl_info.append({"c": c, "centre": centre, "vh": float(grp["Vh"]), "q": q, "members": [], "grp": grp})
     hf = Counter()
     direction_reasons = Counter()
     cluster_direction_only = Counter()
@@ -784,12 +929,7 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
             direction_reasons["no_velocity"] += 1
             continue
         it["vcmb"] = vc = v_cmb(v, it["ra"], it["dec"])
-        member = None
-        for ci in cl_info:
-            sep = float(angsep_arcmin(it["ra"], it["dec"], np.array([ci["centre"]["ra"]]), np.array([ci["centre"]["dec"]]))[0]) / 60.0
-            if sep <= ci["c"]["radius_deg"]["v"] and abs(v - ci["vh"]) <= 3 * ci["c"]["sigma"]["v"]:
-                member = ci
-                break
+        member = next((ci for ci in cl_info if cluster_member(ci, it["ra"], it["dec"], v)), None)
         if vc < V_MIN:
             direction_reasons["below_1000_km_s"] += 1
             if member is not None:
@@ -797,6 +937,7 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
             continue
         if member is not None:
             member["members"].append(it["id"])
+            it["group_radius"] = member["radius"]
             it["chosen"] = {"cat": "cluster", "method": "group-member", "q": member["q"], "pc": member["q"]["v"] * 1e6}
             it["cluster"] = member["c"]["name"]
         else:
@@ -832,6 +973,39 @@ def build_records(inputs: dict, cur: dict) -> tuple[list[dict], dict, list[str]]
                                             "direction_only_in_window_below_1000_km_s": cluster_direction_only.get(ci["c"]["name"], 0)}
                           for ci in cl_info}
     report["cluster_members_total"] = sum(len(ci["members"]) for ci in cl_info)
+    for ci in cl_info:       # the radius each member carries as props.group_radius
+        report["clusters"][ci["c"]["name"]]["group_radius_mpc"] = ci["radius"]["v"]
+        report["clusters"][ci["c"]["name"]]["group_radius_tier"] = ci["radius"]["tier"]
+    far = []     # the groups table's RAJ2000/DEJ2000 against the mean of the group's table2 members (upstream note only)
+    for gid, rows in cf4_by_group.items():
+        grp = groups.get(gid)
+        if grp is None:
+            continue
+        pts = [(float(m["RAJ2000"]), float(m["DEJ2000"])) for m in rows]
+        mean = members_mean(pts)
+        sep = float(angsep_arcmin(mean[0], mean[1], np.array([float(grp["RAJ2000"])]), np.array([float(grp["DEJ2000"])]))[0]) / 60.0
+        if sep > 1.0:
+            far.append((sep, gid))
+    far.sort(reverse=True)
+    upstream = {"note": ("the VizieR groups table's RAJ2000/DEJ2000 is not used (the group centre is the mean of its CF4 table2 "
+                         "members); it lies more than 1 degree from that mean for the groups counted here"),
+                "groups_compared": sum(1 for g in cf4_by_group if g in groups), "more_than_1_deg_from_members_mean": len(far),
+                "more_than_10_deg": sum(1 for x in far if x[0] > 10.0),
+                "examples": [{"group": g, "separation_deg": round(x, 1)} for x, g in far[:5]]}
+    moves = gstats["moves"]
+    rel = np.array([m["rel_change"] for m in moves]) if moves else np.array([0.0])
+    kept = sum(gstats["kept_own"].values()) + gstats["alone_or_no_group"]
+    report["group_distances"] = {
+        "tf_fp_only_galaxies": len(moves) + kept, "moved": len(moves), "kept_own_distance": kept,
+        "upstream_group_positions": upstream,
+        "kept_own_alone_or_no_group": gstats["alone_or_no_group"], "kept_own_group_lost": sum(gstats["kept_own"].values()),
+        "eligible_by_size": {k: gstats["eligible"].get(k, 0) for k in SIZE_BUCKETS},
+        "moved_by_size": {k: gstats["moved"].get(k, 0) for k in SIZE_BUCKETS},
+        "kept_own_by_size": {k: gstats["kept_own"].get(k, 0) for k in SIZE_BUCKETS},
+        "median_rel_change": round(float(np.median(rel)), 4), "median_abs_change": round(float(np.median(np.abs(rel))), 4),
+        "over_20_percent": int(np.sum(np.abs(rel) > 0.20)) if moves else 0,
+        "over_50_percent": int(np.sum(np.abs(rel) > 0.50)) if moves else 0,
+        "moves_over_50_percent": sorted((m for m in moves if abs(m["rel_change"]) > 0.50), key=lambda m: m["id"])}
     report["alt_distances_records"] = sum(1 for r in records if r.get("alt_distances"))
     report["records_written"] = len(records)
     report["by_type"] = dict(sorted(Counter(r["props"]["type"]["v"] for r in records).items()))
@@ -931,6 +1105,8 @@ def galaxy_record(it: dict, names: dict) -> dict:
     if ch is not None and ch["method"] == "redshift":
         props["v_cmb"] = objects.quantity(num(it["vcmb"], 5), "v_helio + Planck 2018 solar dipole (369.82 km/s toward "
                                           "l 264.021, b 48.253)", "inferred", "km/s")
+    if it.get("group_radius") is not None:
+        props["group_radius"] = it["group_radius"]
     render = {}
     for k in ("mag_b", "mag_v"):
         if k in props:
@@ -957,7 +1133,7 @@ def license_text(which: str) -> str:
             f"- `{OVERRIDES_FILE}`, `{NAMES_FILE}`, `{MW_FILE}`, `{LG_FILE}` and `{CLUSTERS_FILE}`, hand-written "
             "curated files;\n- this file.")
         derived = ("The OpenNGC files are unmodified copies. The VizieR tables are unmodified copies too (the CF4 "
-                   "table keeps only the columns the build uses), redistributed with the citations below under "
+                   "table keeps only the columns the build uses, including `1PGC`; the groups table's RAJ2000/DEJ2000 are kept only for the report's upstream note, never used for a value), redistributed with the citations below under "
                    f"VizieR's terms of use ({VIZIER_TERMS}); CC BY-SA 4.0 does not relicense them.")
     else:
         folder = "frontend/data/objects/galaxies/"
@@ -998,7 +1174,8 @@ Nothing here is relicensed: each value keeps the terms of its source, named in i
 - **UNGC and McConnachie values**, served by VizieR (CDS), keep VizieR's terms of use ({VIZIER_TERMS}) with the
   citations below.
 - **Hubble-flow distances and the cluster rule** are computed by Space Maps from OpenNGC (or UNGC) velocities and
-  the Planck 2018 dipole; the cluster distances use the CF4 groups table.
+  the Planck 2018 dipole; the cluster distances use the CF4 groups table, and the group radii (props.group_radius) are cited cluster radii or the
+  rms projected distance of a CF4 group's members.
 - **The Milky Way record** copies Sgr A*'s position and distance from the black-hole source file (GRAVITY
   Collaboration 2022; Reid & Brunthaler) and holds Bland-Hawthorn & Gerhard 2016 and Hipparcos values, each cited in
   its `src`.
@@ -1181,10 +1358,31 @@ def source_json(files: list[dict]) -> dict:
                                "licence": "Space Maps curated; each number cites its paper"} for f in CURATED_FILES]}
 
 
-def refresh(directory: Path, local: Path | None = None, copy_from: Path | None = None) -> None:
+def refresh(directory: Path, local: Path | None = None, only: tuple[str, ...] | None = None) -> None:
+    """Download (or read from `local`) the pinned inputs and rewrite the snapshots and SOURCE.json. With `only` (a tuple
+    of roles), just those inputs are fetched; every other input keeps its committed file and SOURCE.json entry, and
+    its bytes are re-hashed against its pin."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    roles = tuple(INPUTS) if only is None else only
+    for r in roles:
+        if r not in INPUTS:
+            raise SystemExit(f"--only: unknown input {r!r}; choose from {', '.join(INPUTS)}")
+    kept = {}
+    if only is not None:
+        old = {f["role"]: f for f in json.loads((directory / "SOURCE.json").read_text(encoding="utf-8"))["files"]
+               if "sha256" in f and f.get("kind") != "committed"}
+        for role, spec in INPUTS.items():
+            if role in roles:
+                continue
+            data = gzip.decompress((directory / spec["file"]).read_bytes())
+            if neb.sha256(data) != old[role]["sha256"] or (spec["sha256"] and neb.sha256(data) != spec["sha256"]):
+                raise SystemExit(f"{spec['file']}: sha256 differs from its pin; --only will not touch it")
+            kept[role] = old[role]
     files, blobs = [], {}
     for role, spec in INPUTS.items():
+        if role in kept:
+            files.append(kept[role])
+            continue
         if local is not None:
             data = verify_download(role, (local / spec["local"]).read_bytes())
             url, mirror = None, "(local file)"
@@ -1206,8 +1404,9 @@ def refresh(directory: Path, local: Path | None = None, copy_from: Path | None =
         if not (directory / f).exists():
             raise SystemExit(f"{directory / f} is missing (it is committed by hand)")
     directory.mkdir(parents=True, exist_ok=True)
-    for old in list(directory.glob("*.gz")):
-        old.unlink()
+    if only is None:
+        for old_gz in list(directory.glob("*.gz")):
+            old_gz.unlink()
     for role, data in blobs.items():
         neb.write_gz(directory / INPUTS[role]["file"], data)
     (directory / "SOURCE.json").write_text(json.dumps(source_json(files), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1234,6 +1433,11 @@ def _print_report(m: dict, out: Path) -> None:
     mc = r["mcconnachie"]
     print(f"McConnachie: {mc['usable']} usable of {mc['rows']}, {mc['matched']} matched, unmatched {mc['unmatched']}")
     print(f"distances {r['distances']}; Hubble flow {r['hubble_flow']}; direction-only {r['direction_only']}")
+    g = r["group_distances"]
+    print(f"group distances (TF/FP-only {g['tf_fp_only_galaxies']}): moved {g['moved']} {g['moved_by_size']}; kept own "
+          f"{g['kept_own_distance']} (alone {g['kept_own_alone_or_no_group']}, own won {g['kept_own_group_lost']}); median change "
+          f"{g['median_rel_change']}, median |change| {g['median_abs_change']}, >20 % {g['over_20_percent']}, "
+          f">50 % {g['over_50_percent']}")
     print(f"clusters {{{', '.join(f'{k}: {v['members']}' for k, v in r['clusters'].items())}}}")
     print(f"context set {r['context_set']['count']}; tiles {r['tiles_bytes_total']} bytes (largest {r['largest_tile']}); "
           f"snapshots {r['snapshot_bytes_total']} bytes")
@@ -1246,11 +1450,13 @@ def main() -> int:
     ap.add_argument("--sources", type=Path, default=SOURCES)
     ap.add_argument("--local", type=Path, help="a directory of raw downloads (build from it, or refresh from it)")
     ap.add_argument("--refresh", action="store_true", help="download the pinned inputs (network), rewrite the snapshots, build")
+    ap.add_argument("--only", help="with --refresh: only these inputs (comma-separated roles, e.g. cf4-table2,cf4-groups); "
+                                   "the others keep their committed files and are re-hashed against their pins")
     ap.add_argument("--check", action="store_true",
                     help="rebuild into a temp dir, compare with --out and verify it; exit 1 on any difference")
     a = ap.parse_args()
     if a.refresh:
-        refresh(a.sources, a.local)
+        refresh(a.sources, a.local, tuple(x.strip() for x in a.only.split(",")) if a.only else None)
         print(f"snapshots written to {a.sources}")
         a.local = None
     if a.check:

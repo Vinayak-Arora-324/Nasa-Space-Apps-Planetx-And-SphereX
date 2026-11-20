@@ -1,6 +1,6 @@
 # Object framework for the 3D view (Phase 0)
 
-Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20, approved 2026-11-20 (decisions in §20.17) and implemented (§20.18).**
+Status: **approved 2026-11-18** (with the decisions in §14). Phase 0 is implemented; see §15 for what changed during implementation. **Phase 1 (exoplanets, clusters) is designed in §16, approved and implemented 2026-11-18 (decisions in §16.18, implementation notes in §16.19). Phase 2 (nebulae, black holes) is designed in §17, approved and implemented 2026-11-19 (conditions in §17.16, implementation notes in §17.18). Phase 3 (the `cosmos` frame, galaxies, the Milky Way, supermassive black holes) is designed in §18, approved 2026-11-19 (decisions in §18.18) and implemented (§18.19). Phase 4 (fixes and data quality) is designed in §19, approved 2026-11-20 (decisions in §19.14) and implemented (§19.15). Phase 5 (time and behaviour: orbit animation, the general evidence rule for hosted kinds, the cluster member highlight) is designed in §20, approved 2026-11-20 (decisions in §20.17) and implemented (§20.18). Phase 6 ("Turn back the sky" on the shared catalogues, and star motion) is designed in §21, awaiting approval (open questions in §21.17).**
 
 This document defines how every kind of object gets into the 3D fly-through (`frontend/scene3d.html`): one record
 schema shared by backend and frontend, one endpoint that merges live and prebuilt sources, a frontend registry that
@@ -4757,3 +4757,740 @@ a headed Chromium on the real Wayland display, foreground tab, real-time rAF; 12
 - `scene3d.js` and the time bar's DOM have no unit tests in node; their pure parts (`scene3d-requery.js`, the line
   buffers, the time bar's text) do.
 - The dash counts (56 dashes, 120 dots per orbit) were chosen by eye.
+
+## 21. Phase 6: "Turn back the sky" on the shared catalogues, and star motion (design)
+
+Status: **designed 2026-11-20, awaiting approval** (open questions in §21.17). Sections of §1–§20 that Phase 6 changes
+will carry a "Phase 6 change" note pointing here. Where this section and an earlier one disagree, this one wins.
+
+Phase 6 is the third follow-up phase of §18.16. It has two checklist items:
+- migrating "Turn back the sky" (the 2D page's whole-sky rewind, `rewind.js`) onto the shared catalogues;
+- proper motion and space motion of the 3D star layer (§20.7, §20.17 item 1).
+
+"Turn back the sky" is a whole-sky view over millennia, so it **does not move to cone queries**. The migration is of
+**records, modules and policy**: both views show the same object with the same id, values, evidence, provenance and
+card, move stars with one module, and follow one ephemeris rule. Constellations, figures, boundaries and sky brightness
+stay specific to the rewind (§21.8). New rewind features, small bodies in the rewind (§21.11), the Kepler-mover culling
+of §20.18 and Phase 7 (lensing, real images) are out of scope.
+
+Every external fact below was checked live on **2026-11-20**:
+- the JPL DE441 header (`ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de441/header.441`), for the span of DE441;
+- the JPL Horizons API (`ssd.jpl.nasa.gov/api/horizons.api`), for the dates it serves from DE441, and for the error
+  envelope of `ephem.js` (§21.7.3, 199 dates per body);
+- the size of `de441.bsp` (`ssd.jpl.nasa.gov/ftp/eph/planets/bsp/`);
+- the three Gaia TAP services the 3D star layer uses (GAVO, ARI, ESA), for proper-motion and radial-velocity columns,
+  the value for Barnard's star, and the share of stars with a radial velocity in two regression cones;
+- the built object datasets in this repository, for the records the 32 hand-listed deep-sky objects map to (§21.5.2).
+
+### 21.1 Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| The rewind's clock | Its own `SkyClock` (§20.3) with a range of 15,000 BCE to 15,000 CE. `tweenTo` replaces the `jd0 → jd1` lerp of the whirl; the look, timings and reduce-motion behaviour are unchanged (§21.4). |
+| Deep-sky objects | A committed **id table** maps the 32 hand-listed objects to shared records: 31 to records (one of them to two clusters), and 47 Tucanae, which no dataset holds, to a label with an OpenNGC position (§21.5.2). The records are served as one static whole-sky subset, `frontend/data/rewind-dso.json`, about 67 KB raw and 9.5 KB gzipped, built from the dataset tiles with `--check` (§21.5.3). Names shown stay the hand list's. Q3. |
+| Cards in the rewind | The rewind has no cards or tooltips today. A click or tap on a deep-sky object, the Sun, the Moon or a planet opens a small card built from the registry's card model (`kindSpec(kind).card`, `dataRow`), with evidence glyphs and the Data row (§21.5.4). Q4. |
+| Credit footer in the rewind | Hidden today ("it shows no Gaia values"). HR24 cluster positions are Gaia-derived, so the footer shows the Gaia credit whenever a Gaia-derived record is drawn (§21.5.5). Q4. |
+| Star motion | One pure module, **`starmotion.js`**, holds the space-motion propagation that `skytime.js` has today (`makeStar`, `starAt`), unchanged, plus a 3D entry point from a position in parsecs. Tested against the current outputs (§21.6.1). |
+| The 3D star layer | Gains proper motion and, where measured, radial velocity: Gaia rows carry `pmra`, `pmdec`, `rv`; the XHIP context stars use the motions `rewind-stars.json` already has. Stars are moved in the vertex shader from a per-star velocity. The star cache key moves to `scene3d-cone-3`, so every cone is cold once (§21.6.2). |
+| Stars without a radial velocity | Proper motion only (the radial velocity taken as 0), as the rewind does today. The card says so; the placement stays `measured` (§21.6.3). |
+| The 3D clock range | **Stays 1900–2100** (§21.6.4). Q2. |
+| The ephemeris | `ephem.js` (ERFA plan94 and moon98) in both views; the server's astropy (epv00, plan94, moon98) gives the 3D view's payload epoch. One definition of Earth in both views (§21.7.2). Measured agreement in the overlap, 1900–2100: rewind against server ≤ 59.3″ (light time, which only the rewind applies), 3D client against server ≤ 15.1″ (§21.7.1). Q5. |
+| The valid range of the ephemeris | **Where `ephem.js` has been measured against DE441**, in both views. Inside it the placement is `measured`, and the card states the error envelope for that date; outside it the placement is an extrapolation: greyed, "(extrapolated)", illustrative. Horizons serves DE441 for 9999 BCE–9999 CE; DE441 itself spans 13,201 BCE to 17,191 CE. Measuring the rest needs the 3.3 GB DE441 kernel once (§21.7.3). Q1. |
+| Constellations, figures, boundaries, sky colour | Stay rewind-specific data, not object records (§21.8). |
+| Parity | An automated harness records the rewind's output at 8 dates × 4 places (and 2 extra times at Giza), before any behaviour changes, and every later commit is compared with it. Intended differences are listed with their size and reason (§21.9). |
+| Small bodies in the rewind | Not built; recommended against (§21.11). Q6. |
+
+### 21.2 Sources, facts and dates (checked 2026-11-20)
+
+| Fact | Checked how | Used for |
+|---|---|---|
+| DE441 spans **JED −3100015.5 (−13200-08-15) to 8000016.5 (17191-03-15)**, that is 13,201 BCE to 17,191 CE. | `header.441`, group 1010 and 1030. | §21.7.3 |
+| Horizons serves DE441 (Sun, Moon, planet barycentres) only from **B.C. 9999-MAR-21** to **A.D. 9999-DEC-30** TDB ("No ephemeris for target … prior to B.C. 9999-MAR-21"). Planet body centres are narrower (Jupiter 599: 1600–2600), so barycentres are used. | Live API probes at JD −3100015.5, −2100000.5, 7200000.5, 7930000.5. | §21.7.3 |
+| `de441.bsp` is **3,307,878,400 bytes**, last modified 2020-12-22. | HTTP HEAD. | Q1 |
+| GAVO `gedr3dist.litewithdist` ("joins the DR3 lite table … with the estimated geometric and photogeometric distances") has `pmra`, `pmdec`, `radial_velocity` ("Spectroscopic radial velocity in the solar barycentric reference frame"). Barnard's star: pmra −801.55096, pmdec 10362.395 mas/yr, RV −110.46822 km/s. | TAP_SCHEMA and a query by `source_id` 4472832130942575872. | §21.6.2 |
+| ESA `gaiadr3.gaia_source`: the same star with RV −110.46822. ARI `gaiaedr3.gaia_source` has only `dr2_radial_velocity`, empty for this star; ARI also serves `gaiadr3.gaia_source`, with RV −110.46822. | Live queries. | §21.6.2 (the ARI query joins `gaiadr3`) |
+| Share of stars with an RV in the 3D query (parallax/error > 5, 3° cones, GAVO): **12,569 of 50,000** at Orion (83.82, −5.39), **5,660 of 31,436** at TRAPPIST-1 (346.63, −5.04). | Live cone queries. | §21.6.3 |
+| Adding the three columns grows the GAVO CSV by about 20 % (TRAPPIST-1: 3.67 → 4.40 MB; Orion, 50,000 rows: 5.71 → 6.91 MB). GAVO timings were too noisy to compare (1.7–20.8 s, some attempts timed out on both column sets). | The same queries. | §21.6.2 |
+| `ephem.js` against DE441 over 9999 BCE–9999 CE: the envelope of §21.7.3. | Script against Horizons (geocentric astrometric ICRF vectors with light time, `VEC_CORR='LT'`; heliocentric geometric vectors), 199 dates per body. | §21.7.3 |
+| `ephem.js` against the server's ephemeris (pyerfa 2.0.1.5 `epv00`, `plan94`, `moon98`) over 1900–2100: §21.7.1. | Script, 401 dates. | §21.7.1 |
+| The 32 hand-listed objects and the records near them: §21.5.2. | Script over every built tile of `galaxies`, `nebulae`, `hr23-clusters`, `bh-curated`, `smbh-curated`. | §21.5 |
+| OpenNGC v20260501 (the pinned `openngc-36cb178a-NGC.csv.gz`) lists NGC0104 as `GCl` at 00:24:05.36 −72:04:53.2; HR24's pinned clusters table (7,167 rows) has no row for NGC 104. | The committed snapshots. | §21.5.2 (47 Tucanae) |
+
+### 21.3 "Turn back the sky" today (inventory)
+
+Read from `rewind.js`, `rewind-sky.js`, `skytime.js`, `ephem.js`, `app.js`, `index.html`, `blink.css`, the two build
+scripts and the two data files at `e4b6943`.
+
+**What it draws**, in order (`Rewind._draw`):
+1. During the whirl, a dark veil over the map (alpha by spin speed), so the trails carry the motion.
+2. The sky colour (`S.drawWash`): a vertical gradient from `skyLight(sunAlt, moonAlt, moonK)` (twilight stops by the
+   Sun's geometric altitude, moonlight), and a warm glow at the Sun's azimuth near the horizon.
+3. Star trails while spinning: every XHIP star with V < 3.6, on an offscreen canvas that fades each frame.
+4. IAU boundaries (dashed; off by default) and constellation figures (stars moved by their space motion).
+5. The precession circle (the pole's path, −13,000 to +13,000 in 200-year steps), millennium ticks, "pole today" and
+   the pole of the shown date.
+6. Deep-sky objects: 32 hand-listed markers and italic labels, shown by priority (1 always, 2 below 110° field, 3
+   below 70°), coloured and shaped by a type code (`g s e i` galaxies, `oc gc` clusters, `sfr pn snr dn` nebulae,
+   `gc0` the Galactic centre's cross). The Pleiades and the Hyades ride with a member star (`hip` 17702 Alcyone, 20894
+   θ² Tau); the others are fixed.
+7. Fast stars ("movers"): up to 140 stars that moved at least 0.25° between the map's epoch (`MAP_EPOCH` 2025.5,
+   SPHEREx) and the shown date: gold where they are, a ring and a line to where the map shows them.
+8. Sun, Moon and planets (Mercury to Uranus; Neptune is not drawn): planet dots sized by magnitude, the Moon's phase
+   disc turned towards the Sun, the Moon's ΔT-uncertainty arc (dotted, when σ > 1°), eclipses (total, annular,
+   partial).
+9. Star names (by magnitude and field; Polaris, Thuban, Kochab and Barnard's star always) and constellation names (by
+   rank and field), placed greedily without overlaps (`S.Labeler`).
+10. The ground, the horizon line and the compass points.
+
+**Data.**
+- `rewind-stars.json` (198,272 bytes): 3,114 XHIP stars (V < 5 or pm ≥ 400 mas/yr, plus the always-labelled ones),
+  epoch 1991.25, with pm, parallax (one star without), RV (221 without), V and B−V; 28 names. **The 3D view also
+  reads this file** for its bright context stars (`contextStars`, positions only, at 1991.25).
+- `rewind-sky.json` (97,613 bytes): 31 extra figure stars (same fields), 66 more names, 89 constellation label points
+  (Serpens twice), 88 figures, 257 boundary polylines, 32 deep-sky objects.
+- Neither build (`build_rewind_stars.py`, `build_rewind_sky.py`) follows the snapshot/`SOURCE.json`/`--check` pattern:
+  they download XHIP and d3-celestial (pinned commit) on every run.
+
+**Astronomy.** Precession and Earth rotation (Vondrák 2011 with frame bias; CIO locator integrated from the same pole),
+ΔT and its σ, calendar (Julian before 1582-10-15) in `skytime.js`; space motion of stars in `skytime.makeStar` and
+`starAt` (ERFA `starpv`/`starpm` light-time terms); Sun, Moon and planets in `ephem.solarSystem` (plan94 with one
+light-time iteration, planets seen from the **Earth–Moon barycentre**, the Sun as −EMB, the Moon from moon98 carried
+through the Vondrák ecliptic of date, topocentric parallax for the Moon).
+
+**The whirl.** `start()`: `jd0` is tonight (this year, same month and day, same local solar time) or the last landed date
+when chained at the same place; `jd1` the requested date. Enter 2.0 s (camera slerp to the horizon view), spin
+2.2 s below 3 days, else 4–9.5 s growing with log years, with the sidereal angle turned by K = 2–5 whole turns plus
+the exact change (`dTheta`), and the date lerped linearly in UT with `easeInOutCubic`; land 1.6 s (labels fade in,
+trails fade out); leave 1.4 s back to north-up. **Reduce motion**: lands at once, and leaving exits at once.
+
+**UI.**
+- Panel `#panel-rewind`: place (75 places in 11 regions plus "Somewhere else…" with latitude, longitude and "Use my
+  location"), year and era, month, day, local solar time; three presets ("2,000 years ago", "Great Pyramid · 2560 BCE",
+  "Vega near the pole · 13,600 CE"); seven layer chips; the "How accurate is this?" notes.
+- Dock bar while active: "Change date or place", "Back to tonight", "Back to the whole sky"; the header read-outs
+  (facing direction, cursor altitude and azimuth, "SPHEREx all-sky map, turned to \<year\>").
+- HUD: year, date and place line, the sky line (daylight, Moon, season, planets up), the legend notes, and an
+  aria-live summary on landing.
+- Look-around: drag, wheel (field 25–150°), arrow keys and ±.
+
+**Persisted settings.** Only the layer map, `localStorage['blink.rewind.layers']` (defaults: boundaries off, the rest
+on). The rewind writes no URL state.
+
+**Error paths.**
+- Sky map not loaded: "The sky map has not loaded yet. Try again in a moment."
+- Bad place or date: the panel's messages (latitude/longitude range, year range, days in the month, the skipped days
+  of October 1582, the time format). Geolocation: unavailable or refused.
+- `rewind-stars.json` fails: the sky still turns; "The star list could not be loaded, so star motions, names and
+  trails are not shown."
+- `rewind-sky.json` fails: five fallback asterisms, **no deep-sky objects**, no constellation names or boundaries;
+  "The constellations could not be loaded, so only a few star patterns are drawn."
+
+**Credit footer.** `.root.rewinding .dock-credit { display: none }` (`blink.css`), because the rewound sky showed no
+Gaia values (§19.15). The d3-celestial and XHIP credits are in the accuracy notes.
+
+**Elsewhere** (as the task states, confirmed): the 3D view's planets come from the server's astropy `ephem` source at
+the payload epoch and are moved with `ephem.js` plan94/moon98 plus a constant anchor (§20.4.1); the 3D star layer
+(Gaia at 2016.0, XHIP context stars at 1991.25) is fixed.
+
+### 21.4 The clock
+
+- The rewind constructs `new SkyClock({ jd, minJd, maxJd, rate: 0 })` with `minJd` = 1 January 15,000 BCE (astronomical
+  year −14999) and `maxJd` = 31 December 15,000 CE, in TT, the clock's time scale.
+- **The tween.** `start()` converts `jd0` and `jd1` (UT, from local solar time) to TT with `skytime.deltaT`, and the
+  spin phase calls `clock.tweenTo(jd1Tt, { durationMs: spinDur × 1000, ease: easeInOutCubic })`. Each frame,
+  `rewind.frame(dt)` feeds `clock.tick` a virtual wall clock (the sum of its `dt`, as the 3D page does), reads
+  `clock.jd`, takes the progress `e = (jd − jd0Tt) / (jd1Tt − jd0Tt)` for the sidereal turn (`s0.theta + dTheta · e`,
+  unchanged), and converts `jd` back to UT for `skyState`.
+- **What this changes.** Today the date is lerped in UT; now in TT. The endpoints are exact (`s0`, `s1` are computed
+  as today). Mid-whirl the two differ by the curvature of ΔT across the tween, at most the ΔT of the far date
+  (`skytime.deltaT(−15000)` is 905,300 s, 10.5 days; `deltaT(15000)` 6.4 days), about 0.03 yr of precession epoch.
+  The harness gives the size per frame (§21.9.3); it is far below a pixel.
+- The enter, land and leave phases, `spinDur`, K, the speed veil, trails and reduce-motion are unchanged. With reduce
+  motion the clock is `setJd(jd1Tt)` and the rewind lands at once.
+- The rewind's own `jd0`, `jd1`, `jd`, `jdShown` fields stay as read-outs; the lerp is removed in the cleanup commit
+  (§21.9.5).
+
+### 21.5 Deep-sky objects from shared records
+
+#### 21.5.1 The id table
+
+`backend/data/sources/rewind-dso/ids.json` (committed, hand-curated, reviewed in this design). One entry per drawn
+object, in today's order and with today's display fields:
+
+```json
+{ "key": "M45", "label": "Pleiades", "type": "oc", "prio": 1, "ids": ["hr23:Melotte_22"], "anchor_hip": 17702 }
+```
+
+- `label`, `type` and `prio` are the rewind's display data (the name drawn, the marker shape and colour, the zoom
+  priority), copied from today's file. They are not record values.
+- `ids`: the shared record(s). The first is the primary (the marker and the card); a second is named on the card.
+- `anchor_hip`: the member star whose space motion carries the marker (today's `hip`), kept for the two clusters that
+  have one (§21.5.2, the drift).
+- An entry with `ids: []` carries `direction: { ra, dec, src, tier }` and a `note`; it is drawn as a label with no
+  record.
+
+#### 21.5.2 The mapping
+
+Offsets are between today's hand-listed position and the record's position (arcmin); every record below exists in the
+built datasets at `e4b6943`. The positions are the **intended differences** of the parity harness (§21.9.4).
+
+| Hand list (key: label) | Record | Dataset | Record name | Offset | Notes |
+|---|---|---|---|---|---|
+| lmc: Large Magellanic Cloud | `ongc:ESO056-115` | galaxies | Large Magellanic Cloud | 0.01′ | |
+| smc: Small Magellanic Cloud | `ongc:NGC0292` | galaxies | Small Magellanic Cloud | 0.02′ | |
+| gc: Galactic centre | `bh:Sgr A*` | bh-curated | Sagittarius A* | 0.00′ | label stays "Galactic centre" |
+| M31: Andromeda Galaxy | `ongc:NGC0224` | galaxies | Andromeda Galaxy | 0.46′ | |
+| M33: Triangulum Galaxy | `ongc:NGC0598` | galaxies | Triangulum Galaxy | 0.91′ | |
+| M51: Whirlpool Galaxy | `ongc:NGC5194` | galaxies | Whirlpool Galaxy | 0.36′ | |
+| M81: Bode's Galaxy | `ongc:NGC3031` | galaxies | Bode's Galaxy | 0.26′ | |
+| M82: Cigar Galaxy | `ongc:NGC3034` | galaxies | Cigar Galaxy | 0.48′ | |
+| M83: Southern Pinwheel | `ongc:NGC5236` | galaxies | Southern Pinwheel Galaxy | 0.22′ | |
+| M87: Virgo A | `ongc:NGC4486` | galaxies | Messier 87 | 0.64′ | |
+| M101: Pinwheel Galaxy | `ongc:NGC5457` | galaxies | Pinwheel Galaxy | 0.10′ | |
+| M104: Sombrero Galaxy | `ongc:NGC4594` | galaxies | Sombrero Galaxy | 0.41′ | |
+| M42: Orion Nebula | `ongc:NGC1976` | nebulae | Orion Nebula | 4.08′ | |
+| carina: Carina Nebula | `ongc:NGC3372` | nebulae | Carina Nebula | 0.62′ | |
+| M8: Lagoon Nebula | `ongc:NGC6523` | nebulae | Lagoon Nebula | 1.54′ | |
+| M16: Eagle Nebula | `ongc:IC4703` | nebulae | Eagle Nebula | 4.23′ | the nebula, not the NGC 6611 cluster (1.44′, `derived`) |
+| M17: Omega Nebula | `ongc:NGC6618` | nebulae | Omega Nebula | 0.74′ | |
+| M20: Trifid Nebula | `ongc:NGC6514` | nebulae | Trifid Nebula | 3.95′ | |
+| M27: Dumbbell Nebula | `ongc:NGC6853` | nebulae | Dumbbell Nebula | 0.28′ | |
+| M57: Ring Nebula | `ongc:NGC6720` | nebulae | Ring Nebula | 0.35′ | |
+| M1: Crab Nebula | `ongc:NGC1952` | nebulae | Crab Nebula | 0.48′ | |
+| coalsack: Coalsack | `ongc:C099` | nebulae | Coalsack Nebula | **67.7′** | OpenNGC's addendum centre; a dark cloud some degrees across, whose centre catalogues place differently |
+| M45: Pleiades | `hr23:Melotte_22` | hr23-clusters | Pleiades | 3.88′ | anchored to HIP 17702 |
+| hyades: Hyades | `hr23:Melotte_25` | hr23-clusters | Hyades | **12.87′** | anchored to HIP 20894 |
+| M44: Beehive Cluster | `hr23:NGC_2632` | hr23-clusters | Praesepe | **19.38′** | HR24's member centroid; the d3-celestial Messier point is north of it |
+| M7: Ptolemy's Cluster | `hr23:NGC_6475` | hr23-clusters | Ptolemy Cluster | 0.70′ | |
+| M6: Butterfly Cluster | `hr23:NGC_6405` | hr23-clusters | Butterfly Cluster | 2.26′ | |
+| M11: Wild Duck Cluster | `hr23:NGC_6705` | hr23-clusters | Wild Duck Cluster | 0.74′ | |
+| omegacen: Omega Centauri | `hr23:NGC_5139` | hr23-clusters | NGC 5139 | **10.49′** | HR24 type `g`; a centroid of its Gaia members in a crowded globular cluster, checked against the map's core in the browser (§21.16) |
+| M13: Hercules Cluster | `hr23:NGC_6205` | hr23-clusters | NGC 6205 | 3.53′ | HR24 type `g` |
+| doublecl: Double Cluster | `hr23:NGC_869`, `hr23:NGC_884` | hr23-clusters | NGC 869, NGC 884 | 0.79′ (NGC 869) | the hand point is h Persei (NGC 869); NGC 884 lies 25.1′ east and is named on the card |
+| 47tuc: 47 Tucanae | none | — | — | 0.02′ | **no record**: HR24 has no row for NGC 104, and OpenNGC's globular clusters are in no dataset. Drawn as a label at OpenNGC's NGC0104 position (`src` "OpenNGC v20260501 (NGC 104)", tier `catalogue`) with a card that says so |
+
+- **Names.** The labels stay the hand list's (Q3): "Beehive Cluster" rather than "Praesepe", "Virgo A" rather than
+  "Messier 87", "Omega Centauri" rather than "NGC 5139", "Galactic centre" rather than "Sagittarius A*". The card's
+  title is the label and its subtitle the record's name when they differ ("Praesepe · NGC 2632 · open cluster").
+- **Colour and shape** stay keyed by the table's `type`.
+- **The drift of the two anchored clusters.** HR24's pinned table has no mean proper motion or radial velocity
+  (§20.9's snapshot columns), so a cluster record does not move. Today the Pleiades and the Hyades ride with one member
+  star; the table keeps that: the drawn direction is the record's direction plus the anchor star's space motion since
+  the record's epoch (2016.0), from `starmotion.js`. The card says "Drawn moved with its member star Alcyone (HIP
+  17702, XHIP space motion)", tier `inferred` (one member's motion stands for the cluster's). The other records are
+  fixed, as today. The alternative, a re-snapshot of HR24 with its mean motions, is Q3.
+
+#### 21.5.3 The subset file
+
+`frontend/data/rewind-dso.json`, built by a new **`backend/scripts/build_rewind_dso.py`**:
+
+```json
+{ "format": "space-maps.rewind-dso/1", "schema": "space-maps.objects/1",
+  "build": { "script": "build_rewind_dso.py", "script_version": 1, "stamp": "…" },
+  "inputs": { "galaxies": "<manifest sha256>", "nebulae": "…", "hr23-clusters": "…", "bh-curated": "…", "openngc": "<snapshot sha256>" },
+  "credit": { "<dataset>": "<manifest credit>" },
+  "entries": [ { "key": "M45", "label": "Pleiades", "type": "oc", "prio": 1, "ids": ["hr23:Melotte_22"], "anchor_hip": 17702 }, … ],
+  "records": [ { …the full format-1 record, as /api/objects would return it, without in_cone… }, … ] }
+```
+
+- Records are decoded from the built tiles with `objects_static` (so `/2` compact tiles expand to exactly what the
+  server sends) and written sorted by id. Every id in the table must exist, or the build fails naming it.
+- **Size:** the 32 records are **63,586 bytes** of JSON and **8,467 bytes** gzipped (measured); with the table and
+  header about 67 KB and 9.5 KB. The build report gives the real numbers and fails above 150 KB.
+- **Reproducibility:** `--check` rebuilds in memory and compares byte for byte, naming the record that changed (as
+  `build_objects_smbh.py` names a drifted host). `backend/data/sources/rewind-dso/SOURCE.json` records the input
+  manifests' sha256 and the OpenNGC snapshot used for 47 Tucanae. The inputs are in the repository, so `--refresh`
+  re-reads them and rewrites `SOURCE.json`; it fetches nothing. A rebuilt dataset that changes one of these records
+  makes `--check` fail until the subset is rebuilt, which is the point: both views then show the same values.
+- `--check` joins the dataset list the test suite and the slice checks run (§21.14).
+- The licence: each record keeps its dataset's terms; `frontend/data/rewind-dso.LICENSE.md` names them per dataset,
+  and the repository `LICENSE` lists the file (Gaia-derived cluster values, OpenNGC CC BY-SA 4.0, CF4/EDD terms). The
+  "Before any commercial use" list gains it.
+
+#### 21.5.4 Cards in the rewind
+
+- **Opening.** A click or tap that does not drag (under 4 px of pointer movement) on a drawn deep-sky marker, the Sun,
+  the Moon or a planet opens a card in the bottom left of the sky; a click elsewhere or Esc closes it. Drag still
+  looks around. The marker under the pointer is found from the positions drawn in the last frame (the `Labeler`'s
+  boxes already hold them). Keyboard: Tab is not added in Phase 6 (the sky is one `role="application"` element);
+  the aria-live summary is unchanged.
+- **Content (shared).** A deep-sky card is `kindSpec(rec.kind).card(rec, ctx)` from `scene3d-registry.js` (pure),
+  with `ctx = { evidence: false, fmtNum, fromYou: null }`, and its `dataRow(rec)`, so the rows, values, tiers and
+  credits are exactly the 3D card's. Rows that only make sense in 3D (`From you`, `Look`) are dropped by a list in the
+  rewind renderer. The rewind adds its own first rows: the title (the label) and subtitle (above), "Seen from
+  \<place\> at \<altitude\>° in the \<direction\>", and for the two anchored clusters the drift row (§21.5.2).
+- **Evidence.** The record's evidence is shown as the 3D card shows it (the evidence word with its glyph in the
+  subtitle; each row's tier glyph). The rewind has no Evidence view; nothing is hidden.
+- **Bodies.** The Sun, the Moon and the planets have no records in the rewind. Their card is built by a new pure
+  registry helper, `ephemerisRows({ body, jd, validity })` (§21.7.4), which the 3D planet card also uses: the
+  ephemeris, the DE441 envelope for the date, the valid-range row when outside it, and the rewind's own rows (altitude
+  and azimuth, magnitude, phase for the Moon, the ΔT note when σ > 1°).
+- **Renderer.** A small DOM renderer in the 2D page (`rewind-card.js`, new), styled with the 2D page's card CSS. The
+  row model is the shared one; only the markup is local, because the 3D page's card CSS is not loaded on the 2D page.
+
+#### 21.5.5 The credit footer
+
+- The footer's rule becomes: **in rewind mode the Gaia credit line ("Gaia DR3 · Credit: ESA/Gaia/DPAC · CC BY-NC 3.0
+  IGO") shows while any drawn record's Data row carries the Gaia credit.** That is any HR24 cluster on screen (their
+  positions are means of Gaia DR3 members) and the nebulae whose distances are Gaia-derived (M8, M27, M57, …; the
+  distance only shows on the card, but the card's Data row says so).
+- Computed by a pure `rewindCredits(drawn)` from the entries drawn in the last frame, recomputed when that set changes
+  (at most every 250 ms). With the deep-sky layer off, or only galaxies and non-Gaia nebulae up, the footer hides as
+  today.
+- `.root.rewinding .dock-credit { display: none }` is replaced by a class the rewind sets.
+- The accuracy notes gain one sentence: the deep-sky objects are Space Maps' catalogue records (OpenNGC, Hunt &
+  Reffert 2024 from Gaia DR3, Cosmicflows-4, the curated black holes), the same as the 3D view's.
+
+### 21.6 One star-motion module
+
+#### 21.6.1 `starmotion.js` (new, pure)
+
+```js
+export function makeStar(ra, dec, pmra, pmdec, plx, rv, epoch)       // moved from skytime.js unchanged: { epoch, r, pos, vel } (pc, pc/yr)
+export function makeStarAt(xyzPc, pmra, pmdec, rv, epoch)            // the same state from a 3D position (r = |xyz|; plx = 1000 / r): the 3D view's entry
+export function starAt(st, epj)                                       // moved unchanged: { v (ICRS unit vector), dmag }, with the light-time term of eraStarpm
+export function starPosAt(st, epj, out)                               // geometric position in pc at epj (pos + vel · dt): what the 3D view draws
+export const hasMotion = (st) => …                                    // false for a star without pm (or without a parallax: sky motion only)
+```
+
+- `skytime.js` keeps calendar, ΔT, precession and Earth rotation. Its `makeStar` and `starAt` become re-exports of
+  `starmotion.js` until the cleanup commit removes them (§21.9.5); `rewind.js` and `contextStars` import
+  `starmotion.js` directly.
+- **Tests against the current outputs:** `starmotion.test.mjs` compares the new functions with outputs of today's
+  `skytime.makeStar`/`starAt` recorded at `e4b6943` into a fixture (all 3,145 rewind stars at the 8 parity dates,
+  §21.9), to 1e-12 rad; the existing ERFA comparisons in `skytime.test.mjs` move with the functions.
+- `starPosAt` against `starAt`: the direction differs only by the light-time term. For Barnard's star from 2016 to 1900 the
+  distance changes by 0.0131 pc (110.47 km/s × 116 yr, §21.2), 0.043 light-years, so the term is 0.043 yr of its
+  10.39″/yr motion, 0.44″; a test bounds it at 1″ over 1900–2100.
+
+#### 21.6.2 The 3D star layer moves
+
+**Backend** (`scene3d.py`, `config.py`):
+- The three star queries gain `pmra`, `pmdec` and the radial velocity: GAVO `radial_velocity`; ESA `g.radial_velocity`;
+  ARI joins `gaiadr3.gaia_source` instead of `gaiaedr3.gaia_source` (same ids, §21.2), for DR3's RV.
+- `STAR_FIELDS` becomes `["id", "x", "y", "z", "abs_g", "bp_rp", "d_lo", "d_hi", "pmra", "pmdec", "rv"]` (mas/yr, km/s;
+  `null` where missing). `stars.epoch` stays 2016.0.
+- The cone cache key moves from `scene3d-cone-2` to **`scene3d-cone-3`**: every cone is cold once. §20.17 item 1 named
+  the cost: the Galactic Centre's cold load took 176 s through ESA tiles (§19.15). Stage 2 measures cold and warm
+  loads at the regression patches against Phase 5 (§21.16) and reports them; the columns add about 20 % to the bytes
+  (§21.2). The old `scene3d-cone-2` entries expire by the cache TTL.
+- `frontend/dev/mock_server.py` serves the three new columns.
+
+**Client** (`scene3d.js`, `scene3d-shaders.js`, `scene3d-math.js`):
+- At ingest each Gaia row becomes `makeStarAt([x, y, z], pmra, pmdec, rv, 2016.0)`; each context star
+  `makeStar(ra, dec, pmra, pmdec, plx, rv, 1991.25)` from `rewind-stars.json`'s own fields, then is carried to 2016.0
+  once, so every star's buffer position is at one reference epoch. (Today the context stars are drawn at their 1991.25
+  positions next to Gaia's 2016.0: a 25-year mismatch the change removes.)
+- The star vertex gains a velocity (3 floats; 10 floats per star instead of 7), in pc/yr for the galaxy buffer and AU/yr
+  for a system frame's buffer. The vertex shader draws `pos + vel · uDtYears`, with `uDtYears = clock year − 2016.0`.
+  A clock change costs one uniform; no buffer is refilled while the clock plays.
+- CPU positions (picking, labels, the autopilot, `_starPc`, the host resolver of hosted records, the member rings) are
+  `pos + vel · dt` computed on demand. Hosted records follow their moving host: the store's host offsets are refreshed
+  when the clock has moved more than 1 sky-year since the last refresh, and when it settles.
+- The Gaia/context de-duplication (2′ and 1.5 mag, §16) still runs at the catalogue positions.
+- Archive and curated star records (`obj` stars: hosts with no Gaia or HIP star loaded) carry no `position.pm` in any
+  dataset today (§2.2 reserves it). They stay fixed, and their card says so; a record that gains `pm` later moves.
+- The time bar's status line: "Stars moved by their measured motions (radial velocities for N of M)" replaces "Stars
+  shown at their Gaia DR3 epoch (2016.0); proper motion not applied." (§20.17 item 1), shown while the clock is more
+  than one year from 2016.0.
+
+#### 21.6.3 Stars without a radial velocity, and evidence
+
+- About a fifth to a quarter of the 3D stars have a Gaia RV (§21.2); 221 of the 3,114 rewind stars have none in XHIP.
+  Without one, `makeStar` takes RV = 0: the star moves across the sky by its proper motion at a constant distance.
+  This is today's rewind behaviour.
+- Over 1900–2100 a missing RV changes nothing visible: the direction's perspective term is second order in time, and
+  the distance error it leaves is |v_r| × 116 yr, under 0.01 pc for |v_r| < 80 km/s, far inside a Bailer-Jones
+  interval.
+- **Evidence.** A moved star's placement stays `measured` (catalogue motions, a straight-line model, valid over the
+  whole 3D range). Nothing is greyed, and the Evidence view is unchanged.
+- **Card rows** (3D star card, `starMotionRow(meta, clock)` in the registry):
+  - "Position epoch 2016.0 (Gaia DR3)" (§20.18), and now "1991.25 (Hipparcos, XHIP)" for context stars;
+  - "Motion · proper motion and radial velocity applied (drawn at 20 Nov 2100)", tier `catalogue`; or "proper motion
+    applied; no radial velocity measured (taken as 0)", tier `catalogue` with that note; or for an `obj` star "not
+    applied: the record has no proper motion".
+
+#### 21.6.4 The 3D clock range: stays 1900–2100 (Q2)
+
+Recommended: keep the 3D view's 1900–2100, now with moving stars. Reasons:
+- `/api/objects` accepts `mjd` 1900–2100 and SkyBoT serves 1890–2060, so nothing on the server reaches further.
+- Clusters, nebulae and galaxies have no motion in their records (§21.5.2), so over millennia moving stars would leave
+  their clusters (the member rings would detach from the cluster's marker), and cone-selected Gaia stars would leave the
+  cone (a 1,000 mas/yr star crosses a 3° cone in about 11,000 years), unlike the rewind, which is whole-sky.
+- Long spans are what "Turn back the sky" is for.
+
+Widening (to ±15,000 years) would also need faster rates in the time bar, BCE date entry, HR24's mean motions (a new
+snapshot) and a stated star valid range. Every other source would keep its own valid range (SkyBoT bodies beyond
+their window and exoplanet phases beyond σ = 90° grey out, §20.17), and the planets would follow §21.7.
+
+### 21.7 One ephemeris policy
+
+#### 21.7.1 Who uses what, and where they overlap
+
+| View | Dates | Ephemeris | Convention |
+|---|---|---|---|
+| 3D, at the payload's epoch | the payload's `mjd` (1900–2100) | the server's astropy 8.0.2 built-in: `erfa.epv00` (Earth, Sun), `plan94`, `moon98` (§20.2) | geometric heliocentric positions; `geo` without light time |
+| 3D, any other clock date | 1900–2100 | `ephem.js` plan94/moon98, plus the constant anchor (§20.4.1) | the same (geometric) |
+| "Turn back the sky" | 15,000 BCE – 15,000 CE | `ephem.js` plan94/moon98, no anchor | astrometric: geocentric directions with one light-time iteration (planets), the Moon topocentric |
+
+Measured over 1900–2100 (401 dates, against pyerfa's `epv00 + plan94` and `moon98`, i.e. the server's ephemeris):
+
+| Body | Rewind (`solarSystem`) against the server | 3D client (`heliocentric`, unanchored) against the server |
+|---|---|---|
+| Sun | 12.6″ | 7.6″ |
+| Mercury | 54.5″ | 11.3″ |
+| Venus | 59.3″ | 15.1″ |
+| Mars | 38.5″ | 12.0″ |
+| Jupiter | 11.3″ | 1.2″ |
+| Saturn | 8.0″ | 0.7″ |
+| Uranus | 5.3″ | 0.4″ |
+| Moon | 0.0″ | 0.0″ |
+
+- The 3D column is Earth's definition only (`plan94(EMB) − Moon / (1 + EMRAT)` against `epv00`); the anchor removes it
+  at the payload's epoch (§20.4.1).
+- The rewind column is dominated by light time, which the rewind applies and the server does not, and by the
+  rewind's planets being seen from the EMB (§21.3).
+
+**Tolerances for the overlap test** (`ephem.test.mjs`, pyerfa fixtures):
+- 3D client against the server: ≤ **16″** unanchored, and exact at the anchor epoch (existing test);
+- rewind against the server: ≤ **60″**, and ≤ **1″** after removing light time from both;
+- both views at one date in the browser check (§21.16): the planet's direction in the rewind and in the 3D view's Stars
+  scene agree to ≤ 60″, minus the light-time term the card names.
+
+#### 21.7.2 One Earth (Q5)
+
+The rewind's Sun and planets are seen from the Earth–Moon barycentre; the 3D view's from Earth. Phase 6 makes the
+rewind use `bodyHeliocentric(jd, 'earth')` (EMB − Moon / (1 + EMRAT)) too, so both views mean the same point. Measured
+change of the rewind's directions over 15,000 BCE – 13,000 CE (every 3.7 years): Sun ≤ 6.9″, Mercury 12.0″, Venus
+25.0″, Mars 17.3″, Jupiter 1.7″, Saturn 0.9″, Uranus 0.4″; the Moon is unchanged (it is geocentric). An intended
+difference of the harness (§21.9.4). The conventions stay different on purpose: the rewind shows where a body is
+seen (light time), the 3D view where it is (geometric). Each card states its convention.
+
+#### 21.7.3 The valid range, from the measured DE441 errors (Q1)
+
+**Measured envelope** (2026-11-20; `ephem.js` at `e4b6943` against DE441 through Horizons; 5 dates in each 500-year step
+from 9500 BCE to 9500 CE plus 4 near 9999 BCE and 9999 CE, 199 dates per body; the largest error in each bin; bins
+are in Julian years from J2000, so their edges are within a year of the calendar years named):
+
+Geocentric direction (degrees), what the rewind draws:
+
+| Body | 9999–8000 BCE | 8000–6000 | 6000–4000 | 4000–2000 | 2000 BCE–1 CE | 1–1000 CE | 1000–3000 | 3000–4000 | 4000–6000 | 6000–8000 | 8000–9999 CE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Sun | 0.070 | 0.041 | 0.019 | 0.009 | 0.006 | 0.003 | 0.003 | 0.003 | 0.004 | 0.007 | 0.019 |
+| Moon | 1.953 | 1.319 | 0.751 | 0.303 | 0.087 | 0.016 | 0.007 | 0.007 | 0.027 | 0.106 | 0.327 |
+| Mercury | 0.075 | 0.055 | 0.024 | 0.011 | 0.007 | 0.002 | 0.003 | 0.004 | 0.005 | 0.007 | 0.026 |
+| Venus | 0.235 | 0.093 | 0.045 | 0.018 | 0.005 | 0.003 | 0.006 | 0.004 | 0.008 | 0.011 | 0.044 |
+| Mars | 0.297 | 0.123 | 0.212 | 0.032 | 0.008 | 0.006 | 0.010 | 0.011 | 0.014 | 0.028 | 0.163 |
+| Jupiter | 0.913 | 0.776 | 0.505 | 0.212 | 0.071 | 0.018 | 0.014 | 0.005 | 0.039 | 0.095 | 0.255 |
+| Saturn | 1.235 | 0.886 | 0.789 | 0.388 | 0.108 | 0.056 | 0.018 | 0.029 | 0.052 | 0.166 | 0.243 |
+| Uranus | 0.125 | 0.127 | 0.240 | 0.073 | 0.033 | 0.011 | 0.006 | 0.009 | 0.052 | 0.065 | 0.042 |
+
+Heliocentric position (thousands of km), what the 3D view draws (Neptune and Earth included):
+
+| Body | 9999–8000 BCE | 8000–6000 | 6000–4000 | 4000–2000 | 2000 BCE–1 CE | 1–1000 CE | 1000–3000 | 3000–4000 | 4000–6000 | 6000–8000 | 8000–9999 CE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Earth | 187 | 108 | 51 | 22 | 11 | 3 | 3 | 4 | 7 | 16 | 48 |
+| Moon | 190 | 109 | 53 | 23 | 11 | 3 | 3 | 4 | 7 | 15 | 49 |
+| Mercury | 109 | 71 | 36 | 15 | 5 | 2 | 1 | 1 | 3 | 9 | 22 |
+| Venus | 379 | 191 | 108 | 54 | 18 | 5 | 2 | 2 | 6 | 25 | 70 |
+| Mars | 829 | 393 | 335 | 124 | 50 | 13 | 15 | 14 | 30 | 86 | 327 |
+| Jupiter | 10,735 | 8,981 | 6,116 | 2,715 | 763 | 241 | 152 | 64 | 424 | 1,117 | 2,635 |
+| Saturn | 31,163 | 22,445 | 19,351 | 8,951 | 2,295 | 1,179 | 416 | 705 | 1,357 | 4,312 | 5,662 |
+| Uranus | 7,013 | 6,136 | 11,309 | 3,502 | 1,678 | 626 | 332 | 584 | 2,602 | 3,039 | 2,425 |
+| Neptune | 8,458 | 6,744 | 4,889 | 2,005 | 1,564 | 737 | 548 | 660 | 1,427 | 3,025 | 3,089 |
+
+- These agree with `ephem.js`'s header (Sun ≤ 0.07°, Jupiter and Saturn about 1°, the Moon about 2° at 9900 BCE), now
+  as a reproducible measurement. They do not include ΔT, which the rewind already shows as the Moon's arc.
+- Stage 2 repeats the measurement denser (10 dates per 100-year step) with a committed script,
+  `backend/scripts/measure_ephem_de441.py`. It keeps the snapshot pattern: the Horizons responses are committed
+  gzipped under `backend/data/sources/ephem-de441/` with `SOURCE.json`; `--refresh` re-queries Horizons; `--check`
+  recomputes the envelope from the snapshot and the current `ephem.js` (through node) byte for byte. Its output is a
+  generated module, `frontend/js/blink/ephem-envelope.js` (bins, per-body maxima, the measured span, the check date).
+  A change to `ephem.js` (such as §21.7.2) fails `--check` until the envelope is re-measured.
+
+**The rule**, the same in both views (`ephem.js` gains `ephemValidity(jd, body) -> { ok, lo, hi, errDeg, errKm, bin }`):
+- **Valid range = the span where `ephem.js` has been measured against DE441.** Inside it the drawn body is `measured`
+  (ephemeris), and its card states the envelope for the date: "Within 0.91° of JPL DE441 for dates in 9999–8000 BCE
+  (measured 2026-11-20)".
+- **Outside it** the placement is an extrapolation of the theories beyond any comparison: illustrative. As in §20.17
+  item 2: drawn greyed (35 % alpha, desaturated), the label ends in "(extrapolated)", the card's first row is
+  "Position extrapolated beyond its valid range (no comparison with JPL DE441 before \<date\>), illustrative.", and
+  the 3D view's Evidence view hides it. The rewind has no Evidence view.
+- **The span.** Horizons gives 9999 BCE – 9999 CE. DE441 itself runs from 13,201 BCE to 17,191 CE (§21.2), which would
+  cover all of the rewind's future and all but its first 1,800 years. Reading DE441 there needs the 3.3 GB kernel
+  (`de441.bsp`) once, with `jplephem` through `uv run --with jplephem` (a measurement-time tool, not a runtime or
+  project dependency); only the envelope and a small snapshot of the sampled vectors would be committed. That is Q1.
+  - With the kernel: valid 13,201 BCE – 15,000 CE; greyed only before 13,201 BCE.
+  - Without it: valid 9999 BCE – 9999 CE; greyed before 9999 BCE and after 9999 CE (the Vega preset at 13,600 CE
+    would grey the planets).
+- **In the 3D view** the clock's 1900–2100 lies inside either span, so nothing greys; the planet card gains the
+  envelope row (1000–3000 bin), and the Phase 5 text (plan94's 1800–2050 maxima) moves to the card's notes.
+- **The Sun's daylight.** The sky colour and the sky line are computed from the Sun even when it is extrapolated
+  (the Sun's measured envelope is 0.07° at 9999 BCE); the HUD's legend says "Beyond \<date\> the Sun, Moon and planets
+  are extrapolated (greyed)" when it applies.
+- **No demotion inside the range.** A Moon 2° off at 9999 BCE is still drawn as `measured` with that envelope on its
+  card, as asked. The alternative (a `derived`, hollow look where the envelope passes 1°) is listed in Q1.
+
+#### 21.7.4 Cards
+
+- `ephemerisRows({ body, jd, validity })` (pure, registry) returns the shared rows: "Ephemeris · ERFA plan94 (or
+  moon98) in the browser (ephem.js)", the envelope row, and the out-of-range row. The 3D planet card adds them after
+  its Phase 5 position rows; the rewind body card (§21.5.4) starts with them.
+- The convention row: "Seen with light time (where it appears)" in the rewind, "Geometric position (where it is)" in
+  the 3D view.
+
+### 21.8 Constellations, figures, boundaries and sky brightness stay rewind-specific
+
+They are not objects: figures are drawings between stars, boundaries are lines fixed by the IAU, the label points are
+placements, and the sky colour is a model of a view, not a measured thing. Making them object records would add kinds
+with no 3D meaning. They stay in `rewind-sky.json`, which loses only its `dsos` array (§21.9.5). The figure stars keep
+moving through `starmotion.js`.
+
+`build_rewind_sky.py` and `build_rewind_stars.py` change (the `dsos` removal; `rewind-stars.json` unchanged), so both
+adopt the build pattern now:
+- the XHIP rows they read (filtered to V < 7.5, or pm ≥ 400 mas/yr, or any HIP a figure, name or anchor uses) and the four
+  d3-celestial files are snapshotted under `backend/data/sources/rewind-sky/` with `SOURCE.json` (sha256, mirror,
+  retrieval date);
+- `--refresh` re-downloads; a default run builds from the snapshot; `--check` compares both output files byte for byte;
+- the build report prints the counts of §21.3 and the sizes;
+- the first commit of the pattern must reproduce today's two files exactly (apart from nothing): if a fresh XHIP
+  download differs from what built them, the commit stops and reports.
+
+### 21.9 Parity before removal
+
+#### 21.9.1 The harness
+
+Built **first**, against today's code, before any behaviour change (slice P, §21.15):
+- `frontend/dev/rewind-parity.mjs` drives the real `Rewind` class in node with deterministic stubs:
+  - a **recording 2D context** (records `fillText` with text, position, font and colour after the `Labeler`; arcs,
+    ellipses and paths with their points and styles at each `fill`/`stroke`; gradient colour stops), used for the
+    overlay and the trail canvas;
+  - a **sphere stub** with a zenithal equidistant projection, camera and rotation (`setCamera`, `readCamera`,
+    `setRotation`, `world2screen`, `screen2world`, `ok: true`); it needs only to be the same for both builds;
+  - a fixed `Date` (2026-11-20 12:00 UTC), `matchMedia` for reduce motion, text widths of 0.55 × font size per character,
+    and `fetch` from `frontend/data/`.
+- `--record <out>` writes a baseline; `--compare <baseline>` prints differences grouped by item and exits non-zero on
+  any difference that is not in the intended list.
+- `frontend/tests/rewind-parity.test.mjs` runs the comparison under `node --test` against
+  `frontend/tests/fixtures/rewind-parity/baseline-e4b6943.json.gz` and `intended.json`.
+
+#### 21.9.2 Cases
+
+- **Dates:** 15,000 BCE, 10,000 BCE, 3000 BCE, 1 CE, 1900, now (2026-11-20), 2100, 15,000 CE; 20 November (in each
+  era's calendar) at 22:00 local solar time.
+- **Places:** Giza (29.9792° N, 31.1342° E); Sydney (33.8568° S, southern); Fairbanks (64.8378° N, high latitude);
+  McMurdo (77.8463° S, polar south). All four are in `PLACES`.
+- **Two more times** at Giza for every date: 05:30 and 17:30, for twilight and day colours.
+- **Reduce motion:** every case lands at once (the recorded state is the landed sky). **The whirl:** three cases with
+  motion on (Giza: now → 3000 BCE, now → 15,000 BCE, now → 15,000 CE), every 10th frame at 60 Hz from start to landing.
+- **What each case records:**
+  - star directions: every star at the case's epoch (ICRS unit vectors, per date, since they do not depend on the
+    place), and the drawn screen points of the movers and named stars;
+  - the Sun, Moon and planet directions, altitudes and azimuths, the Moon's phase, σ and arc, any eclipse, and the
+    sky line text;
+  - the deep-sky objects: their drawn directions (`_drift`) and screen points;
+  - the labels shown: text, position, font, colour and alpha;
+  - the sky colour: `skyLight` (wash, zenith, horizon, mlim, lineA, dsoA, glow) and the recorded gradient stops;
+  - the HUD (year, line, sky line, legend) and the aria-live summary;
+  - whirl frames: clock JD, epoch, sidereal angle, speed, overlay and trail alphas, trail segment count, HUD year.
+- Size: about 1 MB of JSON, 0.4 MB gzipped (estimated; stage 2 reports it).
+
+#### 21.9.3 Tolerances
+
+| Item | Refactor commits (harness, build pattern, `starmotion.js`, the clock) | After the data and policy commits |
+|---|---|---|
+| Star directions | ≤ 1e-12 rad (expected bit-identical) | the same |
+| Sun, Moon, planet directions | ≤ 1e-12 rad | the one-Earth change (§21.7.2): ≤ 7″ Sun, ≤ 25″ planets, 0 Moon |
+| Altitudes, azimuths, Moon phase | follow from the directions: ≤ 1e-9° | ≤ 0.01°, phase ≤ 1e-4 |
+| Deep-sky directions | ≤ 1e-12 rad | the per-object offsets of §21.5.2, each ± 0.01′ |
+| Labels shown | the same set, positions ≤ 0.5 px, colours exact | listed changes only: the moved deep-sky labels and any label the greedy placement drops or gains because of them (each listed with its cause), "(extrapolated)" suffixes (§21.7.3) |
+| Sky colour | exact (1e-9) | ≤ 1/255 per channel (the Sun moved ≤ 7″) |
+| HUD and aria text | identical | the listed new notes (the extrapolation note, the deep-sky load note) |
+| Whirl frames | start and end exact; mid-whirl epoch ≤ 0.03 yr (TT against UT, §21.4) and the drawn points it moves ≤ 0.5 px | the same |
+
+There are **no unexplained differences**: the comparison fails on anything not in `intended.json`, and every entry
+there names the item, the key (object, label, case), the largest size allowed and the reason.
+
+#### 21.9.4 Intended differences
+
+1. Deep-sky positions from the records (§21.5.2): the table's offsets, largest the Coalsack 67.7′, the Beehive 19.4′,
+   the Hyades 12.9′ and ω Centauri 10.5′; with the label knock-on effects listed per case.
+2. The Double Cluster's marker moves 0.8′ to NGC 869's HR24 centre.
+3. The one Earth (§21.7.2).
+4. Greyed bodies and "(extrapolated)" labels outside the valid range: before 13,201 BCE (or before 9999 BCE and after
+   9999 CE, by Q1), so the 15,000 BCE cases (and, by Q1, the 15,000 CE ones and the 10,000 BCE ones, which lie before
+   9999 BCE).
+5. The footer's Gaia credit in rewind mode (DOM, outside the canvas; checked in the browser).
+6. The mid-whirl TT/UT epoch difference (§21.4).
+
+#### 21.9.5 Removal, in a separate commit, after parity passes
+
+- `rewind-sky.json`'s `dsos` array, and `MESSIER`, `ANCHOR` (to the id table), `EXTRA_DSO` in `build_rewind_sky.py`;
+  the anchor stars stay in `rewind-stars.json` (both have V < 5), so `extraStars` is unchanged.
+- `skytime.makeStar`/`starAt` (now in `starmotion.js`) and the `skytime.js` header's star notes; `contextStars`'s own
+  distance code.
+- The rewind's UT lerp and its now-unused fields; `rewind.js`'s private deep-sky parsing (`_ingestSky`'s `dsos`).
+- Each removal is a pure deletion with both suites, the harness and every `--check` green before and after.
+
+#### 21.9.6 Visual check
+
+Side by side, the old build (`e4b6943` in a git worktree on its own port) and the new, in a headed Chromium at
+1280 × 800: Giza 3000 BCE 22:00, Sydney 1 CE 22:00, Fairbanks 15,000 CE 22:00, Giza 2026 17:30 (twilight), and the
+whirl Giza now → 3000 BCE at 25 %, 50 % and 75 % of the spin. Screenshots go in the implementation notes.
+
+### 21.10 Failures
+
+| What fails | Today | After Phase 6 |
+|---|---|---|
+| `rewind-stars.json` | the sky turns; no star motion, names or trails; one note | the same |
+| `rewind-sky.json` (constellations) | five asterisms; **no deep-sky objects**; note | five asterisms; **deep-sky objects still drawn** (they come from their own file); the same note |
+| `rewind-dso.json` (new) | — | no deep-sky objects or their cards; note "The galaxies and nebulae could not be loaded."; the footer stays hidden |
+| A record id in the table missing from the subset (cannot happen after `--check`; defended anyway) | — | that entry is skipped and counted in the console, not drawn from stale data |
+| `ephem-envelope.js` | — | a module import: if it fails the page fails as for any module (it is code, not data) |
+| The 3D Gaia payload without the new columns (an old cache or a mirror missing a column) | — | stars drawn fixed, as in Phase 5; the card says "motion not available"; no error |
+
+### 21.11 Small bodies in "Turn back the sky" (Q6)
+
+Recommended: **not shown**. SkyBoT is a cone search (the 3D view's cones are a few degrees across), serves 1890–2060
+only, and its states stay valid for about a year (§20.5), so a whole-sky horizon view near the present would need many
+cone queries per date for a few bodies bright enough to see by eye. Nothing is built for this in Phase 6.
+
+### 21.12 Data and schema changes
+
+- No change to `space-maps.objects/1` or to any dataset. `position.pm` stays reserved (§2.2); Phase 6 only reads it if
+  present.
+- New file formats: `space-maps.rewind-dso/1` (§21.5.3), `frontend/js/blink/ephem-envelope.js` (generated).
+- `/api/scene3d`'s `stars.fields` gains `pmra`, `pmdec`, `rv` (a field list, so old clients ignore them); cache key
+  `scene3d-cone-3`.
+- `rewind-sky.json` loses `dsos`.
+
+### 21.13 Evidence and tiers of every new field
+
+| Field or value | Tier | Evidence of the drawn placement |
+|---|---|---|
+| Gaia `pmra`, `pmdec`, `rv`; XHIP pm, RV | `catalogue` | the star's (`measured`) over 1900–2100 |
+| a moved star's position at the clock's date | `catalogue` (straight-line space motion) | `measured` |
+| RV taken as 0 | `inferred` (stated on the card) | unchanged |
+| the anchored drift of the Pleiades and the Hyades in the rewind | `inferred` | the cluster record's (`measured`) |
+| 47 Tucanae's label position (OpenNGC) | `catalogue` | no record; the card says so |
+| the DE441 envelope on a card | `measured` (a comparison with DE441) | — |
+| a body inside the valid range | — | `measured` (ephemeris) |
+| a body outside the valid range | — | `illustrative`: greyed, "(extrapolated)", hidden in the 3D Evidence view |
+| deep-sky records in the rewind | their own tiers | their own evidence, shown on the card |
+
+### 21.14 Test plan
+
+**Backend** (`uv run pytest`, offline):
+- `test_scene3d.py`: `_record` keeps pmra, pmdec and RV (null when missing); `STAR_FIELDS` order; cache key
+  `scene3d-cone-3`; the three ADQL strings select the columns (ARI from `gaiadr3`).
+- `test_build_rewind_dso.py` (new): the table's 32 entries; every id resolves; the 47 Tucanae entry's OpenNGC position;
+  byte-identical rebuild and `--check`; a changed input record makes `--check` fail naming it; size under 150 KB.
+- `test_build_rewind_sky.py` (new): the snapshot pattern; `--check` on both rewind files; no `dsos` after the cleanup.
+- `test_measure_ephem_de441.py` (new): the envelope from the committed snapshot; `--check` byte-identical.
+- `test_objects_api.py`: `--check` on all datasets (now 11: the 7, `rewind-dso`, `rewind-stars`, `rewind-sky`,
+  `ephem-de441`).
+
+**Frontend** (`node --test frontend/tests/*.test.mjs`):
+- `rewind-parity.test.mjs` (new, §21.9).
+- `starmotion.test.mjs` (new): the baseline fixture to 1e-12; `makeStarAt` equals `makeStar` with plx = 1000/r;
+  `starPosAt` against `starAt` within 1″ over 1900–2100; Barnard's star moves 20.1′ from 2016 to 1900 (116 yr ×
+  10.39″/yr, §20.7) and 14.5′ to 2100; a star without RV keeps its distance.
+- `ephem.test.mjs`: the overlap tolerances of §21.7.1; `ephemValidity` inside and outside the span; the one-Earth
+  bounds of §21.7.2; the envelope module's bins cover the span without gaps.
+- `rewind.test.mjs` (new, pure parts): the clock tween's progress and UT conversion; `rewindCredits`; the click
+  hit test; the id table's ingest (anchored drift, the two-record entry, the record-less entry).
+- `scene3d-registry.test.mjs`: `starMotionRow` (all three texts), `ephemerisRows` (inside, outside, both conventions),
+  the rewind's row filter.
+- `scene3d-objects.test.mjs` / `scene3d-renderer.test.mjs`: moved star positions for picking; the host offsets
+  refreshed after one sky-year; the vertex layout with velocity.
+- `timebar.test.mjs`: the new stars status text.
+
+### 21.15 Work split
+
+One owner of `rewind.js` (slice R1) and one of `scene3d.js` (slice R3) at a time.
+
+| Slice | Model | Files (exclusive) | Depends on |
+|---|---|---|---|
+| P. Parity harness | Sonnet | `frontend/dev/rewind-parity.mjs`, `frontend/dev/stubs/*`, `frontend/tests/rewind-parity.test.mjs`, `frontend/tests/fixtures/rewind-parity/**` | this design |
+| X1. Rewind builds onto the pattern | Sonnet, after P | `build_rewind_stars.py`, `build_rewind_sky.py`, `backend/data/sources/rewind-sky/**`, `test_build_rewind_sky.py` | P |
+| M. `starmotion.js` | Sonnet, after P | `starmotion.js` (new), `skytime.js` (re-exports), `scene3d-math.js` (`contextStars`), `starmotion.test.mjs`, `skytime.test.mjs`, the baseline fixture | P |
+| E. Ephemeris policy | Sonnet, after P | `ephem.js`, `ephem-envelope.js` (generated), `backend/scripts/measure_ephem_de441.py`, `backend/data/sources/ephem-de441/**`, `ephem.test.mjs`, `test_measure_ephem_de441.py` | P, Q1 |
+| D. Deep-sky subset | Sonnet, after P | `build_rewind_dso.py`, `backend/data/sources/rewind-dso/**`, `frontend/data/rewind-dso.json`, its `LICENSE.md`, `test_build_rewind_dso.py`, `LICENSE` | P |
+| B. Gaia motion payload | Sonnet, in parallel with D, E | `scene3d.py`, `config.py`, `frontend/dev/mock_server.py`, `test_scene3d.py` | this design |
+| G. Shared rows | Sonnet, after M, E | `scene3d-registry.js` (`starMotionRow`, `ephemerisRows`, the rewind filter), `scene3d-registry.test.mjs` | M, E |
+| R1. The rewind | Sonnet, after M, E, D, G | `rewind.js`, `rewind-sky.js`, `rewind-card.js` (new), `app.js` (footer), `index.html`, `blink.css`, `rewind.test.mjs`, the harness's `intended.json` | M, E, D, G |
+| R3. The 3D view | Sonnet, after M, B, G (in parallel with R1) | `scene3d.js`, `scene3d-shaders.js`, `scene3d-main.js`, `scene3d-objects.js` (host offsets), `timebar.js`, their tests | M, B, G |
+| X2. Cleanup | Sonnet, after R1, R3 and parity | `rewind-sky.json`, `build_rewind_sky.py`, `skytime.js`, `rewind.js` (deletions only) | all |
+| D0. Docs, integration, review | me | this doc, `docs/technical-reference.md`, `README.md`, `test_objects_api.py` | all |
+
+After each slice Haiku runs both suites, the parity harness, and `--check` on every dataset.
+
+Commits: (1) this design; (2) the harness and baseline; (3) the rewind builds on the pattern; (4) `starmotion.js`;
+(5) the ephemeris envelope, validity and one Earth; (6) the deep-sky subset; (7) the Gaia motion payload; (8) the shared
+rows; (9) the rewind on the shared records and clock; (10) the 3D star motion; (11) the cleanup; (12) docs.
+
+### 21.16 Browser checks
+
+On a fresh backend (or `--reload`), in a headed Chromium on the real display, foreground tab, real-time rAF, 1280 × 800
+unless stated; the old build is `e4b6943` on its own port, sharing the cache only where stated.
+- **"Turn back the sky" at the parity dates and places,** old against new (the screenshots of §21.9.6), including the
+  whirl, and reduce motion (instant landing, instant exit).
+- **A deep-sky object's card:** the Pleiades (Data row with the Gaia credit, the drift row, "Members (HR24) 1,721"),
+  M31 (CF4 Cepheid distance, OpenNGC and EDD on the Data row), 47 Tucanae (no record); the footer's Gaia credit
+  appears with the Pleiades up and hides with only galaxies up; at 375, 768 and 1280 px.
+- **ω Centauri and the Beehive:** the record markers on the SPHEREx map's visible clusters (the two largest offsets
+  among clusters).
+- **The 3D view with moving stars:**
+  - Barnard's star (269.4485, 4.7394) at 1900, 2016 and 2100: about 20′ from 2016 to 1900 and 14.5′ to 2100 (§20.7),
+    measured on screen against its neighbours;
+  - its card's epoch and motion rows (pm and RV applied), and a star without an RV ("taken as 0");
+  - the Evidence view (stars unchanged in style, still moving);
+  - a **cold-cone load** at the Pleiades and the Galactic Centre after the cache bump, against Phase 5's warm and cold
+    times; and the warm load after.
+- **A planet where the ephemerides overlap:** Jupiter on a 2026 date, its direction in the rewind (Giza) and in the 3D
+  Stars scene, within the 60″ of §21.7.1 (the card names the light-time part).
+- **The valid range at 12,000 BCE** in the rewind: with Q1's kernel measurement, the bodies are drawn normally with
+  envelopes on their cards (Moon, Saturn in degrees); without it, greyed and "(extrapolated)", with the HUD note; and
+  15,000 BCE greyed either way.
+- **The home sky view** after the change: the place markers, the drift and the click-to-fly, unchanged.
+- **Frame time:** the rewind's whirl (Giza now → 3000 BCE) and landed view, before and after; the 3D view with the clock
+  at 10 yr/s at the Pleiades and the Galactic Centre, before (Phase 5, fixed stars) and after; rAF mean and p95, and
+  `scene.perf` for the 3D motion cost.
+- **Regression:** TRAPPIST-1 with the clock playing; the Pleiades with its member highlight (rings on moving stars);
+  Orion; the Galactic Centre; M31; M87 with the flight into `cosmos`; the LMC across 60/40 kpc; the home sky view; the
+  rewind to 3000 BCE and back; the Evidence view at each 3D patch; the credits lines at 375, 768 and 1280 px.
+
+### 21.17 Open questions
+
+1. **The ephemeris's valid range.**
+   - *Recommendation:* measure the rest of DE441's span once with the 3.3 GB `de441.bsp` (`uv run --with jplephem`,
+     downloaded to a scratch directory, nothing committed but the sampled vectors and the envelope), so the valid range
+     is **13,201 BCE – 15,000 CE** in both views. Inside it bodies are `measured` with the envelope on the card; only
+     the first 1,800 years of the rewind's range grey out.
+   - Alternatives: the Horizons span only (9999 BCE – 9999 CE; 12,000 BCE and 10,000–15,000 CE grey out); or, inside
+     the range, a `derived` (hollow, dashed) look where the envelope passes 1° (the Moon somewhere in 8000–6000 BCE,
+     Saturn and the planets' worst case before 8000 BCE).
+2. **The 3D clock range.**
+   - *Recommendation:* stays 1900–2100, now with moving stars (§21.6.4).
+   - Alternative: ±15,000 years, which also needs faster rates, BCE dates in the time bar, HR24's mean motions (a new
+     snapshot), and accepts stars leaving their cones.
+3. **The deep-sky mapping** (§21.5.2).
+   - *Recommendation:* the table as written: hand-list names kept; 47 Tucanae as a record-less label at OpenNGC's
+     position; the Double Cluster on NGC 869 with NGC 884 on its card; the Coalsack on OpenNGC's C099 (67.7′ away); the
+     Eagle Nebula on IC 4703; the Galactic centre on Sgr A*; HR24's centroids accepted (Beehive 19.4′, Hyades 12.9′, ω
+     Cen 10.5′, each checked on the map); the Pleiades and the Hyades keep riding with their member stars.
+   - Alternatives: the records' own names; a re-snapshot of HR24 with mean proper motions and RVs so every cluster
+     moves by its own motion in both views (an `hr23-clusters` data change).
+4. **Cards and the footer in the rewind** (new UI).
+   - *Recommendation:* a click-or-tap card for deep-sky objects, the Sun, the Moon and the planets, built from the
+     registry's card model; the footer shows the Gaia credit while a Gaia-derived record is drawn.
+   - Alternatives: hover tooltips (name, evidence and the Data row only; no touch support); or credits always shown in
+     rewind mode.
+5. **One Earth, and the two conventions.**
+   - *Recommendation:* the rewind sees from Earth, not the EMB (≤ 25″), and keeps light time; the 3D view stays
+     geometric; the overlap test holds them to 60″ and 16″ against the server (§21.7.1).
+   - Alternative: keep the EMB in the rewind (no change there; the views then differ by up to 25″ more).
+6. **Small bodies in the rewind.**
+   - *Recommendation:* none (§21.11).
+   - Alternative: the five dwarf planets and the brightest asteroids from fixed osculating elements near the present,
+     greyed beyond a window: new scope, not designed here.

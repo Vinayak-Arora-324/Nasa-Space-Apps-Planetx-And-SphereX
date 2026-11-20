@@ -1,0 +1,101 @@
+{
+ "_fixture": "IMCCE SkyBoT conesearch.php, -mime=json -output=all -observer=500, -ep=2461000.5, fetched 2026-11-20. Objects 1-2 from cone (150,10) r 0.5 deg; object 3 (a comet) from cone (60,20) r 10 deg; object 4 had its position, velocity and ref_epoch removed by hand. ssodnet links dropped.",
+ "data": [
+  {
+   "Num": 425642,
+   "Name": "2010 VJ175",
+   "RA (hms)": "09 59 58.9552",
+   "DEC (dms)": "+09 59 47.765",
+   "Class": "MB>Inner",
+   "VMag (mag)": 23.5,
+   "Err (arcsec)": 0.011,
+   "d (arcsec)": 19.695,
+   "dRA (arcsec/h)": 26.3277,
+   "dDEC (arcsec/h)": -10.6682,
+   "dg (ua)": 2.4570168174,
+   "dh (ua)": 2.64792348349,
+   "Phase (deg)": 21.91,
+   "SunElong (deg)": 90.02,
+   "position (au)": {
+    "x": -1.575878951,
+    "y": 1.985450153,
+    "z": 0.762556773
+   },
+   "velocity (au/d)": {
+    "x": -0.008847251,
+    "y": -0.004040727,
+    "z": -0.001560848
+   },
+   "ref_epoch": 2461000
+  },
+  {
+   "Num": 347613,
+   "Name": "2001 RJ150",
+   "RA (hms)": "09 59 57.3945",
+   "DEC (dms)": "+10 03 44.143",
+   "Class": "MB>Inner",
+   "VMag (mag)": 22.7,
+   "Err (arcsec)": 0.002,
+   "d (arcsec)": 227.423,
+   "dRA (arcsec/h)": 29.9095,
+   "dDEC (arcsec/h)": -9.7998,
+   "dg (ua)": 2.33583081876,
+   "dh (ua)": 2.53634741949,
+   "Phase (deg)": 22.93,
+   "SunElong (deg)": 89.99,
+   "position (au)": {
+    "x": -1.472109859,
+    "y": 1.926175746,
+    "z": 0.74402821
+   },
+   "velocity (au/d)": {
+    "x": -0.00859396,
+    "y": -0.004882852,
+    "z": -0.001295909
+   },
+   "ref_epoch": 2461000
+  },
+  {
+   "Name": "C/2022 JK5",
+   "RA (hms)": "03 53 54.5204",
+   "DEC (dms)": "+20 33 32.126",
+   "Class": "Comet",
+   "VMag (mag)": 19.3,
+   "Err (arcsec)": 0.37,
+   "d (arcsec)": 5523.289,
+   "dRA (arcsec/h)": -15.1135,
+   "dDEC (arcsec/h)": -1.5831,
+   "dg (ua)": 7.35059369177,
+   "dh (ua)": 8.33799122623,
+   "Phase (deg)": 0.25,
+   "SunElong (deg)": 2.14,
+   "position (au)": {
+    "x": 4.114003485,
+    "y": 6.637229429,
+    "z": 2.914576453
+   },
+   "velocity (au/d)": {
+    "x": -0.000732676,
+    "y": 0.00665621,
+    "z": 0.004402789
+   },
+   "ref_epoch": 2461000
+  },
+  {
+   "Num": 185219,
+   "Name": "2006 TO61",
+   "RA (hms)": "09 59 52.3502",
+   "DEC (dms)": "+10 03 27.175",
+   "Class": "MB>Middle",
+   "VMag (mag)": 21.9,
+   "Err (arcsec)": 0.012,
+   "d (arcsec)": 235.985,
+   "dRA (arcsec/h)": 26.0046,
+   "dDEC (arcsec/h)": -11.4429,
+   "dg (ua)": 2.71864165026,
+   "dh (ua)": 2.8930546182,
+   "Phase (deg)": 19.97,
+   "SunElong (deg)": 89.97
+  }
+ ]
+}

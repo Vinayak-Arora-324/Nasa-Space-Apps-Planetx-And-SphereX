@@ -286,7 +286,30 @@ def parse_skybot(text: str) -> list[dict]:
             "err_arcsec": _num(r, "Err (arcsec)"),
             # geocentric (dg) and heliocentric (dh) distances, AU (`-output=all`)
             "dg_au": _num(r, "dg (ua)"), "dh_au": _num(r, "dh (ua)"),
+            # heliocentric state vector (equatorial, ICRF axes) at ref_epoch, a JD on a 10-day grid
+            # that can be up to ~10 days before the requested epoch (Phase 5, 20.2); None when absent
+            "pos_au": _vec3(r.get("position (au)")), "vel_au_d": _vec3(r.get("velocity (au/d)")),
+            "ref_epoch_jd": _num(r, "ref_epoch"),
         })
+    return out
+
+
+def _vec3(v) -> list[float] | None:
+    """{"x","y","z"} -> [x, y, z] when all three are finite numbers, else None (never a failure)."""
+    if not isinstance(v, dict):
+        return None
+    out = []
+    for k in ("x", "y", "z"):
+        x = v.get(k)
+        if isinstance(x, bool) or not isinstance(x, (int, float, str)):
+            return None
+        try:
+            x = float(x)
+        except ValueError:
+            return None
+        if not math.isfinite(x):
+            return None
+        out.append(x)
     return out
 
 
@@ -298,8 +321,9 @@ async def _skybot_fetch(ra: float, dec: float, radius: float, jd: float) -> str:
 
 async def skybot_cone(ra: float, dec: float, radius: float, jd: float) -> list[dict]:
     """Cone search at one epoch (disk-cached).  Raises on service failure."""
-    # skybot-3: entries cached before failed computations (flag -1) were rejected may hold a false empty sky
-    key = cache.key_hash("skybot-3", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
+    # skybot-4: entries cached before Phase 5 lack the state vectors (position, velocity, ref_epoch);
+    # skybot-3 added that entries cached before failed computations (flag -1) were rejected may hold a false empty sky
+    key = cache.key_hash("skybot-4", f"{ra:.4f}", f"{dec:.4f}", f"{radius:.3f}", f"{jd:.3f}")
     hit = cache.get_json("skybot", key, ttl=SKYBOT_TTL_S)
     if hit is not None:
         return hit

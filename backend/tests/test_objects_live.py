@@ -266,3 +266,60 @@ def test_ephem_source_definition():
     src = objects_live.sources()[0]
     assert src.id == "ephem" and src.precedence == 10 and src.kinds == ("sun", "planet", "moon")
     assert not src.cone  # the Sun and planets are always all returned
+
+
+# --- position.osc from SkyBoT's state vector (Phase 5, 20.4.2 and 20.11) -----------------------
+
+def _vec_obj(**kw):
+    d = dict(pos_au=[-1.575878951, 1.985450153, 0.762556773],
+             vel_au_d=[-0.008847251, -0.004040727, -0.001560848], ref_epoch_jd=2460000.0)
+    d.update(kw)  # MJD 60000.0 is JD 2460000.5, so the reference epoch is 0.5 d before it
+    return _obj(**d)
+
+
+def test_skybot_record_writes_osc():
+    r = _rec(_vec_obj(number=425642, name="2010 VJ175", **{"class": "MB>Inner"}))
+    assert objects.validate_record(r) == []
+    assert r["position"]["osc"] == {
+        "epoch_jd": 2460000.0, "xyz_au": [-1.575878951, 1.985450153, 0.762556773],
+        "vxyz_au_d": [-0.008847251, -0.004040727, -0.001560848], "frame": "icrf-heliocentric",
+        "src": "IMCCE SkyBoT state vector at its reference epoch", "tier": "catalogue"}
+
+
+def test_skybot_osc_rounding_is_deterministic():
+    r = _rec(_vec_obj(name="X", pos_au=[1.23456789012345, 0.0, 0.0],
+                      vel_au_d=[0.0123456789012345, 0.0, 0.0]))
+    assert objects.validate_record(r) == []
+    assert r["position"]["osc"]["xyz_au"][0] == 1.23456789
+    assert r["position"]["osc"]["vxyz_au_d"][0] == 0.012345678901
+
+
+@pytest.mark.parametrize("kw", [
+    {}, {"pos_au": None}, {"vel_au_d": None}, {"ref_epoch_jd": None},
+    {"pos_au": [1.0, float("nan"), 0.0]}, {"vel_au_d": [1.0, 2.0]},
+])
+def test_skybot_record_without_complete_vectors_has_no_osc(kw):
+    o = _obj(name="X", **{"class": "MB>Inner"})
+    if kw:
+        o = _vec_obj(name="X", **{"class": "MB>Inner"})
+        o.update(kw)
+    r = _rec(o)
+    assert "osc" not in r["position"] and objects.validate_record(r) == []
+
+
+def test_osc_does_not_change_xyz_or_geo():
+    plain = _rec(_obj(number=2, name="Pallas", ra=83.8, dec=-5.4, dg_au=1.5))
+    withv = _rec(_vec_obj(number=2, name="Pallas", ra=83.8, dec=-5.4, dg_au=1.5))
+    withv["position"].pop("osc")
+    assert withv == plain
+
+
+def test_skybot_fetch_passes_the_vectors_through(monkeypatch):
+    monkeypatch.setattr(movers, "skybot_cone", _fake_skybot([
+        _vec_obj(number=1, name="Ceres", **{"class": "MB>Outer"}),
+        _obj(name="2019 YB21", **{"class": "MB>Middle"}),
+    ]))
+    src = objects_live.sources()[1]
+    recs = asyncio.run(src.fetch(objects.Query(10.0, 5.0, 2.0, MJD, ("asteroid",), 100)))
+    assert "osc" in recs[0]["position"] and "osc" not in recs[1]["position"]
+    assert recs[0]["position"]["osc"]["epoch_jd"] == 2460000.0

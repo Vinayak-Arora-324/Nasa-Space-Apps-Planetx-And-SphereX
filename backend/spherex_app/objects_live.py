@@ -32,6 +32,7 @@ from . import movers
 from .objects import Query, Source, quantity, record
 
 SKYBOT_JD_OFFSET = 2400000.5
+OSC_VEL_DP = 12  # AU/d: keeps ~1e-12 AU/d of SkyBoT's state vector
 
 # (display name, astropy body id); Earth is returned separately, Sun is the origin
 PLANETS = (
@@ -56,6 +57,7 @@ EPHEM_POSITION_SRC = "astropy built-in ephemeris (ERFA plan94/epv00)"
 RADIUS_SRC = "IAU WGCCRE 2015 equatorial radius"
 SUN_RADIUS_SRC = "IAU 2015 nominal solar radius"
 SKYBOT_SRC = "IMCCE SkyBoT"
+SKYBOT_OSC_SRC = "IMCCE SkyBoT state vector at its reference epoch"
 SKYBOT_POSITION_SRC = ("IMCCE SkyBoT, geocentric RA/Dec and distance; "
                        "heliocentric xyz = Earth + dg·û (light-time ignored)")
 
@@ -220,6 +222,20 @@ def comet_designation(name: str) -> str:
     return m.group(1) if m else name.split(" (")[0].strip()
 
 
+def _skybot_osc(obj: dict) -> dict | None:
+    """`position.osc` from a parsed SkyBoT object's state vector, or None unless the position, the
+    velocity and the reference epoch are all present and finite (heliocentric, ICRF axes, 20.4.2)."""
+    pos, vel, ep = obj.get("pos_au"), obj.get("vel_au_d"), _f(obj.get("ref_epoch_jd"))
+    if ep is None:
+        return None
+    for v in (pos, vel):
+        if not (isinstance(v, (list, tuple)) and len(v) == 3 and all(_f(c) is not None for c in v)):
+            return None
+    return {"epoch_jd": ep, "xyz_au": [round(float(c), XYZ_DP) for c in pos],
+            "vxyz_au_d": [round(float(c), OSC_VEL_DP) for c in vel],
+            "frame": "icrf-heliocentric", "src": SKYBOT_OSC_SRC, "tier": "catalogue"}
+
+
 def skybot_record(obj: dict, body: dict, mjd: float, jd: float) -> dict | None:
     """One record for a SkyBoT object `obj` (movers.parse_skybot) and its `bodies_xyz` row `body`.
     None when the object has no usable name or number."""
@@ -256,6 +272,9 @@ def skybot_record(obj: dict, body: dict, mjd: float, jd: float) -> dict | None:
                 "dist_au": body["dg_au"]},
         "method": "orbit-propagation", "src": SKYBOT_POSITION_SRC, "tier": "catalogue",
     }
+    osc = _skybot_osc(obj)
+    if osc is not None:
+        position["osc"] = osc
     prov = dict(SKYBOT_PROVENANCE, query={"epoch_jd": jd, "observer": "500"})
     return record(
         id=rid, kind=kind, name=name, designations=designations, host="ss:sun", parent="ss:sun",

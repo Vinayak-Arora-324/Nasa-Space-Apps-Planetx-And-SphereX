@@ -91,6 +91,11 @@ PREFER_RECORD_IDS = (
 # orbit. Sky position, epoch, Gaia identity and photometry are never replaceable. Each name maps to where the
 # record holds the replacing value.
 PREFER_RECORD_FIELDS = ("dist", "mass", "radius", "teff")
+OSC_FRAMES = ("icrf-heliocentric",)
+OSC_MAX_SPEED_AU_D = 0.2     # |v| of a bound or unbound small body is far below this (Mercury is ~0.03)
+OSC_MAX_EPOCH_GAP_D = 60.0   # |epoch_jd - (mjd + 2400000.5)|
+ASSET_KEYS = ("members",)
+_ASSET_PATH_RE = re.compile(r"^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+.\-]+)*$")
 POSITION_MODELS = ("fixed", "state", "orbit")
 DIST_UNITS = ("pc", "Mpc")
 
@@ -243,6 +248,8 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
                 out.append("position.geo: must have numeric ra, dec and dist_au")
         if pos.get("method") not in STATE_METHODS:
             out.append(f"position.method: must be one of {', '.join(STATE_METHODS)}")
+        if pos.get("osc") is not None:
+            _check_osc(pos, out)
         return pos.get("tier") if pos.get("tier") in TIERS else None
     # orbit
     hr = pos.get("host_radec")
@@ -281,6 +288,55 @@ def _check_position(pos: Any, host: Any, out: list[str]) -> str | None:
             out.append(f"position.tier: {pos['tier']!r} is stronger than the weakest orbital element "
                        f"({weakest!r})")
     return pos.get("tier") if pos.get("tier") in TIERS else None
+
+
+def _check_osc(pos: dict, out: list[str]) -> None:
+    """`position.osc` of a state position (Phase 5, 20.11): a heliocentric state vector at its own epoch."""
+    osc = pos["osc"]
+    if pos.get("method") != "orbit-propagation":
+        out.append("position.osc: allowed only with method 'orbit-propagation'")
+    if not isinstance(osc, dict):
+        out.append("position.osc: must be an object")
+        return
+    ep = osc.get("epoch_jd")
+    if not _is_num(ep):
+        out.append("position.osc.epoch_jd: must be a finite number")
+    elif _is_num(pos.get("mjd")) and abs(ep - (pos["mjd"] + 2400000.5)) > OSC_MAX_EPOCH_GAP_D:
+        out.append(f"position.osc.epoch_jd: must be within {OSC_MAX_EPOCH_GAP_D:g} days of the position's mjd")
+    ok = True
+    for k in ("xyz_au", "vxyz_au_d"):
+        v = osc.get(k)
+        if not (isinstance(v, list) and len(v) == 3 and all(_is_num(c) for c in v)):
+            out.append(f"position.osc.{k}: must be a list of three finite numbers")
+            ok = False
+    if ok and math.sqrt(sum(c * c for c in osc["vxyz_au_d"])) >= OSC_MAX_SPEED_AU_D:
+        out.append(f"position.osc.vxyz_au_d: speed must be below {OSC_MAX_SPEED_AU_D:g} AU/d")
+    if osc.get("frame") not in OSC_FRAMES:
+        out.append(f"position.osc.frame: must be one of {', '.join(OSC_FRAMES)}")
+    if not isinstance(osc.get("src"), str) or not osc.get("src"):
+        out.append("position.osc.src: required, non-empty string")
+    tier = osc.get("tier")
+    if tier not in TIERS:
+        out.append(f"position.osc.tier: must be one of {', '.join(TIERS)}")
+    elif pos.get("tier") in TIERS and _TIER_RANK[tier] > _TIER_RANK[pos["tier"]]:
+        out.append(f"position.osc.tier: {tier!r} is stronger than the position's tier {pos['tier']!r}")
+
+
+def _check_assets(rec: dict, out: list[str]) -> None:
+    """`assets`: known key -> path relative to the record's dataset folder (static sources only)."""
+    assets = rec.get("assets")
+    if assets is None:
+        return
+    if not isinstance(assets, dict):
+        out.append("assets: must be an object")
+        return
+    for k, path in assets.items():
+        if k not in ASSET_KEYS:
+            out.append(f"assets.{k}: unknown key (known: {', '.join(ASSET_KEYS)})")
+        elif not (isinstance(path, str) and _ASSET_PATH_RE.match(path)
+                  and ".." not in path.split("/")):
+            out.append(f"assets.{k}: must be a relative path of letters, digits, '_', '+', '-', '.' "
+                       f"and '/', with no '..' segment and no leading '/'")
 
 
 def _check_direction_only(rec: dict, out: list[str]) -> None:
@@ -440,6 +496,7 @@ def _validate(rec: Any) -> list[str]:
     gov = _check_position(rec.get("position"), rec.get("host"), out)
     _check_direction_only(rec, out)
     _check_render_style(rec, out)
+    _check_assets(rec, out)
     _check_alt_distances(rec, out)
     _check_prefer_record(rec, out)
 

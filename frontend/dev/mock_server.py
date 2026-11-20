@@ -457,6 +457,20 @@ def static_objects(ra, dec, radius, kinds):
         rows.append({"id": "static:" + name, "status": "ok", "ms": 1, "count": n, "dropped": 0, "provenance": prov})
     return out, rows
 
+GAUSS_K = 0.01720209895   # Gaussian gravitational constant; mu = K^2 about the Sun (AU^3/d^2)
+
+def mock_osc(xyz, mjd):
+    """A mock `position.osc`: a circular, prograde orbit about the Sun through xyz (speed sqrt(mu/r), in the
+    plane of xyz and the pole), epoch = the query JD rounded down to a multiple of 10. Made-up, mock tier."""
+    r = math.sqrt(sum(c * c for c in xyz)) or 1.0
+    # v direction = unit(+z x r), in the xy plane
+    vx, vy, vz = (-xyz[1], xyz[0], 0.0)
+    n = math.sqrt(vx * vx + vy * vy) or 1.0
+    sp = GAUSS_K / math.sqrt(r)
+    return {"epoch_jd": float(math.floor((mjd + 2400000.5) / 10.0) * 10), "xyz_au": list(xyz),
+            "vxyz_au_d": [round(vx / n * sp, 12), round(vy / n * sp, 12), round(vz / n * sp, 12)],
+            "frame": "icrf-heliocentric", "src": "mock SkyBoT state vector", "tier": "catalogue"}
+
 def objects_payload(ra, dec, radius, mjd, kinds, limit):
     earth, planets, bodies = mock_solar(ra, dec, radius, mjd)
     ephem_prov = dict(MOCK_PROV, source="ephem")
@@ -495,6 +509,7 @@ def objects_payload(ra, dec, radius, mjd, kinds, limit):
         pos = state(xyz, False, "orbit-propagation", "mock SkyBoT", "catalogue")
         g = _radec(xyz[0] - earth[0], xyz[1] - earth[1], xyz[2] - earth[2])
         pos["geo"] = {"ra": round(g[0], 5), "dec": round(g[1], 5), "dist_au": round(g[2], 6)}
+        pos["osc"] = mock_osc(xyz, mjd)
         rid = "comet:" + b["name"].split(" (")[0] if comet else f"mp:{b['number']}"
         props = {"class": _oq(b["class"], "mock SkyBoT", "catalogue"), "vmag": _oq(b["vmag"], "mock SkyBoT", "catalogue", "mag"),
                  "dist_sun": _oq(b["dh_au"], "mock SkyBoT", "catalogue", "au"), "dist_earth": _oq(b["dg_au"], "mock SkyBoT", "catalogue", "au")}

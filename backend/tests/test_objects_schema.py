@@ -644,3 +644,78 @@ def test_alt_distances_need_a_fixed_position():
     r = load("planet")
     r["alt_distances"] = [_alt()]
     assert any("alt_distances" in p for p in objects.validate_record(r))
+
+
+# --- position.osc and assets (Phase 5, 20.11) ---------------------------------------------------
+
+def _with_osc(**over):
+    r = copy.deepcopy(load("asteroid"))
+    osc = {"epoch_jd": 2460990.0, "xyz_au": [-2.1, 1.4, 0.6], "vxyz_au_d": [-0.008, -0.004, -0.002],
+           "frame": "icrf-heliocentric", "src": "IMCCE SkyBoT state vector at its reference epoch",
+           "tier": "catalogue"}
+    osc.update(over)
+    r["position"]["osc"] = osc   # asteroid example: mjd 61000.0 (JD 2461000.5), orbit-propagation
+    return r
+
+
+def test_osc_on_a_skybot_state_is_accepted():
+    assert objects.validate_record(_with_osc(epoch_jd=2461000.0)) == []
+    assert objects.validate_record(_with_osc(epoch_jd=2461000.5 + 60, tier="inferred")) == []
+
+
+@pytest.mark.parametrize("label,over,text", [
+    ("non-finite number", {"xyz_au": [1.0, float("nan"), 0.0]}, "osc.xyz_au"),
+    ("infinite velocity", {"vxyz_au_d": [float("inf"), 0.0, 0.0]}, "osc.vxyz_au_d"),
+    ("not a 3-vector", {"vxyz_au_d": [0.0, 0.0]}, "osc.vxyz_au_d"),
+    ("speed of 1 AU/d", {"vxyz_au_d": [1.0, 0.0, 0.0]}, "speed must be below"),
+    ("epoch 100 days from mjd", {"epoch_jd": 2461100.5}, "within 60 days"),
+    ("epoch not a number", {"epoch_jd": "2461000"}, "osc.epoch_jd"),
+    ("unknown frame", {"frame": "ecliptic-heliocentric"}, "osc.frame"),
+    ("missing src", {"src": ""}, "osc.src"),
+    ("unknown tier", {"tier": "great"}, "osc.tier"),
+])
+def test_bad_osc_is_rejected(label, over, text):
+    probs = objects.validate_record(_with_osc(**over))
+    assert any(text in p for p in probs), (label, probs)
+
+
+def test_osc_tier_may_not_be_stronger_than_the_position():
+    r = _with_osc(tier="measured")
+    r["position"]["tier"] = "inferred"
+    r["evidence"] = "derived"
+    assert any("osc.tier" in p and "stronger" in p for p in objects.validate_record(r))
+    r["position"]["tier"] = "illustrative"
+    r["evidence"] = "illustrative"
+    assert any("osc.tier" in p for p in objects.validate_record(r))
+
+
+def test_osc_needs_orbit_propagation():
+    r = _with_osc()
+    r["position"]["method"] = "ephemeris"
+    assert any("osc: allowed only with method 'orbit-propagation'" in p
+               for p in objects.validate_record(r))
+
+
+def _with_assets(assets):
+    r = copy.deepcopy(load("cluster"))
+    r["assets"] = assets
+    return r
+
+
+@pytest.mark.parametrize("path", ["members/Melotte_22.json", "members/4423.json", "m/a_b+c-d.e/f"])
+def test_assets_accepted(path):
+    assert objects.validate_record(_with_assets({"members": path})) == []
+
+
+@pytest.mark.parametrize("assets,text", [
+    ({"members": "members/../x.json"}, "assets.members"),
+    ({"members": "../x.json"}, "assets.members"),
+    ({"members": "/etc/x.json"}, "assets.members"),
+    ({"members": "members//x.json"}, "assets.members"),
+    ({"members": "members/x.json/"}, "assets.members"),
+    ({"members": 5}, "assets.members"),
+    ({"photos": "members/x.json"}, "unknown key"),
+    ("members/x.json", "assets: must be an object"),
+])
+def test_bad_assets_are_rejected(assets, text):
+    assert any(text in p for p in objects.validate_record(_with_assets(assets)))

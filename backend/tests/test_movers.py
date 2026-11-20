@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from types import SimpleNamespace
@@ -430,3 +431,57 @@ def test_api_validation(api, path, params):
     client = api[0]
     r = client.get(path, params=params)
     assert r.status_code == 400 and "detail" in r.json()
+
+
+# --- SkyBoT state vectors (Phase 5, 20.2 and 20.4.2) ------------------------------------------
+
+def _skybot_fixture() -> str:
+    from pathlib import Path
+    return (Path(__file__).parent / "fixtures" / "skybot_all_2026-11-20.json").read_text()
+
+
+def test_parse_skybot_keeps_the_state_vector_from_the_live_fixture():
+    objs = movers.parse_skybot(_skybot_fixture())
+    assert [o["name"] for o in objs] == ["2010 VJ175", "2001 RJ150", "C/2022 JK5", "2006 TO61"]
+    a, _, comet, _ = objs
+    assert a["pos_au"] == [-1.575878951, 1.985450153, 0.762556773]
+    assert a["vel_au_d"] == [-0.008847251, -0.004040727, -0.001560848]
+    assert a["ref_epoch_jd"] == 2461000.0
+    assert comet["class"] == "Comet" and comet["ref_epoch_jd"] == 2461000.0
+    assert comet["pos_au"] == [4.114003485, 6.637229429, 2.914576453]
+    assert comet["vel_au_d"] == [-0.000732676, 0.00665621, 0.004402789]
+    assert a["dg_au"] == pytest.approx(2.4570168174)  # the fields read before are unchanged
+
+
+def test_parse_skybot_without_vectors_gives_none_not_a_failure():
+    objs = movers.parse_skybot(_skybot_fixture())
+    nov = objs[3]
+    assert nov["pos_au"] is None and nov["vel_au_d"] is None and nov["ref_epoch_jd"] is None
+    assert nov["dg_au"] is not None  # the rest of the object is still parsed
+    # the older sample has no vectors at all
+    for o in movers.parse_skybot(SKYBOT_SAMPLE):
+        assert o["pos_au"] is None and o["vel_au_d"] is None
+
+
+@pytest.mark.parametrize("pos", [
+    '{"x":1.0,"y":2.0}', '[1,2,3]', '"x"', '{"x":1.0,"y":"NaN","z":3.0}', '{"x":1.0,"y":null,"z":3.0}',
+    '{"x":1.0,"y":true,"z":3.0}', '{"x":1.0,"y":1e999,"z":3.0}', '{"x":1.0,"y":"abc","z":3.0}',
+])
+def test_parse_skybot_malformed_vectors_are_none(pos):
+    text = ('[{"Name":"X","RA (hms)":"10 00 00","DEC (dms)":"+10 00 00","Class":"MB>Inner",'
+            f'"position (au)":{pos},"velocity (au/d)":{pos},"ref_epoch":"soon"}}]')
+    (o,) = movers.parse_skybot(text)
+    assert o["pos_au"] is None and o["vel_au_d"] is None and o["ref_epoch_jd"] is None
+
+
+def test_skybot_cone_cache_key_is_skybot_4(monkeypatch):
+    from spherex_app import cache
+
+    async def fetch(ra, dec, radius, jd):
+        return _skybot_fixture()
+    monkeypatch.setattr(movers, "_skybot_fetch", fetch)
+    objs = asyncio.run(movers.skybot_cone(150.0, 10.0, 0.5, 2461000.5))
+    key = cache.key_hash("skybot-4", "150.0000", "10.0000", "0.500", "2461000.500")
+    assert cache.get_json("skybot", key) == objs and objs[0]["pos_au"] is not None
+    assert cache.get_json("skybot", cache.key_hash("skybot-3", "150.0000", "10.0000", "0.500",
+                                                   "2461000.500")) is None
